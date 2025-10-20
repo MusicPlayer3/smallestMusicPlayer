@@ -73,7 +73,7 @@ static SDL_AudioFormat toSDLFormat(AVSampleFormat ffmpegFormat)
     case AV_SAMPLE_FMT_FLTP:
         return AUDIO_F32SYS;
     default:
-        std::cerr << "不支持的 FFmpeg 采样格式: " << av_get_sample_fmt_name(ffmpegFormat);
+        SDL_LogWarn(SDL_LOG_CATEGORY_ERROR, "不支持的FFmpeg1采样格式 %s", av_get_sample_fmt_name(ffmpegFormat));
         return 0; // 返回0表示无效格式
     }
 }
@@ -159,7 +159,7 @@ void AudioPlayer::freeffmpegResources()
 bool AudioPlayer::isValidAudio(const std::string &path)
 {
     AVFormatContext *pFormatCtx = nullptr;
-    std::cout << "检查音频文件: " << path << std::endl;
+    SDL_Log("检查音频文件: %s\n", path.c_str());
     if (avformat_open_input(&pFormatCtx, path.c_str(), nullptr, nullptr) != 0) // 打开文件，尝试解析文件头
     {
         return false; // 打开文件失败，返回false
@@ -319,7 +319,7 @@ bool AudioPlayer::initDecoder()
 
     audioDuration.store(pFormatCtx1->duration); // 获取音频总时长
 
-    std::cout << "音乐总时长：" << audioDuration.load();
+    SDL_Log("音乐总时长：%ld", audioDuration.load());
 
     lock.unlock();
     return true;
@@ -549,7 +549,7 @@ bool AudioPlayer::setPath1(const std::string &path)
         std::unique_lock<std::mutex> lock(path1Mutex);
         currentPath = path;
         path1CondVar.notify_one();
-        std::cout << "设置播放路径: " << currentPath << std::endl;
+        SDL_Log("设置播放路径: %s\n", currentPath.c_str());
         return true;
     }
     return false;
@@ -618,7 +618,7 @@ void AudioPlayer::mainDecodeThread()
                 int ret = av_seek_frame(pFormatCtx1, audioStreamIndex1, stream_ts, AVSEEK_FLAG_BACKWARD);
                 if (ret < 0)
                 {
-                    std::cerr << "Error seeking audio stream: " << av_err2str(ret) << std::endl;
+                    SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Error seeking audio stream:%s", av_err2str(ret));
                     continue;
                 }
                 avcodec_flush_buffers(pCodecCtx1);
@@ -659,6 +659,7 @@ void AudioPlayer::mainDecodeThread()
                     AVPacket *packet = av_packet_alloc();
                     if (!packet)
                     {
+                        
                         std::cerr << "Failed to allocate packet" << std::endl;
                         break;
                     }
