@@ -123,7 +123,7 @@ private:
 
     double volume = 1.0; // 音量，范围0.0 - 1.0
 
-    std::atomic<bool> hasPaused{false};
+    std::atomic<bool> hasPaused{true};
 
     char errorBuffer[AV_ERROR_MAX_STRING_SIZE * 2] = {0};
 

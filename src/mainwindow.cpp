@@ -58,12 +58,12 @@ void MainWindow::on_play_clicked()
     if (ui->play->text() == "播放")
     {
         ui->play->setText("暂停");
-        player.pause();
+        player.play();
     }
     else
     {
         ui->play->setText("播放");
-        player.play();
+        player.pause();
     }
 }
 

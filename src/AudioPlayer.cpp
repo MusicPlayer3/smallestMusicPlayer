@@ -567,6 +567,8 @@ int64_t AudioPlayer::getAudioLength() const
 }
 void AudioPlayer::mainDecodeThread()
 {
+    bool isFileEOF = false;
+    bool isDecodingFinished = false;
     while (quitFlag.load() == false)
     {
         if (hasPreloaded)
@@ -653,14 +655,13 @@ void AudioPlayer::mainDecodeThread()
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     continue;
                 }
-                else
+                else if (!isFileEOF)
                 {
                     // TODO: 解码音频帧并放入队列
                     AVPacket *packet = av_packet_alloc();
                     if (!packet)
                     {
-                        
-                        std::cerr << "Failed to allocate packet" << std::endl;
+                        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to allocate packet\n");
                         break;
                     }
                     // 读取一个音频帧
@@ -669,23 +670,26 @@ void AudioPlayer::mainDecodeThread()
                     {
                         if (ret == AVERROR_EOF)
                         {
-                            // TODO:
-                            std::cout << "End of file reached" << std::endl;
+                            // TODO:读到文件末尾
+                            isFileEOF = true;
+                            av_packet_free(&packet);
+                            continue;
                         }
                         else
                         {
-                            std::cerr << "Error reading frame: " << av_err2str(ret) << std::endl;
+                            SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Error reading frame: %s\n", av_err2str(ret));
+                            av_packet_free(&packet);
                             break;
                         }
                     }
-
-                    if (packet->stream_index == audioStreamIndex1)
+                    else if (packet->stream_index == audioStreamIndex1)
                     {
                         // 将包发送至解码器
                         ret = avcodec_send_packet(pCodecCtx1, packet);
                         if (ret < 0)
                         {
-                            std::cerr << "Error sending packet for decoding: " << av_err2str(ret) << std::endl;
+                            SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Error sending packet for decoding: %s\n", av_err2str(ret));
+                            av_packet_free(&packet);
                             break;
                         }
 
@@ -693,15 +697,16 @@ void AudioPlayer::mainDecodeThread()
                         if (!frame)
                         {
                             std::cerr << "Failed to allocate frame" << std::endl;
+                            av_packet_free(&packet);
                             break;
                         }
                         // 从解码器接收解码后的帧
                         ret = avcodec_receive_frame(pCodecCtx1, frame);
-
                         if (ret < 0)
                         {
-                            std::cerr << "Error during decoding: " << av_err2str(ret) << std::endl;
+                            SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Error during decoding: %s\n", av_err2str(ret));
                             av_frame_free(&frame);
+                            av_packet_free(&packet);
                             continue;
                         }
 
@@ -725,7 +730,8 @@ void AudioPlayer::mainDecodeThread()
                         uint8_t *out_buffer = (uint8_t *)av_malloc(out_buffer_size);
                         if (!out_buffer)
                         {
-                            std::cerr << "Failed to allocate output buffer" << std::endl;
+                            SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to allocate output buffer\n");
+                            av_packet_free(&packet);
                             av_frame_free(&frame);
                             break;
                         }
@@ -739,7 +745,7 @@ void AudioPlayer::mainDecodeThread()
 
                         if (converted_samples < 0)
                         {
-                            std::cerr << "Error resampling audio frame" << std::endl;
+                            SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Error while converting\n");
                             av_free(out_buffer);
                             av_frame_free(&frame);
                             break;
@@ -787,6 +793,20 @@ void AudioPlayer::mainDecodeThread()
                         av_frame_free(&frame);
                     }
                     av_packet_free(&packet);
+                }
+            }
+            if (isFileEOF)
+            {
+                std::unique_lock<std::mutex> lock(audioFrameQueueMutex);
+                bool test = audioFrameQueue.empty();
+                if (test)
+                {
+                    // 文件读取完毕且音频队列已空，结束播放
+                    isFileEOF = false;
+                    freeffmpegResources();
+                    SDL_Log("音频播放完毕");
+                    quitFlag.store(true);
+                    break;
                 }
             }
         }
