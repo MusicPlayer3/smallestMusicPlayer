@@ -14,6 +14,25 @@
 
 compile_commands.json
 
+# 忽略 Qt Creator 用户配置文件
+*.user
+*.user.*
+
+# 忽略 Qt Creator 项目数据库和缓存
+.qtcreator/
+.qtc/
+*.pro.user
+*.pro.user.*
+*.creator.user
+*.autosave
+
+# 忽略 CMake 生成的构建目录（根据你的习惯命名）
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+
 .cache/*
 
 # Linker output
