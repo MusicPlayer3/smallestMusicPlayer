@@ -71,87 +71,108 @@ typedef struct AudioFrame
 class AudioPlayer
 {
 private:
+    // --- 路径和线程同步 ---
     std::mutex path1Mutex;
     std::condition_variable path1CondVar;
     std::string currentPath = ""; // 当前播放歌曲的路径
 
-    AVFormatContext *pFormatCtx1 = nullptr; // 当前播放歌曲的音频文件格式上下文
-
-    bool hasPreloaded = false;
-
-    AVCodecParameters *pCodecParameters1 = nullptr; // 当前播放歌曲的解码器参数
-
-    AVCodecContext *pCodecCtx1 = nullptr; // 当前播放歌曲的解码器上下文
-
-    const AVCodec *pCodec1 = nullptr; // 当前播放歌曲的解码器
-
-    int audioStreamIndex1 = -1; // 当前播放歌曲的音频流索引
-
-    std::atomic<int64_t> nowPlayingTime = 0; // 当前播放时间
-
-    std::atomic<int64_t> audioDuration = 0; // 音频时长
-
-    SwrContext *swrCtx = nullptr; // 重采样上下文
+    std::mutex preloadPathMutex;
+    std::string preloadPath = ""; // 预加载歌曲的路径
 
     std::thread decodeThread; // 解码线程
-
     std::atomic<bool> quitFlag{false};
 
+    // --- 状态 ---
     std::atomic<outputMod> outputMode{OUTPUT_MIXING};
-
     std::atomic<PlayerState> playingState{PlayerState::STOPPED};
-
     std::atomic<int64_t> seekTarget{0};
+    std::atomic<bool> hasPaused{true};
+    std::atomic<bool> isFirstPlay{true};   // (新增) 首次播放标志
+    std::atomic<bool> hasPreloaded{false}; // (新增) 预加载完成标志
 
+    // --- 音频队列和同步 ---
     std::mutex audioFrameQueueMutex;
     std::condition_variable audioFrameQueueCondVar;
-    // 音频帧队列的最大长度
+    std::condition_variable decoderCondVar; // 解码器等待条件
     std::atomic<int> audioFrameQueueMaxSize{1024};
+    std::queue<AudioFrame *> audioFrameQueue;
 
+    // --- 音频回调状态 ---
+#ifdef USE_SDL
+    AudioFrame *m_currentFrame = nullptr;
+    int m_currentFramePos = 0;
+#endif
+
+    // --- 统计和缓冲大小 ---
     std::atomic<int64_t> totalDecodedBytes{0};
     std::atomic<int64_t> totalDecodedFrames{0};
     std::atomic<bool> hasCalculatedQueueSize{false};
-    std::queue<AudioFrame *> audioFrameQueue;
 
+    // --- 播放信息 ---
+    std::atomic<int64_t> nowPlayingTime = 0; // 当前播放时间 (秒)
+    std::atomic<int64_t> audioDuration = 0;  // 音频时长 (AV_TIME_BASE)
+    double volume = 1.0;                     // 音量
+    char errorBuffer[AV_ERROR_MAX_STRING_SIZE * 2] = {0};
+
+    // --- 音频设备 ---
     AudioParams mixingParams;
+#ifdef USE_SDL
+    SDL_AudioDeviceID m_audioDeviceID = 0; // SDL音频设备ID
+#endif
 
+    // --- 资源 1 (当前播放) ---
+    AVFormatContext *pFormatCtx1 = nullptr;
+    AVCodecParameters *pCodecParameters1 = nullptr;
+    AVCodecContext *pCodecCtx1 = nullptr;
+    const AVCodec *pCodec1 = nullptr;
+    int audioStreamIndex1 = -1;
+    SwrContext *swrCtx = nullptr; // 重采样上下文
+
+    // --- 资源 2 (预加载) ---
+    AVFormatContext *pFormatCtx2 = nullptr;
+    AVCodecParameters *pCodecParameters2 = nullptr;
+    AVCodecContext *pCodecCtx2 = nullptr;
+    const AVCodec *pCodec2 = nullptr;
+    int audioStreamIndex2 = -1;
+    SwrContext *swrCtx2 = nullptr; // 预加载重采样上下文
+
+    // --- 私有方法 ---
     bool initDecoder();
-
     bool openAudioDevice();
 
-    void freeffmpegResources();
+    // (新增) 预加载方法
+    bool initDecoder2();
+    bool openSwrContext2();
 
-    double volume = 1.0; // 音量，范围0.0 - 1.0
-
-    std::atomic<bool> hasPaused{true};
-
-    char errorBuffer[AV_ERROR_MAX_STRING_SIZE * 2] = {0};
+    // (修改) 资源释放函数
+    void freeResources();  // 释放所有资源
+    void freeResources1(); // 释放资源 1
+    void freeResources2(); // 释放资源 2
 
 #ifdef USE_SDL
     static void sdl2_audio_callback(void *userdata, Uint8 *stream, int len);
-    SDL_AudioDeviceID m_audioDeviceID = 0; // SDL音频设备ID
-
-#endif
-
-#ifdef USE_QT
 #endif
 
     void mainDecodeThread();
 
 public:
     AudioPlayer();
+    ~AudioPlayer();
+
     static bool isValidAudio(const std::string &path);
 
     bool setPath1(const std::string &path);
+    // (新增) 设置预加载路径
+    void setPreloadPath(const std::string &path);
 
     void play();                // 播放
     void pause();               // 暂停
     void seek(int64_t time);    // 跳转
     void setVolume(double vol); // 设置音量
 
-    void setMixingParameters(const AudioParams &params); // 设置混音参数
+    void setMixingParameters(const AudioParams &params);
     void setMixingParameters(int sampleRate, AVSampleFormat sampleFormat, uint64_t channelLayout, int channels);
-    AudioParams getMixingParameters() const; // 获取混音参数
+    AudioParams getMixingParameters() const;
 
     void setOutputMode(outputMod mode);
 

@@ -29,9 +29,15 @@ private slots:
 
     void on_horizontalSlider_valueChanged(int value);
 
+    void on_pushButton_clicked();
+
+    void on_pushButton_2_clicked();
+
 private:
     Ui::MainWindow *ui;
     AudioPlayer player;
+
+    QString defaultPath;
 
     std::thread uiThread;
 

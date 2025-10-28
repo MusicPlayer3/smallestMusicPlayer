@@ -8,7 +8,6 @@ MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
-    QString defaultPath;
 #ifdef Q_OS_WIN
     defaultPath = QCoreApplication::applicationDirPath(); // 程序所在目录
 #elif defined(Q_OS_LINUX)
@@ -82,7 +81,9 @@ void MainWindow::UIUpdateLoop()
 
         ui->nowTime->setText(positionStr);
         ui->remainingTime->setText(remainingStr);
-        // ui->horizontalSlider->setValue(position);
+        ui->horizontalSlider->blockSignals(true);
+        ui->horizontalSlider->setValue(position);
+        ui->horizontalSlider->blockSignals(false);
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 }
@@ -95,4 +96,44 @@ void MainWindow::on_horizontalSlider_valueChanged(int value)
 {
     SDL_Log("value change! %d", value);
     player.seek(value);
+}
+
+// 切歌按钮
+void MainWindow::on_pushButton_clicked()
+{
+    QString filter = "音频文件 (*.mp3 *.wav *.flac *.ogg);;所有文件 (*.*)";
+    QString filename = QFileDialog::getOpenFileName(
+        this,
+        tr("选择歌曲"),
+        defaultPath,
+        filter);
+    if (!filename.isEmpty())
+    {
+        qDebug() << "选择的文件:" << filename;
+        QFileInfo fileInfo(filename);
+        QString baseName = fileInfo.fileName(); // 只保留文件名部分
+
+        ui->songName->setText(baseName);
+        if (!player.setPath1(filename.toStdString()))
+        {
+            qWarning() << "无效的音频文件:" << filename;
+            return;
+        }
+    }
+}
+
+// 预加载按钮
+void MainWindow::on_pushButton_2_clicked()
+{
+    QString filter = "音频文件 (*.mp3 *.wav *.flac *.ogg);;所有文件 (*.*)";
+    QString filename = QFileDialog::getOpenFileName(
+        this,
+        tr("选择歌曲"),
+        defaultPath,
+        filter);
+    if (!filename.isEmpty())
+    {
+        qDebug() << "选择的文件:" << filename;
+        player.setPreloadPath(filename.toStdString());
+    }
 }
