@@ -7,7 +7,6 @@
 #include <mutex>
 #include <string>
 
-#ifdef USE_SDL
 static SDL_AudioFormat toSDLFormat(AVSampleFormat ffmpegFormat)
 {
     switch (ffmpegFormat)
@@ -46,7 +45,6 @@ static AVSampleFormat toAVSampleFormat(SDL_AudioFormat sdlFormat)
         return AV_SAMPLE_FMT_NONE;
     }
 }
-#endif
 
 static AVChannelLayout toAVChannelLayout(const uint8_t &layout)
 {
@@ -73,13 +71,11 @@ static AVChannelLayout toAVChannelLayout(const uint8_t &layout)
 
 AudioPlayer::AudioPlayer()
 {
-#ifdef USE_SDL
     if (SDL_Init(SDL_INIT_AUDIO))
     {
         std::cerr << "无法初始化 SDL: " << SDL_GetError() << std::endl;
         exit(1); // 如果 SDL 初始化失败，则退出程序
     }
-#endif
     // 启动线程，不再 detach
     decodeThread = std::thread(&AudioPlayer::mainDecodeThread, this);
 }
@@ -98,9 +94,7 @@ AudioPlayer::~AudioPlayer()
     {
         decodeThread.join();
     }
-#ifdef USE_SDL
     SDL_Quit(); // 在所有 SDL 操作完成后退出
-#endif
 }
 
 // (新增) 释放资源 1
@@ -155,14 +149,12 @@ void AudioPlayer::freeResources2()
 // (修改) 统一的资源释放函数
 void AudioPlayer::freeResources()
 {
-#ifdef USE_SDL
     if (m_audioDeviceID != 0)
     {
         SDL_PauseAudioDevice(m_audioDeviceID, 1); // 确保在关闭前暂停
         SDL_CloseAudioDevice(m_audioDeviceID);
         m_audioDeviceID = 0;
     }
-#endif
 
     // 释放两组 FFmpeg 资源
     freeResources1();
@@ -443,7 +435,6 @@ bool AudioPlayer::initDecoder2()
     return true;
 }
 
-#ifdef USE_SDL
 // openAudioDevice, 使用资源 1
 bool AudioPlayer::openAudioDevice()
 {
@@ -520,7 +511,6 @@ bool AudioPlayer::openAudioDevice()
     hasCalculatedQueueSize.store(false);
     return true;
 }
-#endif
 
 // (新增) openSwrContext2, 使用资源 2
 bool AudioPlayer::openSwrContext2()
