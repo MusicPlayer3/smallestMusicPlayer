@@ -115,6 +115,8 @@ private:
 
     // --- 音频设备 ---
     AudioParams mixingParams;
+    AudioParams deviceParams;              // (新增) 存储实际的设备参数
+    std::atomic<bool> isDeviceOpen{false}; // (新增) 标记设备状态
 #ifdef USE_SDL
     SDL_AudioDeviceID m_audioDeviceID = 0; // SDL音频设备ID
 #endif

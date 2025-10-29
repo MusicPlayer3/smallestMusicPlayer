@@ -154,6 +154,7 @@ void AudioPlayer::freeResources()
         SDL_PauseAudioDevice(m_audioDeviceID, 1); // 确保在关闭前暂停
         SDL_CloseAudioDevice(m_audioDeviceID);
         m_audioDeviceID = 0;
+        isDeviceOpen.store(false); // (修改) 重置标志
     }
 
     // 释放两组 FFmpeg 资源
@@ -435,7 +436,7 @@ bool AudioPlayer::initDecoder2()
     return true;
 }
 
-// openAudioDevice, 使用资源 1
+// (修改) openAudioDevice, 使用资源 1
 bool AudioPlayer::openAudioDevice()
 {
     SDL_AudioSpec desiredSpec, obtainedSpec;
@@ -473,6 +474,13 @@ bool AudioPlayer::openAudioDevice()
         return false;
     }
 
+    // (新增) 保存实际的设备参数
+    deviceParams.sampleRate = obtainedSpec.freq;
+    deviceParams.sampleFormat = toAVSampleFormat(obtainedSpec.format);
+    deviceParams.ch_layout = toAVChannelLayout(obtainedSpec.channels);
+    deviceParams.channels = obtainedSpec.channels;
+    isDeviceOpen.store(true); // 标记设备已打开
+
     swrCtx = swr_alloc();
     if (!swrCtx)
     {
@@ -485,12 +493,12 @@ bool AudioPlayer::openAudioDevice()
     av_opt_set_int(swrCtx, "in_sample_rate", pCodecCtx1->sample_rate, 0);
     av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", pCodecCtx1->sample_fmt, 0);
 
-    // 输出参数 (来自 obtainedSpec)
-    AVChannelLayout obtainedChLayout = toAVChannelLayout(obtainedSpec.channels);
-    av_opt_set_chlayout(swrCtx, "out_chlayout", &obtainedChLayout, 0);
-    av_opt_set_int(swrCtx, "out_sample_rate", obtainedSpec.freq, 0);
-    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", toAVSampleFormat(obtainedSpec.format), 0);
-    av_channel_layout_uninit(&obtainedChLayout); // 释放 toAVChannelLayout 可能分配的内存
+    // (修改) 输出参数 (来自 deviceParams)
+    av_opt_set_chlayout(swrCtx, "out_chlayout", &(deviceParams.ch_layout), 0);
+    av_opt_set_int(swrCtx, "out_sample_rate", deviceParams.sampleRate, 0);
+    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", deviceParams.sampleFormat, 0);
+
+    // (修复) av_channel_layout_uninit(&obtainedChLayout); // 释放 toAVChannelLayout 可能分配的内存  <-- 已删除
 
     // 音量设置
     av_opt_set_double(swrCtx, "out_volume", volume, 0);
@@ -512,11 +520,11 @@ bool AudioPlayer::openAudioDevice()
     return true;
 }
 
-// (新增) openSwrContext2, 使用资源 2
+// (修改) openSwrContext2, 使用资源 2
 bool AudioPlayer::openSwrContext2()
 {
-    // 仅在 MIXING 模式下有效, 且必须已打开音频设备
-    if (outputMode.load() != OUTPUT_MIXING || m_audioDeviceID == 0 || pCodecCtx2 == nullptr)
+    // (修改) 仅在 MIXING 模式下有效, 且必须已打开音频设备
+    if (outputMode.load() != OUTPUT_MIXING || !isDeviceOpen.load() || pCodecCtx2 == nullptr)
     {
         return false;
     }
@@ -533,10 +541,10 @@ bool AudioPlayer::openSwrContext2()
     av_opt_set_int(swrCtx2, "in_sample_rate", pCodecCtx2->sample_rate, 0);
     av_opt_set_sample_fmt(swrCtx2, "in_sample_fmt", pCodecCtx2->sample_fmt, 0);
 
-    // 输出参数 (来自 mixingParams, 因为这是 MIXING 模式)
-    av_opt_set_chlayout(swrCtx2, "out_chlayout", &(mixingParams.ch_layout), 0);
-    av_opt_set_int(swrCtx2, "out_sample_rate", mixingParams.sampleRate, 0);
-    av_opt_set_sample_fmt(swrCtx2, "out_sample_fmt", mixingParams.sampleFormat, 0);
+    // (修改) 输出参数 (来自 deviceParams, 因为这是 MIXING 模式)
+    av_opt_set_chlayout(swrCtx2, "out_chlayout", &(deviceParams.ch_layout), 0);
+    av_opt_set_int(swrCtx2, "out_sample_rate", deviceParams.sampleRate, 0);
+    av_opt_set_sample_fmt(swrCtx2, "out_sample_fmt", deviceParams.sampleFormat, 0);
 
     // 音量设置
     av_opt_set_double(swrCtx2, "out_volume", volume, 0);
@@ -864,7 +872,7 @@ void AudioPlayer::mainDecodeThread()
                             pFormatCtx2 = nullptr;
                             pCodecParameters2 = nullptr;
                             pCodecCtx2 = nullptr;
-                            pCodec1 = nullptr;
+                            pCodec2 = nullptr; // (修复) 修复笔误, 之前是 pCodec1
                             audioStreamIndex2 = -1;
                             swrCtx2 = nullptr;
                             preloadPath = "";
@@ -985,7 +993,7 @@ void AudioPlayer::mainDecodeThread()
                 AVChannelLayout out_ch_layout;
                 av_opt_get_chlayout(swrCtx, "out_chlayout", 0, &out_ch_layout);
                 out_nb_channels = out_ch_layout.nb_channels;
-                av_channel_layout_uninit(&out_ch_layout);
+                av_channel_layout_uninit(&out_ch_layout); // (注意) 这里的 uninit 是正确的, 因为 av_opt_get_chlayout 内部会复制
 
                 int out_samples = av_rescale_rnd(
                     swr_get_delay(swrCtx, frame->sample_rate) + frame->nb_samples,
