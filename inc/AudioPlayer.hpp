@@ -19,7 +19,6 @@ extern "C"
 
 #include <string>
 
-// #define USE_QT
 #define USE_SDL
 
 #ifdef USE_SDL

@@ -7,16 +7,6 @@
 #include <mutex>
 #include <string>
 
-// Qt 相关的 #ifdef 和 helper 函数保持不变
-#ifdef USE_QT
-#include <QAudioFormat>
-#include <QMediaDevices>
-QAudioFormat::SampleFormat toQtAudioFormat(AVSampleFormat avFormat)
-{
-    // ... (toQtAudioFormat 实现不变)
-}
-#endif
-
 #ifdef USE_SDL
 static SDL_AudioFormat toSDLFormat(AVSampleFormat ffmpegFormat)
 {
@@ -172,9 +162,6 @@ void AudioPlayer::freeResources()
         SDL_CloseAudioDevice(m_audioDeviceID);
         m_audioDeviceID = 0;
     }
-#endif
-#ifdef USE_QT
-    // ... QT 资源释放 ...
 #endif
 
     // 释放两组 FFmpeg 资源
@@ -455,18 +442,6 @@ bool AudioPlayer::initDecoder2()
     SDL_Log("预加载成功: %s", preloadPath.c_str());
     return true;
 }
-
-#ifdef USE_QT
-bool AudioPlayer::openAudioDevice()
-{
-    // ... (Qt 版本的 openAudioDevice 未修改)
-    // 警告: 此版本的实现存在内存泄漏（m_audioSink 和 m_audioDevice 是局部变量）
-    // 并且在错误路径中没有使用 freeResources()。
-    // 建议参照 SDL 版本使用 freeResources() 并将 m_audioSink 设为成员变量。
-    // 此外，无缝切换逻辑 (swrCtx2) 尚未在 QT 版本中实现。
-    return false; // 暂时禁用
-}
-#endif
 
 #ifdef USE_SDL
 // openAudioDevice, 使用资源 1
