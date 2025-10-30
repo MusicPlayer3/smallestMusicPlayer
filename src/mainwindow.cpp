@@ -145,3 +145,10 @@ void MainWindow::on_pushButton_2_clicked()
         player.setPreloadPath(filename.toStdString());
     }
 }
+
+void MainWindow::on_verticalSlider_valueChanged(int value)
+{
+    double vol = static_cast<double>(value) / 100.0;
+    player.setVolume(vol);
+}
+

@@ -82,7 +82,7 @@ private:
     std::atomic<bool> quitFlag{false};
 
     // --- 状态 ---
-    std::atomic<outputMod> outputMode{OUTPUT_MIXING};
+    std::atomic<outputMod> outputMode{OUTPUT_DIRECT};
     std::atomic<PlayerState> playingState{PlayerState::STOPPED};
     std::atomic<int64_t> seekTarget{0};
     std::atomic<bool> hasPaused{true};

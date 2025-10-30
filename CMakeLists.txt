@@ -22,6 +22,7 @@ pkg_check_modules(FFMPEG REQUIRED
     libavutil
     libswscale
     libswresample
+    libavfilter
 )
 
 pkg_check_modules(SDL2 REQUIRED sdl2)

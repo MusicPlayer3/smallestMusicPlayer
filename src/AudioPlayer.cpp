@@ -608,6 +608,25 @@ void AudioPlayer::sdl2_audio_callback(void *userdata, Uint8 *stream, int len)
 
         int frameRemaining = player->m_currentFrame->size - player->m_currentFramePos;
         int copySize = std::min(frameRemaining, remaining);
+        if (player->deviceParams.sampleFormat == AV_SAMPLE_FMT_FLT)
+        {
+            float *samples = reinterpret_cast<float *>(player->m_currentFrame->data + player->m_currentFramePos);
+            int sampleCount = copySize / sizeof(float);
+            for (int i = 0; i < sampleCount; ++i)
+            {
+                samples[i] = std::clamp(samples[i] * (float)player->volume, -1.0f, 1.0f);
+            }
+        }
+        else if (player->deviceParams.sampleFormat == AV_SAMPLE_FMT_S16)
+        {
+            int16_t *samples = reinterpret_cast<int16_t *>(player->m_currentFrame->data + player->m_currentFramePos);
+            int sampleCount = copySize / sizeof(int16_t);
+            for (int i = 0; i < sampleCount; ++i)
+            {
+                int32_t v = static_cast<int32_t>(samples[i] * player->volume);
+                samples[i] = std::clamp(v, (int32_t)INT16_MIN, (int32_t)INT16_MAX);
+            }
+        }
 
         memcpy(streamPos, player->m_currentFrame->data + player->m_currentFramePos, copySize);
 
