@@ -71,7 +71,7 @@ class AudioPlayer
 {
 private:
     // --- 路径和线程同步 ---
-    std::mutex path1Mutex;
+    mutable std::mutex path1Mutex;
     std::condition_variable path1CondVar;
     std::string currentPath = ""; // 当前播放歌曲的路径
 
@@ -179,6 +179,11 @@ public:
 
     bool isPlaying() const;
     bool isPaused() const;
+    std::string getCurrentPath() const
+    {
+        std::lock_guard<std::mutex> lock(path1Mutex);
+        return currentPath;
+    }
     int64_t getNowPlayingTime() const;
     int64_t getAudioLength() const;
 };

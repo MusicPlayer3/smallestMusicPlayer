@@ -739,6 +739,7 @@ void AudioPlayer::mainDecodeThread()
         }
         else
         {
+            isFirstPlay.store(false);
             playingState.store(PlayerState::PLAYING);
             SDL_PauseAudioDevice(m_audioDeviceID, 0); // 立即开始播放
             hasPaused.store(false);

@@ -72,19 +72,27 @@ void MainWindow::on_front_clicked()
 
 void MainWindow::UIUpdateLoop()
 {
+    QString nowPlayingPath = player.getCurrentPath().c_str();
     while (true)
     {
         int64_t position = player.getNowPlayingTime();
         int64_t duration = player.getAudioLength();
         QString positionStr = QString::asprintf("%02ld:%02ld", position / 60, position % 60);
         QString remainingStr = QString::asprintf("%02ld:%02ld", (duration - position) / 60, (duration - position) % 60);
-
+        if(nowPlayingPath != player.getCurrentPath().c_str())
+        {
+            nowPlayingPath = player.getCurrentPath().c_str();
+            QFileInfo fileInfo(nowPlayingPath);
+            QString baseName = fileInfo.fileName(); // 只保留文件名部分
+            ui->songName->setText(baseName);
+        }
         ui->nowTime->setText(positionStr);
         ui->remainingTime->setText(remainingStr);
         ui->horizontalSlider->blockSignals(true);
+        ui->horizontalSlider->setMaximum(duration);
         ui->horizontalSlider->setValue(position);
         ui->horizontalSlider->blockSignals(false);
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
