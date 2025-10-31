@@ -13,7 +13,6 @@ private:
     std::string year;             // 出版年份
     std::string filePath;         // 文件路径
     std::string parentDir;        // 上级目录
-    TagLib::ByteVector coverData; // 封面数据
 
 public:
     MetaData();
@@ -22,15 +21,13 @@ public:
              const std::string &album,
              const std::string &year,
              const std::string &filePath,
-             const std::string &parentDir,
-             const TagLib::ByteVector &coverData) :
+             const std::string &parentDir) :
         title(title),
         artist(artist),
         album(album),
         year(year),
         filePath(filePath),
-        parentDir(parentDir),
-        coverData(coverData)
+        parentDir(parentDir)
     {
     }
 
@@ -51,8 +48,7 @@ public:
            << "Album: " << album << "\n"
            << "Year: " << year << "\n"
            << "File Path: " << filePath << "\n"
-           << "Parent Directory: " << parentDir << "\n"
-           << "Cover Data Size: " << coverData.size() << " bytes\n";
+           << "Parent Directory: " << parentDir << "\n";
         return os;
     }
 
@@ -110,10 +106,6 @@ public:
     {
         return parentDir;
     }
-    const TagLib::ByteVector &getCoverData() const
-    {
-        return coverData;
-    }
 
     // setter
     void setTitle(const std::string &title)
@@ -139,10 +131,6 @@ public:
     void setParentDir(const std::string &parentDir)
     {
         this->parentDir = parentDir;
-    }
-    void setCoverData(const TagLib::ByteVector &coverData)
-    {
-        this->coverData = coverData;
     }
 };
 
