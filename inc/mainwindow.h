@@ -2,8 +2,7 @@
 #define MAINWINDOW_H
 
 #include "AudioPlayer.hpp"
-#include <QMainWindow>
-#include <thread>
+
 
 QT_BEGIN_NAMESPACE
 namespace Ui

@@ -2,10 +2,7 @@
 #define _FILE_SCANNER_HPP_
 
 #include "MetaData.hpp"
-#include <atomic>
-#include <string>
-#include <thread>
-#include <vector>
+
 class FileScanner
 {
 private:

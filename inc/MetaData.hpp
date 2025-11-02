@@ -1,18 +1,16 @@
 #ifndef _METADATA_HPP_
 #define _METADATA_HPP_
 
-#include <string>
-
-#include <taglib/tbytevector.h>
+#include "Precompiled.h"
 class MetaData
 {
 private:
-    std::string title;            // 歌曲标题
-    std::string artist;           // 艺术家
-    std::string album;            // 专辑
-    std::string year;             // 出版年份
-    std::string filePath;         // 文件路径
-    std::string parentDir;        // 上级目录
+    std::string title;     // 歌曲标题
+    std::string artist;    // 艺术家
+    std::string album;     // 专辑
+    std::string year;      // 出版年份
+    std::string filePath;  // 文件路径
+    std::string parentDir; // 上级目录
 
 public:
     MetaData();

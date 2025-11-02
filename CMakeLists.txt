@@ -45,6 +45,8 @@ qt_add_executable(smallestMusicPlayer
 
     inc/mainwindow.h
     inc/AudioPlayer.hpp
+    inc/Precompiled.h
+    inc/MetaData.hpp
 
     ui/mainwindow.ui
 )

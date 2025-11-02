@@ -1,31 +1,7 @@
 #ifndef AUDIOPLAYER_HPP
 #define AUDIOPLAYER_HPP
 
-#include <atomic>
-#include <condition_variable>
-#include <cstdint>
-#include <queue>
-#include <thread>
-#include <mutex>
-#include <string>
-
-extern "C"
-{
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libswresample/swresample.h>
-#include <libavutil/opt.h>
-}
-
-#include <string>
-
-#define USE_SDL
-
-#ifdef USE_SDL
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_stdinc.h>
-#include <SDL2/SDL_audio.h>
-#endif
+#include "Precompiled.h"
 
 enum outputMod
 {
