@@ -8,7 +8,7 @@
 #include <vector>
 #include<stack>
 namespace fs = std::filesystem;
-bool isAudioFile(const std::string &route)
+bool isAudioFile(const std::string &route) //初步确定文件是否为音频文件
 {
     fs::path r(route);
     std::string ext = r.extension().string();
@@ -18,11 +18,11 @@ bool isAudioFile(const std::string &route)
         ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".aiff"};
     for (auto &i : ext)
     {
-        i = std::tolower(i);
+        i = (char)std::tolower(i);
     }
     return audio_extensions.count(ext) > 0;
 }
-void getinfo(const std::string &route,std::vector<MetaData>&items)
+void getinfo(const std::string &route,std::vector<MetaData>&items) //读取并存储该路径下的音频文件信息
 {
     fs::path r(route);
     MetaData music;
@@ -41,7 +41,7 @@ void getinfo(const std::string &route,std::vector<MetaData>&items)
     music.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
     items.push_back(music);
 }
-void FileScanner::scanDir(){
+void FileScanner::scanDir(){ //扫描路径并获取路径下所有音频文件信息
     if(!fs::exists(rootDir))
     {
         hasScanCpld=true;return;
@@ -57,7 +57,7 @@ void FileScanner::scanDir(){
 
     std::stack<std::string> dirStack;
     dirStack.push(rootDir);
-    while (!dirStack.empty())
+    while (!dirStack.empty())//bfs层次遍历文件夹或读入音频文件信息
     {
         std::string currentDir = dirStack.top();
         dirStack.pop();
@@ -73,5 +73,5 @@ void FileScanner::scanDir(){
             }
         }
     }
-    hasScanCpld=true;
+    hasScanCpld=true;return;
 }
