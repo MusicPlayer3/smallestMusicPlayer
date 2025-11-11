@@ -43,13 +43,18 @@ MainWindow::MainWindow(QWidget *parent) :
         ui->nowTime->setText("00:00");
         ui->remainingTime->setText(durationStr);
         uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
-        uiThread.detach();
     }
 }
 
 MainWindow::~MainWindow()
 {
+    isQuit.store(true);
+    if (uiThread.joinable())
+    {
+        uiThread.join();
+    }
     delete ui;
+    std::cout << "MainWindow exit\n";
 }
 
 void MainWindow::on_play_clicked()
@@ -73,13 +78,13 @@ void MainWindow::on_front_clicked()
 void MainWindow::UIUpdateLoop()
 {
     QString nowPlayingPath = player.getCurrentPath().c_str();
-    while (true)
+    while (!isQuit.load())
     {
         int64_t position = player.getNowPlayingTime();
         int64_t duration = player.getAudioLength();
         QString positionStr = QString::asprintf("%02ld:%02ld", position / 60, position % 60);
         QString remainingStr = QString::asprintf("%02ld:%02ld", (duration - position) / 60, (duration - position) % 60);
-        if(nowPlayingPath != player.getCurrentPath().c_str())
+        if (nowPlayingPath != player.getCurrentPath().c_str())
         {
             nowPlayingPath = player.getCurrentPath().c_str();
             QFileInfo fileInfo(nowPlayingPath);
@@ -94,6 +99,7 @@ void MainWindow::UIUpdateLoop()
         ui->horizontalSlider->blockSignals(false);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    std::cout << "UIUpdateLoop exit\n";
 }
 
 void MainWindow::on_back_clicked()
@@ -151,4 +157,3 @@ void MainWindow::on_verticalSlider_valueChanged(int value)
     double vol = static_cast<double>(value) / 100.0;
     player.setVolume(vol);
 }
-

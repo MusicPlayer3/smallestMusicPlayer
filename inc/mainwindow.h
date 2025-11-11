@@ -3,7 +3,6 @@
 
 #include "AudioPlayer.hpp"
 
-
 QT_BEGIN_NAMESPACE
 namespace Ui
 {
@@ -41,6 +40,8 @@ private:
     QString defaultPath;
 
     std::thread uiThread;
+
+    std::atomic<bool> isQuit = false;
 
     void UIUpdateLoop();
 };
