@@ -3,6 +3,7 @@
 
 #include "Precompiled.h"
 
+
 enum outputMod
 {
     OUTPUT_DIRECT,
@@ -58,17 +59,17 @@ private:
     std::atomic<bool> quitFlag{false};
 
     // --- 状态 ---
-    std::atomic<outputMod> outputMode{OUTPUT_DIRECT};
+    std::atomic<outputMod> outputMode{OUTPUT_MIXING};
     std::atomic<PlayerState> playingState{PlayerState::STOPPED};
     std::atomic<int64_t> seekTarget{0};
     std::atomic<bool> hasPaused{true};
-    std::atomic<bool> isFirstPlay{true};   // (新增) 首次播放标志
-    std::atomic<bool> hasPreloaded{false}; // (新增) 预加载完成标志
+    std::atomic<bool> isFirstPlay{true};
+    std::atomic<bool> hasPreloaded{false};
 
     // --- 音频队列和同步 ---
     std::mutex audioFrameQueueMutex;
     std::condition_variable audioFrameQueueCondVar;
-    std::condition_variable decoderCondVar; // 解码器等待条件
+    // (移除) std::condition_variable decoderCondVar;
     std::atomic<int> audioFrameQueueMaxSize{1024};
     std::queue<AudioFrame *> audioFrameQueue;
 
@@ -84,54 +85,107 @@ private:
     std::atomic<bool> hasCalculatedQueueSize{false};
 
     // --- 播放信息 ---
-    std::atomic<int64_t> nowPlayingTime = 0; // 当前播放时间 (秒)
-    std::atomic<int64_t> audioDuration = 0;  // 音频时长 (AV_TIME_BASE)
-    double volume = 1.0;                     // 音量
+    std::atomic<int64_t> nowPlayingTime = 0;
+    std::atomic<int64_t> audioDuration = 0;
+    double volume = 1.0;
     char errorBuffer[AV_ERROR_MAX_STRING_SIZE * 2] = {0};
 
     // --- 音频设备 ---
     AudioParams mixingParams;
-    AudioParams deviceParams;              // (新增) 存储实际的设备参数
-    std::atomic<bool> isDeviceOpen{false}; // (新增) 标记设备状态
-    SDL_AudioSpec deviceSpec;              // (新增) 存储设备规格
+    AudioParams deviceParams;
+    std::atomic<bool> isDeviceOpen{false};
+    SDL_AudioSpec deviceSpec;
 #ifdef USE_SDL
-    SDL_AudioDeviceID m_audioDeviceID = 0; // SDL音频设备ID
+    SDL_AudioDeviceID m_audioDeviceID = 0;
 #endif
 
-    // --- 资源 1 (当前播放) ---
-    AVFormatContext *pFormatCtx1 = nullptr;
-    AVCodecParameters *pCodecParameters1 = nullptr;
-    AVCodecContext *pCodecCtx1 = nullptr;
-    const AVCodec *pCodec1 = nullptr;
-    int audioStreamIndex1 = -1;
-    SwrContext *swrCtx = nullptr; // 重采样上下文
+    // === (新增) FFmpeg 资源封装 ===
+    struct AudioStreamSource
+    {
+        AVFormatContext *pFormatCtx = nullptr;
+        AVCodecParameters *pCodecParameters = nullptr;
+        AVCodecContext *pCodecCtx = nullptr;
+        const AVCodec *pCodec = nullptr;
+        int audioStreamIndex = -1;
+        SwrContext *swrCtx = nullptr;
+        std::string path = ""; // 存储路径用于调试
 
-    // --- 资源 2 (预加载) ---
-    AVFormatContext *pFormatCtx2 = nullptr;
-    AVCodecParameters *pCodecParameters2 = nullptr;
-    AVCodecContext *pCodecCtx2 = nullptr;
-    const AVCodec *pCodec2 = nullptr;
-    int audioStreamIndex2 = -1;
-    SwrContext *swrCtx2 = nullptr; // 预加载重采样上下文
+        AudioStreamSource() = default;
+        ~AudioStreamSource()
+        {
+            free();
+        }
+
+        // 禁止拷贝
+        AudioStreamSource(const AudioStreamSource &) = delete;
+        AudioStreamSource &operator=(const AudioStreamSource &) = delete;
+
+        /**
+         * @brief 释放此实例持有的所有 FFmpeg 资源
+         */
+        void free()
+        {
+            if (swrCtx)
+                swr_free(&swrCtx);
+            if (pCodecCtx)
+                avcodec_free_context(&pCodecCtx);
+            if (pFormatCtx)
+                avformat_close_input(&pFormatCtx);
+            pFormatCtx = nullptr;
+            pCodecCtx = nullptr;
+            swrCtx = nullptr;
+            pCodecParameters = nullptr;
+            pCodec = nullptr;
+            audioStreamIndex = -1;
+            path = "";
+        }
+
+        /**
+         * @brief (重构) 初始化解码器
+         * @param inputPath 音频文件路径
+         * @param errorBuffer 外部错误缓冲区
+         * @return true 成功, false 失败
+         */
+        bool initDecoder(const std::string &inputPath, char *errorBuffer);
+
+        /**
+         * @brief (重构) 打开重采样上下文
+         * @param deviceParams 目标音频设备参数
+         * @param volume 初始音量
+         * @param errorBuffer 外部错误缓冲区
+         * @return true 成功, false 失败
+         */
+        bool openSwrContext(const AudioParams &deviceParams, double volume, char *errorBuffer);
+    };
+
+    AudioStreamSource *m_currentSource = nullptr; // 当前播放资源
+    AudioStreamSource *m_preloadSource = nullptr; // 预加载资源
 
     // --- 私有方法 ---
-    bool initDecoder();
+    void freeResources(); // 释放所有资源
     bool openAudioDevice();
 
-    // (新增) 预加载方法
-    bool initDecoder2();
-    bool openSwrContext2();
-
-    // (修改) 资源释放函数
-    void freeResources();  // 释放所有资源
-    void freeResources1(); // 释放资源 1
-    void freeResources2(); // 释放资源 2
+    // (移除) freeResources1, freeResources2, initDecoder, initDecoder2, openSwrContext2
 
 #ifdef USE_SDL
     static void sdl2_audio_callback(void *userdata, Uint8 *stream, int len);
 #endif
 
+    // === (修改) 线程函数和辅助函数 ===
     void mainDecodeThread();
+
+    /**
+     * @brief (新增) 检查并触发预加载
+     * @param currentPts 当前播放时间(秒)
+     */
+    void mainLoop_TriggerPreload(double currentPts);
+
+    /**
+     * @brief (新增) 自动计算音频队列目标大小
+     * @param frame 解码后的 AVFrame (用于元数据)
+     * @param out_bytes_per_sample 重采样后的每样本字节数
+     */
+    void mainLoop_CalculateQueueSize(AVFrame *frame, int out_bytes_per_sample);
 
 public:
     AudioPlayer();
@@ -140,7 +194,6 @@ public:
     static bool isValidAudio(const std::string &path);
 
     bool setPath1(const std::string &path);
-    // (新增) 设置预加载路径
     void setPreloadPath(const std::string &path);
 
     void play();                // 播放

@@ -1,11 +1,7 @@
 #include "AudioPlayer.hpp"
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_audio.h>
-#include <SDL2/SDL_log.h>
-#include <chrono>
-#include <iostream>
-#include <mutex>
-#include <string>
+
+
+// (移除) 此处不再需要包含 ffmpeg 和 SDL 头文件，因为 .hpp 已包含
 
 static SDL_AudioFormat toSDLFormat(AVSampleFormat ffmpegFormat)
 {
@@ -76,7 +72,7 @@ AudioPlayer::AudioPlayer()
         std::cerr << "无法初始化 SDL: " << SDL_GetError() << std::endl;
         exit(1); // 如果 SDL 初始化失败，则退出程序
     }
-    // 启动线程，不再 detach
+    // 启动线程
     decodeThread = std::thread(&AudioPlayer::mainDecodeThread, this);
 }
 
@@ -87,64 +83,21 @@ AudioPlayer::~AudioPlayer()
 
     // 唤醒所有可能在等待的条件变量
     path1CondVar.notify_one();
-    decoderCondVar.notify_one();
     audioFrameQueueCondVar.notify_one();
 
     if (decodeThread.joinable())
     {
         decodeThread.join();
     }
+
+    // (新增) 确保在 SDL_Quit 之前释放所有资源
+    freeResources();
+
     SDL_Quit(); // 在所有 SDL 操作完成后退出
 }
 
-// (新增) 释放资源 1
-void AudioPlayer::freeResources1()
-{
-    if (swrCtx)
-    {
-        swr_free(&swrCtx);
-        swrCtx = nullptr;
-    }
-    if (pCodecCtx1)
-    {
-        avcodec_free_context(&pCodecCtx1);
-        pCodecCtx1 = nullptr;
-    }
-    if (pFormatCtx1)
-    {
-        avformat_close_input(&pFormatCtx1);
-        pFormatCtx1 = nullptr;
-    }
-    pCodecParameters1 = nullptr;
-    pCodec1 = nullptr;
-    audioStreamIndex1 = -1;
-}
-
-// (新增) 释放资源 2
-void AudioPlayer::freeResources2()
-{
-    std::lock_guard<std::mutex> lock(preloadPathMutex);
-    if (swrCtx2)
-    {
-        swr_free(&swrCtx2);
-        swrCtx2 = nullptr;
-    }
-    if (pCodecCtx2)
-    {
-        avcodec_free_context(&pCodecCtx2);
-        pCodecCtx2 = nullptr;
-    }
-    if (pFormatCtx2)
-    {
-        avformat_close_input(&pFormatCtx2);
-        pFormatCtx2 = nullptr;
-    }
-    pCodecParameters2 = nullptr;
-    pCodec2 = nullptr;
-    audioStreamIndex2 = -1;
-    preloadPath = "";
-    hasPreloaded.store(false);
-}
+// (移除) freeResources1
+// (移除) freeResources2
 
 // (修改) 统一的资源释放函数
 void AudioPlayer::freeResources()
@@ -154,12 +107,14 @@ void AudioPlayer::freeResources()
         SDL_PauseAudioDevice(m_audioDeviceID, 1); // 确保在关闭前暂停
         SDL_CloseAudioDevice(m_audioDeviceID);
         m_audioDeviceID = 0;
-        isDeviceOpen.store(false); // (修改) 重置标志
+        isDeviceOpen.store(false);
     }
 
-    // 释放两组 FFmpeg 资源
-    freeResources1();
-    freeResources2();
+    // (修改) 释放两组 FFmpeg 资源
+    delete m_currentSource;
+    m_currentSource = nullptr;
+    delete m_preloadSource;
+    m_preloadSource = nullptr;
 
     // 清空音频帧队列
     {
@@ -176,15 +131,15 @@ void AudioPlayer::freeResources()
     }
 
     // 重置状态
-    if (playingState.load() != PlayerState::STOPPED)
-    {
-        currentPath = ""; // 重置当前路径
-    }
     totalDecodedBytes.store(0);
     totalDecodedFrames.store(0);
     hasCalculatedQueueSize.store(false);
     playingState.store(PlayerState::STOPPED);
-    hasPaused.store(true); // 重置为暂停状态
+    hasPaused.store(true);
+    hasPreloaded.store(false);
+
+    // (修改) 移除路径重置逻辑
+    // 路径管理现在由 mainDecodeThread 的状态机负责
 }
 
 /**
@@ -222,41 +177,43 @@ bool AudioPlayer::isValidAudio(const std::string &path)
     return true;
 }
 
+// (修改) setVolume
 void AudioPlayer::setVolume(double vol)
 {
     volume = vol;
     // (修改) 同时设置两个重采样器
-    if (swrCtx)
+    if (m_currentSource && m_currentSource->swrCtx)
     {
-        av_opt_set_double(swrCtx, "out_volume", volume, 0);
+        av_opt_set_double(m_currentSource->swrCtx, "out_volume", volume, 0);
     }
-    if (swrCtx2)
+    if (m_preloadSource && m_preloadSource->swrCtx)
     {
-        av_opt_set_double(swrCtx2, "out_volume", volume, 0);
+        av_opt_set_double(m_preloadSource->swrCtx, "out_volume", volume, 0);
     }
 }
 
-// 设置播放进度，单位为秒
+// (修改) seek (移除 CV)
 void AudioPlayer::seek(int64_t time)
 {
     seekTarget.store(static_cast<int64_t>(time * AV_TIME_BASE));
     playingState.store(PlayerState::SEEKING);
-    decoderCondVar.notify_one();
+    // (移除) decoderCondVar.notify_one();
     SDL_Log("跳转到 %ld 秒", time);
 }
 
-// (修改) 首次播放逻辑
+// (修改) play (移除 CV)
 void AudioPlayer::play()
 {
-    isFirstPlay.store(false); // (新增) 标记为非首次播放
+    isFirstPlay.store(false);
     playingState.store(PlayerState::PLAYING);
-    decoderCondVar.notify_one();
+    // (移除) decoderCondVar.notify_one();
 }
 
+// (修改) pause (移除 CV)
 void AudioPlayer::pause()
 {
     playingState.store(PlayerState::PAUSED);
-    decoderCondVar.notify_one();
+    // (移除) decoderCondVar.notify_one();
 }
 
 void AudioPlayer::setMixingParameters(const AudioParams &params)
@@ -274,169 +231,87 @@ AudioParams AudioPlayer::getMixingParameters() const
     return mixingParams;
 }
 
-// (修改) initDecoder, 使用资源 1
-bool AudioPlayer::initDecoder()
+// (移除) initDecoder
+// (移除) initDecoder2
+
+// (新增) AudioStreamSource::initDecoder 实现
+bool AudioPlayer::AudioStreamSource::initDecoder(const std::string &inputPath, char *errorBuffer)
 {
+    if (inputPath.empty())
+        return false;
+
+    path = inputPath; // 存储路径
     int ret = 0;
-    std::unique_lock<std::mutex> lock(path1Mutex);
-    // 打开文件
-    ret = avformat_open_input(&pFormatCtx1, currentPath.c_str(), nullptr, nullptr);
+
+    // 1. 打开文件
+    ret = avformat_open_input(&pFormatCtx, path.c_str(), nullptr, nullptr);
     if (ret != 0)
     {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "无法打开音频文件: %s, Error:\n%s", currentPath.c_str(), errorBuffer);
-        freeResources(); // 统一清理
+        av_strerror(ret, errorBuffer, AV_ERROR_MAX_STRING_SIZE * 2);
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "无法打开音频文件: %s, Error:\n%s", path.c_str(), errorBuffer);
         return false;
     }
-    // 查找流信息
-    ret = avformat_find_stream_info(pFormatCtx1, nullptr);
+    // 2. 查找流信息
+    ret = avformat_find_stream_info(pFormatCtx, nullptr);
     if (ret < 0)
     {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "无法找到流信息: %s, Error:\n%s", currentPath.c_str(), errorBuffer);
-        freeResources(); // 统一清理
+        av_strerror(ret, errorBuffer, AV_ERROR_MAX_STRING_SIZE * 2);
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "无法找到流信息: %s, Error:\n%s", path.c_str(), errorBuffer);
+        avformat_close_input(&pFormatCtx); // (修复) 确保失败时关闭
         return false;
     }
-
-    // 查找音频流
-    int audioStreamIndex = av_find_best_stream(pFormatCtx1,
-                                               AVMEDIA_TYPE_AUDIO,
-                                               -1,
-                                               -1,
-                                               nullptr,
-                                               0);
+    // 3. 查找音频流
+    audioStreamIndex = av_find_best_stream(pFormatCtx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     if (audioStreamIndex < 0)
     {
-        SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO, "无法找到音频流: %s", currentPath.c_str());
-        freeResources(); // 统一清理
+        SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO, "无法找到音频流: %s", path.c_str());
+        avformat_close_input(&pFormatCtx);
         return false;
     }
-    audioStreamIndex1 = audioStreamIndex;
-
-    // 获取解码器参数
-    pCodecParameters1 = pFormatCtx1->streams[audioStreamIndex]->codecpar;
-    // 查找解码器
-    pCodec1 = avcodec_find_decoder(pCodecParameters1->codec_id);
-    if (pCodec1 == nullptr)
+    // 4. 获取解码器参数
+    pCodecParameters = pFormatCtx->streams[audioStreamIndex]->codecpar;
+    // 5. 查找解码器
+    pCodec = avcodec_find_decoder(pCodecParameters->codec_id);
+    if (pCodec == nullptr)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "无法找到解码器: %s", currentPath.c_str());
-        freeResources(); // 统一清理
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "无法找到解码器: %s", path.c_str());
+        avformat_close_input(&pFormatCtx);
         return false;
     }
-    // 创建解码器上下文
-    pCodecCtx1 = avcodec_alloc_context3(pCodec1);
-    if (pCodecCtx1 == nullptr)
+    // 6. 分配解码器上下文
+    pCodecCtx = avcodec_alloc_context3(pCodec);
+    if (pCodecCtx == nullptr)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "无法分配解码器上下文: %s", currentPath.c_str());
-        freeResources(); // 统一清理
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "无法分配解码器上下文: %s", path.c_str());
+        avformat_close_input(&pFormatCtx);
         return false;
     }
-    // 将解码器参数复制到上下文
-    ret = avcodec_parameters_to_context(pCodecCtx1, pCodecParameters1);
+    // 7. 复制参数到上下文
+    ret = avcodec_parameters_to_context(pCodecCtx, pCodecParameters);
     if (ret < 0)
     {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "无法将解码器参数复制到上下文: %s, Error:\n%s", currentPath.c_str(), errorBuffer);
-        freeResources(); // 统一清理
+        av_strerror(ret, errorBuffer, AV_ERROR_MAX_STRING_SIZE * 2);
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "无法将解码器参数复制到上下文: %s, Error:\n%s", path.c_str(), errorBuffer);
+        avcodec_free_context(&pCodecCtx);
+        avformat_close_input(&pFormatCtx);
         return false;
     }
-    // 打开解码器
-    ret = avcodec_open2(pCodecCtx1, pCodec1, nullptr);
+    // 8. 打开解码器
+    ret = avcodec_open2(pCodecCtx, pCodec, nullptr);
     if (ret < 0)
     {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "无法打开解码器: %s, Error:\n%s", currentPath.c_str(), errorBuffer);
-        freeResources(); // 统一清理
+        av_strerror(ret, errorBuffer, AV_ERROR_MAX_STRING_SIZE * 2);
+        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "无法打开解码器: %s, Error:\n%s", path.c_str(), errorBuffer);
+        avcodec_free_context(&pCodecCtx);
+        avformat_close_input(&pFormatCtx);
         return false;
     }
 
-    audioDuration.store(pFormatCtx1->duration); // 获取音频总时长
-
-    SDL_Log("音乐总时长：%ld", audioDuration.load());
-
-    lock.unlock();
+    SDL_Log("Decoder initialized successfully for: %s", path.c_str());
     return true;
 }
 
-// (新增) initDecoder2, 使用资源 2
-bool AudioPlayer::initDecoder2()
-{
-    std::lock_guard<std::mutex> lock(preloadPathMutex);
-    if (preloadPath.empty())
-        return false;
-
-    int ret = 0;
-    // 打开文件
-    ret = avformat_open_input(&pFormatCtx2, preloadPath.c_str(), nullptr, nullptr);
-    if (ret != 0)
-    {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "预加载: 无法打开音频文件: %s, Error:\n%s", preloadPath.c_str(), errorBuffer);
-        return false;
-    }
-    // 查找流信息
-    ret = avformat_find_stream_info(pFormatCtx2, nullptr);
-    if (ret < 0)
-    {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "预加载: 无法找到流信息: %s, Error:\n%s", preloadPath.c_str(), errorBuffer);
-        avformat_close_input(&pFormatCtx2);
-        return false;
-    }
-
-    // 查找音频流
-    int audioStreamIndex = av_find_best_stream(pFormatCtx2, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
-    if (audioStreamIndex < 0)
-    {
-        SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO, "预加载: 无法找到音频流: %s", preloadPath.c_str());
-        avformat_close_input(&pFormatCtx2);
-        return false;
-    }
-    audioStreamIndex2 = audioStreamIndex;
-
-    // 获取解码器参数
-    pCodecParameters2 = pFormatCtx2->streams[audioStreamIndex]->codecpar;
-    // 查找解码器
-    pCodec2 = avcodec_find_decoder(pCodecParameters2->codec_id);
-    if (pCodec2 == nullptr)
-    {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "预加载: 无法找到解码器: %s", preloadPath.c_str());
-        avformat_close_input(&pFormatCtx2);
-        return false;
-    }
-    // 创建解码器上下文
-    pCodecCtx2 = avcodec_alloc_context3(pCodec2);
-    if (pCodecCtx2 == nullptr)
-    {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "预加载: 无法分配解码器上下文: %s", preloadPath.c_str());
-        avformat_close_input(&pFormatCtx2);
-        return false;
-    }
-    // 将解码器参数复制到上下文
-    ret = avcodec_parameters_to_context(pCodecCtx2, pCodecParameters2);
-    if (ret < 0)
-    {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "预加载: 无法将解码器参数复制到上下文: %s, Error:\n%s", preloadPath.c_str(), errorBuffer);
-        avcodec_free_context(&pCodecCtx2);
-        avformat_close_input(&pFormatCtx2);
-        return false;
-    }
-    // 打开解码器
-    ret = avcodec_open2(pCodecCtx2, pCodec2, nullptr);
-    if (ret < 0)
-    {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "预加载: 无法打开解码器: %s, Error:\n%s", preloadPath.c_str(), errorBuffer);
-        avcodec_free_context(&pCodecCtx2);
-        avformat_close_input(&pFormatCtx2);
-        return false;
-    }
-    SDL_Log("预加载成功: %s", preloadPath.c_str());
-    return true;
-}
-
-// (修改) openAudioDevice, 使用资源 1
+// (修改) openAudioDevice, 仅打开设备，不创建 SwrContext
 bool AudioPlayer::openAudioDevice()
 {
     SDL_AudioSpec desiredSpec, obtainedSpec;
@@ -445,20 +320,23 @@ bool AudioPlayer::openAudioDevice()
         desiredSpec.freq = mixingParams.sampleRate;
         desiredSpec.format = toSDLFormat(mixingParams.sampleFormat);
         desiredSpec.channels = mixingParams.ch_layout.nb_channels;
-        desiredSpec.samples = 4096;
-        desiredSpec.callback = AudioPlayer::sdl2_audio_callback;
-        desiredSpec.userdata = this;
     }
     else
     {
-        // OUTPUT_DIRECT 模式
-        desiredSpec.freq = pCodecCtx1->sample_rate;
-        desiredSpec.format = toSDLFormat(pCodecCtx1->sample_fmt);
-        desiredSpec.channels = pCodecCtx1->ch_layout.nb_channels;
-        desiredSpec.samples = 4096;
-        desiredSpec.callback = AudioPlayer::sdl2_audio_callback;
-        desiredSpec.userdata = this;
+        // DIRECT 模式依赖 m_currentSource
+        if (!m_currentSource || !m_currentSource->pCodecCtx)
+        {
+            SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Cannot open device in DIRECT mode: no codec context.");
+            return false;
+        }
+        desiredSpec.freq = m_currentSource->pCodecCtx->sample_rate;
+        desiredSpec.format = toSDLFormat(m_currentSource->pCodecCtx->sample_fmt);
+        desiredSpec.channels = m_currentSource->pCodecCtx->ch_layout.nb_channels;
     }
+
+    desiredSpec.samples = 4096;
+    desiredSpec.callback = AudioPlayer::sdl2_audio_callback;
+    desiredSpec.userdata = this;
 
     // (修改) m_audioDeviceID 应该是唯一的，如果已打开，先关闭
     if (m_audioDeviceID != 0)
@@ -470,8 +348,7 @@ bool AudioPlayer::openAudioDevice()
     if (m_audioDeviceID == 0)
     {
         SDL_LogError(SDL_LOG_CATEGORY_ERROR, "audio device open failed! Error:\n%s", SDL_GetError());
-        freeResources(); // 统一清理
-        return false;
+        return false; // 让调用者 (mainDecodeThread) 处理 freeResources
     }
 
     // (新增) 保存实际的设备参数
@@ -479,39 +356,10 @@ bool AudioPlayer::openAudioDevice()
     deviceParams.sampleFormat = toAVSampleFormat(obtainedSpec.format);
     deviceParams.ch_layout = toAVChannelLayout(obtainedSpec.channels);
     deviceParams.channels = obtainedSpec.channels;
-    isDeviceOpen.store(true); // 标记设备已打开
+    isDeviceOpen.store(true);
     deviceSpec = obtainedSpec;
 
-    swrCtx = swr_alloc();
-    if (!swrCtx)
-    {
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "swr alloc failed! Error:\n");
-        freeResources(); // 统一清理
-        return false;
-    }
-    // 输入参数 (来自 pCodecCtx1)
-    av_opt_set_chlayout(swrCtx, "in_chlayout", &(pCodecCtx1->ch_layout), 0);
-    av_opt_set_int(swrCtx, "in_sample_rate", pCodecCtx1->sample_rate, 0);
-    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", pCodecCtx1->sample_fmt, 0);
-
-    // (修改) 输出参数 (来自 deviceParams)
-    av_opt_set_chlayout(swrCtx, "out_chlayout", &(deviceParams.ch_layout), 0);
-    av_opt_set_int(swrCtx, "out_sample_rate", deviceParams.sampleRate, 0);
-    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", deviceParams.sampleFormat, 0);
-
-    // (修复) av_channel_layout_uninit(&obtainedChLayout); // 释放 toAVChannelLayout 可能分配的内存  <-- 已删除
-
-    // 音量设置
-    av_opt_set_double(swrCtx, "out_volume", volume, 0);
-
-    int ret = swr_init(swrCtx);
-    if (ret < 0)
-    {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "swr init failed! Error:%s\n", errorBuffer);
-        freeResources(); // 统一清理
-        return false;
-    }
+    // (移除) SwrContext 创建逻辑
 
     SDL_PauseAudioDevice(m_audioDeviceID, 1); // 默认暂停音频设备
 
@@ -521,57 +369,57 @@ bool AudioPlayer::openAudioDevice()
     return true;
 }
 
-// (修改) openSwrContext2, 使用资源 2
-bool AudioPlayer::openSwrContext2()
+// (移除) openSwrContext2
+
+// (新增) AudioStreamSource::openSwrContext 实现
+bool AudioPlayer::AudioStreamSource::openSwrContext(const AudioParams &deviceParams, double volume, char *errorBuffer)
 {
-    // (修改) 仅在 MIXING 模式下有效, 且必须已打开音频设备
-    if (outputMode.load() != OUTPUT_MIXING || !isDeviceOpen.load() || pCodecCtx2 == nullptr)
+    if (!pCodecCtx)
     {
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "SwrContext open failed: Codec context is null for %s.", path.c_str());
         return false;
     }
 
-    swrCtx2 = swr_alloc();
-    if (!swrCtx2)
+    swrCtx = swr_alloc();
+    if (!swrCtx)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "预加载: swr alloc failed! Error:\n");
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "swr alloc failed!");
         return false;
     }
 
-    // 输入参数 (来自 pCodecCtx2)
-    av_opt_set_chlayout(swrCtx2, "in_chlayout", &(pCodecCtx2->ch_layout), 0);
-    av_opt_set_int(swrCtx2, "in_sample_rate", pCodecCtx2->sample_rate, 0);
-    av_opt_set_sample_fmt(swrCtx2, "in_sample_fmt", pCodecCtx2->sample_fmt, 0);
+    // 输入参数 (来自此 source)
+    av_opt_set_chlayout(swrCtx, "in_chlayout", &(pCodecCtx->ch_layout), 0);
+    av_opt_set_int(swrCtx, "in_sample_rate", pCodecCtx->sample_rate, 0);
+    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", pCodecCtx->sample_fmt, 0);
 
-    // (修改) 输出参数 (来自 deviceParams, 因为这是 MIXING 模式)
-    av_opt_set_chlayout(swrCtx2, "out_chlayout", &(deviceParams.ch_layout), 0);
-    av_opt_set_int(swrCtx2, "out_sample_rate", deviceParams.sampleRate, 0);
-    av_opt_set_sample_fmt(swrCtx2, "out_sample_fmt", deviceParams.sampleFormat, 0);
+    // 输出参数 (来自 device)
+    av_opt_set_chlayout(swrCtx, "out_chlayout", &(deviceParams.ch_layout), 0);
+    av_opt_set_int(swrCtx, "out_sample_rate", deviceParams.sampleRate, 0);
+    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", deviceParams.sampleFormat, 0);
 
-    // 音量设置
-    av_opt_set_double(swrCtx2, "out_volume", volume, 0);
+    // 音量
+    av_opt_set_double(swrCtx, "out_volume", volume, 0);
 
-    int ret = swr_init(swrCtx2);
+    int ret = swr_init(swrCtx);
     if (ret < 0)
     {
-        av_strerror(ret, errorBuffer, sizeof(errorBuffer));
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "预加载: swr init failed! Error:%s\n", errorBuffer);
-        swr_free(&swrCtx2);
+        av_strerror(ret, errorBuffer, AV_ERROR_MAX_STRING_SIZE * 2);
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "swr init failed! Error:%s\n", errorBuffer);
+        swr_free(&swrCtx); // swr_free 会设置 swrCtx 为 NULL
         return false;
     }
-    SDL_Log("预加载: SwrContext2 初始化成功");
+    SDL_Log("SwrContext initialized successfully for: %s", path.c_str());
     return true;
 }
 
-// (修改) 移除 static 变量，使用成员变量
+// (修改) sdl2_audio_callback (移除 CV)
 void AudioPlayer::sdl2_audio_callback(void *userdata, Uint8 *stream, int len)
 {
     AudioPlayer *player = static_cast<AudioPlayer *>(userdata);
-    // (移除) static AudioFrame *currentFrame = nullptr;
-    // (移除) static int currentFramePos = 0;
     memset(stream, 0, len);
     int remaining = len;
     Uint8 *streamPos = stream;
-    bool needsNotify = false; // (新增) 标记是否需要唤醒解码器
+    // (移除) bool needsNotify = false;
 
     while (remaining > 0)
     {
@@ -587,11 +435,7 @@ void AudioPlayer::sdl2_audio_callback(void *userdata, Uint8 *stream, int len)
             }
             else
             {
-                // (新增) 检查队列是否之前是满的
-                if (player->audioFrameQueue.size() >= player->audioFrameQueueMaxSize.load())
-                {
-                    needsNotify = true; // 消费后队列将不再满，需要唤醒
-                }
+                // (移除) 检查队列是否之前是满的
                 player->m_currentFrame = player->audioFrameQueue.front();
                 player->audioFrameQueue.pop();
                 player->m_currentFramePos = 0;
@@ -599,12 +443,8 @@ void AudioPlayer::sdl2_audio_callback(void *userdata, Uint8 *stream, int len)
             }
             lock.unlock();
 
-            // (新增) 在锁外通知
-            if (needsNotify)
-            {
-                player->decoderCondVar.notify_one();
-                needsNotify = false;
-            }
+            // (移除) 在锁外通知
+            // if (needsNotify) ...
         }
 
         int frameRemaining = player->m_currentFrame->size - player->m_currentFramePos;
@@ -634,7 +474,7 @@ void AudioPlayer::sdl2_audio_callback(void *userdata, Uint8 *stream, int len)
     }
 }
 
-// (修改) setPath1, 实现手动切歌逻辑
+// (修改) setPath1, 使用 AudioStreamSource
 bool AudioPlayer::setPath1(const std::string &path)
 {
     if (!isValidAudio(path))
@@ -642,13 +482,16 @@ bool AudioPlayer::setPath1(const std::string &path)
         return false;
     }
 
-    // (新增) 手动设置路径时，清除预加载路径
+    // (修改) 手动设置路径时，清除预加载路径
     {
         std::lock_guard<std::mutex> lock(preloadPathMutex);
         if (!preloadPath.empty())
         {
             SDL_Log("手动切歌, 清除预加载: %s", preloadPath.c_str());
-            freeResources2(); // 立即释放预加载资源
+            delete m_preloadSource; // (修改) 释放预加载资源
+            m_preloadSource = nullptr;
+            preloadPath = "";
+            hasPreloaded.store(false);
         }
     }
 
@@ -657,16 +500,16 @@ bool AudioPlayer::setPath1(const std::string &path)
         currentPath = path;
     }
 
-    // (新增) 停止当前播放，以强制重新加载
+    // (修改) 停止当前播放，以强制重新加载
     playingState.store(PlayerState::STOPPED);
-    decoderCondVar.notify_one(); // 唤醒解码线程(如果它在wait)
-    path1CondVar.notify_one();   // 唤醒解码线程(如果它在wait path)
+    // (移除) decoderCondVar.notify_one();
+    path1CondVar.notify_one(); // 唤醒解码线程(如果它在wait path)
 
     SDL_Log("设置播放路径: %s\n", path.c_str());
     return true;
 }
 
-// (新增) setPreloadPath
+// (修改) setPreloadPath
 void AudioPlayer::setPreloadPath(const std::string &path)
 {
     if (outputMode.load() != OUTPUT_MIXING)
@@ -684,11 +527,15 @@ void AudioPlayer::setPreloadPath(const std::string &path)
         std::lock_guard<std::mutex> lock(preloadPathMutex);
         if (path == preloadPath)
             return; // 路径未改变
+
+        // (修改) 释放旧的预加载资源
+        delete m_preloadSource;
+        m_preloadSource = nullptr;
+
+        preloadPath = path;
+        hasPreloaded.store(false); // 标记为尚未加载
     }
 
-    freeResources2(); // 释放旧的预加载资源
-    preloadPath = path;
-    hasPreloaded.store(false); // 标记为尚未加载
     SDL_Log("设置预加载路径: %s", preloadPath.c_str());
 }
 
@@ -699,13 +546,17 @@ int64_t AudioPlayer::getNowPlayingTime() const
 
 int64_t AudioPlayer::getAudioLength() const
 {
-    return audioDuration.load() / AV_TIME_BASE;
+    // (修改) 确保 m_currentSource 存在
+    if (m_currentSource && m_currentSource->pFormatCtx)
+    {
+        return m_currentSource->pFormatCtx->duration / AV_TIME_BASE;
+    }
+    return audioDuration.load() / AV_TIME_BASE; // 降级
 }
 
 // (修改) 完整的 mainDecodeThread 重构
 void AudioPlayer::mainDecodeThread()
 {
-    bool isFileEOF = false;
     AVFrame *frame = av_frame_alloc();
     AVPacket *packet = av_packet_alloc();
 
@@ -728,23 +579,39 @@ void AudioPlayer::mainDecodeThread()
             break;
         }
 
-        // 2. 初始化 (内部已包含失败时的 freeResources)
-        if (!initDecoder())
+        // 2. 初始化 (使用 AudioStreamSource)
+        m_currentSource = new AudioStreamSource();
+        std::string path;
         {
-            continue; // 初始化解码器失败，继续等待新的路径
-        }
-        if (!openAudioDevice())
-        {
-            continue; // 打开音频设备失败，继续等待新的路径
+            std::lock_guard<std::mutex> lock(path1Mutex);
+            path = currentPath;
         }
 
+        if (!m_currentSource->initDecoder(path, errorBuffer))
+        {
+            freeResources(); // 自动清理 m_currentSource
+            continue;
+        }
+        if (!openAudioDevice()) // 依赖 m_currentSource
+        {
+            freeResources();
+            continue;
+        }
+        if (!m_currentSource->openSwrContext(deviceParams, volume, errorBuffer))
+        {
+            freeResources();
+            continue;
+        }
+
+        audioDuration.store(m_currentSource->pFormatCtx->duration); // 获取音频总时长
+        SDL_Log("音乐总时长：%ld", audioDuration.load());
+
+        bool isFileEOF = false;
         // 3. (修改) 初始化成功，根据 isFirstPlay 决定状态
-        isFileEOF = false;
         if (isFirstPlay.load())
         {
             playingState.store(PlayerState::PAUSED);
             hasPaused.store(true);
-            // 此时 SDL_PauseAudioDevice(m_audioDeviceID, 1); 已在 openAudioDevice 中调用
         }
         else
         {
@@ -755,18 +622,19 @@ void AudioPlayer::mainDecodeThread()
         }
 
         // 4. 主解码循环
+        bool playbackFinishedNaturally = false; // (新增) 用于跟踪播放是如何结束的
         while (quitFlag.load() == false)
         {
             PlayerState currentState = playingState.load();
 
-            // (新增) 状态处理：STOPPED (用于手动切歌)
+            // 4.1 状态处理：STOPPED (用于手动切歌)
             if (currentState == PlayerState::STOPPED)
             {
                 SDL_Log("Playback stopped.");
                 break; // 退出内层循环, 将在外层 freeResources()
             }
 
-            // 状态处理：SEEKING
+            // 4.2 状态处理：SEEKING
             if (currentState == PlayerState::SEEKING)
             {
                 SDL_PauseAudioDevice(m_audioDeviceID, 1); // 跳转时暂停
@@ -785,18 +653,18 @@ void AudioPlayer::mainDecodeThread()
                     m_currentFramePos = 0;
                 }
 
-                AVRational tb = pFormatCtx1->streams[audioStreamIndex1]->time_base;
+                AVRational tb = m_currentSource->pFormatCtx->streams[m_currentSource->audioStreamIndex]->time_base;
                 int64_t stream_ts = av_rescale_q(target, AV_TIME_BASE_Q, tb);
-                int ret = av_seek_frame(pFormatCtx1, audioStreamIndex1, stream_ts, AVSEEK_FLAG_BACKWARD);
+                int ret = av_seek_frame(m_currentSource->pFormatCtx, m_currentSource->audioStreamIndex, stream_ts, AVSEEK_FLAG_BACKWARD);
                 if (ret < 0)
                 {
                     SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Error seeking audio stream:%s", av_err2str(ret));
                 }
 
-                avcodec_flush_buffers(pCodecCtx1);
-                if (swrCtx)
+                avcodec_flush_buffers(m_currentSource->pCodecCtx);
+                if (m_currentSource->swrCtx)
                 {
-                    swr_init(swrCtx); // 重置重采样器状态
+                    swr_init(m_currentSource->swrCtx); // 重置重采样器状态
                 }
 
                 isFileEOF = false;                        // 跳转后文件不再是 EOF
@@ -806,85 +674,70 @@ void AudioPlayer::mainDecodeThread()
                 continue;
             }
 
-            // (修改) 状态处理：PAUSED / 队列已满 (使用条件变量等待)
+            // 4.3 状态处理：PAUSED (Task 2)
+            if (currentState == PlayerState::PAUSED)
             {
-                std::unique_lock<std::mutex> lock(audioFrameQueueMutex);
-                decoderCondVar.wait(lock, [this, &isFileEOF]
-                                    {
-                                        PlayerState state = playingState.load();
-                                        if (quitFlag.load() || state == PlayerState::STOPPED || state == PlayerState::SEEKING)
-                                            return true;
-                                        if (state == PlayerState::PAUSED)
-                                            return false; // 暂停时等待
-                                        // 播放中
-                                        return (audioFrameQueue.size() < audioFrameQueueMaxSize.load() || isFileEOF); // 队列未满或已读完
-                                    });
-
-                currentState = playingState.load(); // 重新获取状态
-
-                if (quitFlag.load() || currentState == PlayerState::STOPPED)
+                if (hasPaused.load() == false)
                 {
-                    break; // 退出或停止
+                    SDL_PauseAudioDevice(m_audioDeviceID, 1);
+                    hasPaused.store(true);
                 }
-                if (currentState == PlayerState::SEEKING)
-                {
-                    continue; // 跳转
-                }
-
-                if (currentState == PlayerState::PAUSED)
-                {
-                    if (hasPaused.load() == false)
-                    {
-                        SDL_PauseAudioDevice(m_audioDeviceID, 1); // 暂停音频设备
-                        hasPaused.store(true);
-                    }
-                    continue; // 继续等待 (wait 会重新检查)
-                }
-
-                // 此时一定是 PLAYING 状态
-                if (hasPaused.load() == true)
-                {
-                    SDL_PauseAudioDevice(m_audioDeviceID, 0); // 恢复音频设备
-                    hasPaused.store(false);
-                }
+                // (修改) 使用 sleep 替代 CV
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
             }
 
-            // (修改) 检查：文件已读完
+            // 4.4 状态处理：PLAYING (从 PAUSED 恢复)
+            if (hasPaused.load() == true)
+            {
+                SDL_PauseAudioDevice(m_audioDeviceID, 0); // 恢复音频设备
+                hasPaused.store(false);
+            }
+
+            // 4.5 状态处理: 队列已满 (Task 2)
+            {
+                std::unique_lock<std::mutex> lock(audioFrameQueueMutex);
+                if (audioFrameQueue.size() >= audioFrameQueueMaxSize.load() && !isFileEOF)
+                {
+                    lock.unlock();
+                    // (修改) 使用 sleep 替代 CV
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    continue; // 队列已满, 稍后重试
+                }
+            } // lock released
+
+            // 4.6 状态处理: EOF
             if (isFileEOF)
             {
                 std::unique_lock<std::mutex> lock(audioFrameQueueMutex);
                 if (audioFrameQueue.empty() && m_currentFrame == nullptr)
                 {
-                    SDL_Log("音频播放完毕: %s", currentPath.c_str());
+                    SDL_Log("音频播放完毕: %s", m_currentSource->path.c_str());
 
-                    // (新增) 检查是否可以无缝切换
+                    // (修改) 检查是否可以无缝切换
                     bool didSwitch = false;
                     if (outputMode.load() == OUTPUT_MIXING && hasPreloaded.load())
                     {
                         std::lock_guard<std::mutex> preloadLock(preloadPathMutex);
-                        if (pFormatCtx2 != nullptr && swrCtx2 != nullptr) // 确保预加载已成功
+                        // (修改) 检查 m_preloadSource 及其 swrCtx
+                        if (m_preloadSource != nullptr && m_preloadSource->swrCtx != nullptr)
                         {
-                            SDL_Log("无缝切换到: %s", preloadPath.c_str());
+                            SDL_Log("无缝切换到: %s", m_preloadSource->path.c_str());
+
                             // 释放资源 1
-                            freeResources1();
+                            delete m_currentSource;
 
                             // 将资源 2 切换到资源 1
-                            pFormatCtx1 = pFormatCtx2;
-                            pCodecParameters1 = pCodecParameters2;
-                            pCodecCtx1 = pCodecCtx2;
-                            pCodec1 = pCodec2;
-                            audioStreamIndex1 = audioStreamIndex2;
-                            swrCtx = swrCtx2;
-                            currentPath = preloadPath;
-                            audioDuration.store(pFormatCtx1->duration);
+                            m_currentSource = m_preloadSource;
+                            m_preloadSource = nullptr; // 转移所有权
 
-                            // 清空资源 2 (指针)
-                            pFormatCtx2 = nullptr;
-                            pCodecParameters2 = nullptr;
-                            pCodecCtx2 = nullptr;
-                            pCodec2 = nullptr; // (修复) 修复笔误, 之前是 pCodec1
-                            audioStreamIndex2 = -1;
-                            swrCtx2 = nullptr;
+                            {
+                                std::lock_guard<std::mutex> lock(path1Mutex);
+                                currentPath = m_currentSource->path;
+                            }
+                            audioDuration.store(m_currentSource->pFormatCtx->duration);
+
+                            // 清空资源 2 状态
                             preloadPath = "";
                             hasPreloaded.store(false);
 
@@ -899,9 +752,11 @@ void AudioPlayer::mainDecodeThread()
 
                     if (!didSwitch)
                     {
-                        break; // 无法切换或非 mixing 模式，退出内层循环
+                        playbackFinishedNaturally = true; // (修改) 标记为自然结束
+                        break;                            // 无法切换或非 mixing 模式，退出内层循环
                     }
-                    // 如果切换成功，循环继续，开始解码新的 pFormatCtx1
+                    // 如果切换成功，循环继续
+                    continue;
                 }
                 else
                 {
@@ -910,20 +765,17 @@ void AudioPlayer::mainDecodeThread()
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     continue;
                 }
-            }
+            } // end if(isFileEOF)
 
-            if (isFileEOF)
-                continue; // (新增) 如果刚切换完，或 EOF 等待队列清空，则跳过解码
-
-            // --- 执行解码 ---
+            // --- 5. 执行解码 ---
             av_packet_unref(packet);
-            int ret = av_read_frame(pFormatCtx1, packet);
+            int ret = av_read_frame(m_currentSource->pFormatCtx, packet);
             if (ret < 0)
             {
                 if (ret == AVERROR_EOF)
                 {
                     isFileEOF = true;
-                    SDL_Log("AVERROR_EOF reached for: %s", currentPath.c_str());
+                    SDL_Log("AVERROR_EOF reached for: %s", m_currentSource->path.c_str());
                 }
                 else
                 {
@@ -933,12 +785,12 @@ void AudioPlayer::mainDecodeThread()
                 continue;
             }
 
-            if (packet->stream_index != audioStreamIndex1)
+            if (packet->stream_index != m_currentSource->audioStreamIndex)
             {
                 continue; // 不是我们的音频流
             }
 
-            ret = avcodec_send_packet(pCodecCtx1, packet);
+            ret = avcodec_send_packet(m_currentSource->pCodecCtx, packet);
             if (ret < 0)
             {
                 SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Error sending packet for decoding: %s\n", av_err2str(ret));
@@ -947,7 +799,7 @@ void AudioPlayer::mainDecodeThread()
 
             while (ret >= 0)
             {
-                ret = avcodec_receive_frame(pCodecCtx1, frame);
+                ret = avcodec_receive_frame(m_currentSource->pCodecCtx, frame);
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
                 {
                     break;
@@ -958,55 +810,29 @@ void AudioPlayer::mainDecodeThread()
                     break;
                 }
 
-                // --- 解码成功，开始重采样 ---
+                // --- 6. 解码成功，开始重采样 ---
 
                 int64_t best_pts = frame->best_effort_timestamp;
                 double pts = (best_pts == AV_NOPTS_VALUE) ? -1.0 :
-                                                            best_pts * av_q2d(pFormatCtx1->streams[audioStreamIndex1]->time_base);
+                                                            best_pts * av_q2d(m_currentSource->pFormatCtx->streams[m_currentSource->audioStreamIndex]->time_base);
 
-                // (新增) 检查是否需要触发预加载 (仅 Mixing 模式)
-                if (outputMode.load() == OUTPUT_MIXING && !hasPreloaded.load() && pts > 0)
-                {
-                    std::string path_to_preload;
-                    {
-                        std::lock_guard<std::mutex> lock(preloadPathMutex);
-                        path_to_preload = preloadPath;
-                    }
-
-                    if (!path_to_preload.empty())
-                    {
-                        double durationSec = audioDuration.load() / (double)AV_TIME_BASE;
-                        // 提前 10 秒开始预加载
-                        if ((durationSec - pts) < 10.0)
-                        {
-                            SDL_Log("Near end of track, starting preload for: %s", path_to_preload.c_str());
-                            if (initDecoder2() && openSwrContext2())
-                            {
-                                hasPreloaded.store(true);
-                            }
-                            else
-                            {
-                                SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to preload track.");
-                                freeResources2(); // 清理失败的预加载
-                            }
-                        }
-                    }
-                }
+                // (新增) 检查是否需要触发预加载
+                mainLoop_TriggerPreload(pts);
 
                 // --- 重采样逻辑 ---
                 int out_sample_rate = 0;
                 int out_nb_channels = 0;
                 AVSampleFormat out_sample_fmt = AV_SAMPLE_FMT_NONE;
 
-                av_opt_get_int(swrCtx, "out_sample_rate", 0, (int64_t *)&out_sample_rate);
-                av_opt_get_int(swrCtx, "out_sample_fmt", 0, (int64_t *)&out_sample_fmt);
+                av_opt_get_int(m_currentSource->swrCtx, "out_sample_rate", 0, (int64_t *)&out_sample_rate);
+                av_opt_get_int(m_currentSource->swrCtx, "out_sample_fmt", 0, (int64_t *)&out_sample_fmt);
                 AVChannelLayout out_ch_layout;
-                av_opt_get_chlayout(swrCtx, "out_chlayout", 0, &out_ch_layout);
+                av_opt_get_chlayout(m_currentSource->swrCtx, "out_chlayout", 0, &out_ch_layout);
                 out_nb_channels = out_ch_layout.nb_channels;
-                av_channel_layout_uninit(&out_ch_layout); // (注意) 这里的 uninit 是正确的, 因为 av_opt_get_chlayout 内部会复制
+                av_channel_layout_uninit(&out_ch_layout); // (注意) 这里的 uninit 是正确的
 
                 int out_samples = av_rescale_rnd(
-                    swr_get_delay(swrCtx, frame->sample_rate) + frame->nb_samples,
+                    swr_get_delay(m_currentSource->swrCtx, frame->sample_rate) + frame->nb_samples,
                     out_sample_rate,
                     frame->sample_rate, AV_ROUND_UP);
 
@@ -1021,7 +847,7 @@ void AudioPlayer::mainDecodeThread()
                     break;
                 }
 
-                int converted_samples = swr_convert(swrCtx, &out_buffer, out_samples,
+                int converted_samples = swr_convert(m_currentSource->swrCtx, &out_buffer, out_samples,
                                                     (const uint8_t **)frame->data, frame->nb_samples);
                 if (converted_samples < 0)
                 {
@@ -1044,23 +870,10 @@ void AudioPlayer::mainDecodeThread()
                 totalDecodedBytes.fetch_add(audio_frame->size);
                 totalDecodedFrames.fetch_add(1);
 
-                // ... (自动计算队列大小逻辑不变) ...
-                if (!hasCalculatedQueueSize.load() && totalDecodedFrames.load() >= 5)
-                {
-                    int64_t totalBytes = totalDecodedBytes.load();
-                    int64_t totalFrames = totalDecodedFrames.load();
-                    int avgFrameBytes = std::max(1, static_cast<int>(totalBytes / totalFrames));
-                    double bufferDuration = 0.2;
-                    int bytesPerSecond = out_sample_rate * out_nb_channels * out_bytes_per_sample;
-                    int targetBufferBytes = static_cast<int>(bytesPerSecond * bufferDuration);
-                    int maxFrames = std::max(2, targetBufferBytes / avgFrameBytes);
-                    audioFrameQueueMaxSize.store(maxFrames);
-                    hasCalculatedQueueSize.store(true);
-                    SDL_Log("Auto-calculated audio buffer: %.1f ms buffer, %d frames (avgFrame=%d bytes, sampleRate=%d, ch=%d, bytes/sample=%d)",
-                            bufferDuration * 1000.0, maxFrames, avgFrameBytes, out_sample_rate, out_nb_channels, out_bytes_per_sample);
-                }
+                // (新增) 自动计算队列大小
+                mainLoop_CalculateQueueSize(frame, out_bytes_per_sample);
 
-                av_frame_unref(frame); // (修改) 释放 frame 引用
+                av_frame_unref(frame);
             }
 
             if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF)
@@ -1068,14 +881,106 @@ void AudioPlayer::mainDecodeThread()
                 SDL_LogError(SDL_LOG_CATEGORY_ERROR, "A critical error occurred during decode/resample, stopping playback.");
                 break; // 发生严重错误，退出内层循环
             }
-        }
+        } // --- End Inner Loop ---
 
         // 5. 内层循环退出（播放完毕、出错或退出），清理资源
-        SDL_Log("内层循环退出Cleaning up resources for %s", currentPath.c_str());
+        SDL_Log("Cleaning up resources for %s", m_currentSource ? m_currentSource->path.c_str() : "unknown");
         freeResources();
-    }
+
+        // (修改) 修复：仅在自然播放完毕时才清除路径
+        // 如果是 setPath1 触发的 STOP, playbackFinishedNaturally 为 false, 路径被保留
+        if (playbackFinishedNaturally)
+        {
+            std::lock_guard<std::mutex> lock(path1Mutex);
+            currentPath = "";
+            // 同样清除预加载路径字符串，保持一致性
+            std::lock_guard<std::mutex> lock2(preloadPathMutex);
+            preloadPath = "";
+        }
+
+    } // --- End Outer Loop ---
 
     // 释放循环外分配的内存
     av_frame_free(&frame);
     av_packet_free(&packet);
+}
+
+// (新增) 触发预加载的辅助函数
+void AudioPlayer::mainLoop_TriggerPreload(double currentPts)
+{
+    if (outputMode.load() != OUTPUT_MIXING || hasPreloaded.load() || currentPts < 0)
+    {
+        return; // 模式不符、已预加载 或 pts 无效
+    }
+
+    std::string path_to_preload;
+    {
+        std::lock_guard<std::mutex> lock(preloadPathMutex);
+        path_to_preload = preloadPath;
+    }
+
+    if (path_to_preload.empty())
+    {
+        return; // 没有设置预加载路径
+    }
+
+    double durationSec = audioDuration.load() / (double)AV_TIME_BASE;
+    // 提前 10 秒开始预加载
+    if ((durationSec - currentPts) < 10.0)
+    {
+        SDL_Log("Near end of track, starting preload for: %s", path_to_preload.c_str());
+
+        // (修改) 创建并初始化预加载源
+        // (注意) m_preloadSource 此时应为 nullptr，或在 setPreloadPath 中被清理
+        if (m_preloadSource)
+        {
+            delete m_preloadSource;
+            m_preloadSource = nullptr;
+        }
+
+        m_preloadSource = new AudioStreamSource();
+        // (修改) 预加载也需要打开 SwrContext
+        if (m_preloadSource->initDecoder(path_to_preload, errorBuffer) && m_preloadSource->openSwrContext(deviceParams, volume, errorBuffer))
+        {
+            hasPreloaded.store(true);
+            SDL_Log("Preload successful for: %s", path_to_preload.c_str());
+        }
+        else
+        {
+            SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to preload track: %s", path_to_preload.c_str());
+            delete m_preloadSource; // 清理失败的预加载
+            m_preloadSource = nullptr;
+
+            // (新增) 预加载失败，清除路径，避免重复尝试
+            std::lock_guard<std::mutex> lock(preloadPathMutex);
+            preloadPath = "";
+        }
+    }
+}
+
+// (新增) 自动计算队列大小的辅助函数
+void AudioPlayer::mainLoop_CalculateQueueSize(AVFrame *frame, int out_bytes_per_sample)
+{
+    if (hasCalculatedQueueSize.load() || totalDecodedFrames.load() < 5)
+    {
+        return; // 已计算或样本不足
+    }
+
+    // (修改) 使用实际的设备参数
+    int out_sample_rate = deviceParams.sampleRate;
+    int out_nb_channels = deviceParams.channels;
+
+    int64_t totalBytes = totalDecodedBytes.load();
+    int64_t totalFrames = totalDecodedFrames.load();
+    int avgFrameBytes = std::max(1, static_cast<int>(totalBytes / totalFrames));
+    double bufferDuration = 0.2; // 200ms 缓冲
+    int bytesPerSecond = out_sample_rate * out_nb_channels * out_bytes_per_sample;
+    int targetBufferBytes = static_cast<int>(bytesPerSecond * bufferDuration);
+    int maxFrames = std::max(2, targetBufferBytes / avgFrameBytes);
+
+    audioFrameQueueMaxSize.store(maxFrames);
+    hasCalculatedQueueSize.store(true);
+
+    SDL_Log("Auto-calculated audio buffer: %.1f ms buffer, %d frames (avgFrame=%d bytes, sampleRate=%d, ch=%d, bytes/sample=%d)",
+            bufferDuration * 1000.0, maxFrames, avgFrameBytes, out_sample_rate, out_nb_channels, out_bytes_per_sample);
 }
