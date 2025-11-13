@@ -30,16 +30,16 @@ MainWindow::MainWindow(QWidget *parent) :
         QString baseName = fileInfo.fileName(); // 只保留文件名部分
 
         ui->songName->setText(baseName);
-        if (!player.setPath1(filename.toStdString()))
+        if (!player.setPath(filename.toStdString()))
         {
             qWarning() << "无效的音频文件:" << filename;
             return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待播放器准备好
-        int64_t duration = player.getAudioLength();
+        int64_t duration = player.getAudioDuration();
         QString durationStr = QString::asprintf("%02ld:%02ld", duration / 60, duration % 60);
 
-        ui->horizontalSlider->setMaximum(player.getAudioLength());
+        ui->horizontalSlider->setMaximum(player.getAudioDuration());
         ui->nowTime->setText("00:00");
         ui->remainingTime->setText(durationStr);
         uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
@@ -81,7 +81,7 @@ void MainWindow::UIUpdateLoop()
     while (!isQuit.load())
     {
         int64_t position = player.getNowPlayingTime();
-        int64_t duration = player.getAudioLength();
+        int64_t duration = player.getAudioDuration();
         QString positionStr = QString::asprintf("%02ld:%02ld", position / 60, position % 60);
         QString remainingStr = QString::asprintf("%02ld:%02ld", (duration - position) / 60, (duration - position) % 60);
         if (nowPlayingPath != player.getCurrentPath().c_str())
@@ -128,7 +128,7 @@ void MainWindow::on_pushButton_clicked()
         QString baseName = fileInfo.fileName(); // 只保留文件名部分
 
         ui->songName->setText(baseName);
-        if (!player.setPath1(filename.toStdString()))
+        if (!player.setPath(filename.toStdString()))
         {
             qWarning() << "无效的音频文件:" << filename;
             return;
