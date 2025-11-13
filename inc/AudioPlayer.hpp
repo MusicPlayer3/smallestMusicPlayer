@@ -1,10 +1,13 @@
 #ifndef AUDIOPLAYER_HPP
 #define AUDIOPLAYER_HPP
 
+// 假设 Precompiled.h 包含了这些
+// 如果没有，则需要包含 <string>, <mutex>, <condition_variable>, <thread>,
+// <atomic>, <queue>, <memory> 以及 FFmpeg 和 SDL 的头文件。
 #include "Precompiled.h"
 
-
-enum outputMod
+// (优化) 使用 enum class 替换 C 风格 enum
+enum class OutputMode
 {
     OUTPUT_DIRECT,
     OUTPUT_MIXING,
@@ -27,8 +30,8 @@ struct AudioParams
     int channels = 2;
 };
 
-// 音频帧结构体
-typedef struct AudioFrame
+// (优化) 移除 typedef，直接使用 struct
+struct AudioFrame
 {
     uint8_t *data;
     int size;
@@ -42,7 +45,11 @@ typedef struct AudioFrame
         if (data)
             av_free(data);
     }
-} AudioFrame;
+
+    // 禁用拷贝，因为 data 是唯一所有者
+    AudioFrame(const AudioFrame &) = delete;
+    AudioFrame &operator=(const AudioFrame &) = delete;
+};
 
 class AudioPlayer
 {
@@ -59,7 +66,8 @@ private:
     std::atomic<bool> quitFlag{false};
 
     // --- 状态 ---
-    std::atomic<outputMod> outputMode{OUTPUT_MIXING};
+    // (优化) 使用新的 enum class
+    std::atomic<OutputMode> outputMode{OutputMode::OUTPUT_MIXING};
     std::atomic<PlayerState> playingState{PlayerState::STOPPED};
     std::atomic<int64_t> seekTarget{0};
     std::atomic<bool> hasPaused{true};
@@ -69,13 +77,14 @@ private:
     // --- 音频队列和同步 ---
     std::mutex audioFrameQueueMutex;
     std::condition_variable audioFrameQueueCondVar;
-    // (移除) std::condition_variable decoderCondVar;
     std::atomic<int> audioFrameQueueMaxSize{1024};
-    std::queue<AudioFrame *> audioFrameQueue;
+    // (优化) 使用智能指针管理 AudioFrame
+    std::queue<std::unique_ptr<AudioFrame>> audioFrameQueue;
 
     // --- 音频回调状态 ---
 #ifdef USE_SDL
-    AudioFrame *m_currentFrame = nullptr;
+    // (优化) 使用智能指针管理当前帧
+    std::unique_ptr<AudioFrame> m_currentFrame = nullptr;
     int m_currentFramePos = 0;
 #endif
 
@@ -99,7 +108,7 @@ private:
     SDL_AudioDeviceID m_audioDeviceID = 0;
 #endif
 
-    // === (新增) FFmpeg 资源封装 ===
+    // === FFmpeg 资源封装 ===
     struct AudioStreamSource
     {
         AVFormatContext *pFormatCtx = nullptr;
@@ -158,20 +167,19 @@ private:
         bool openSwrContext(const AudioParams &deviceParams, double volume, char *errorBuffer);
     };
 
-    AudioStreamSource *m_currentSource = nullptr; // 当前播放资源
-    AudioStreamSource *m_preloadSource = nullptr; // 预加载资源
+    // (优化) 使用智能指针管理 FFmpeg 资源
+    std::unique_ptr<AudioStreamSource> m_currentSource = nullptr; // 当前播放资源
+    std::unique_ptr<AudioStreamSource> m_preloadSource = nullptr; // 预加载资源
 
     // --- 私有方法 ---
     void freeResources(); // 释放所有资源
     bool openAudioDevice();
 
-    // (移除) freeResources1, freeResources2, initDecoder, initDecoder2, openSwrContext2
-
 #ifdef USE_SDL
     static void sdl2_audio_callback(void *userdata, Uint8 *stream, int len);
 #endif
 
-    // === (修改) 线程函数和辅助函数 ===
+    // === 线程函数和辅助函数 ===
     void mainDecodeThread();
 
     /**
@@ -205,7 +213,8 @@ public:
     void setMixingParameters(int sampleRate, AVSampleFormat sampleFormat, uint64_t channelLayout, int channels);
     AudioParams getMixingParameters() const;
 
-    void setOutputMode(outputMod mode);
+    // (优化) 使用新的 enum class
+    void setOutputMode(OutputMode mode);
 
     bool isPlaying() const;
     bool isPaused() const;
