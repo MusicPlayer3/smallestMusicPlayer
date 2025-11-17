@@ -121,7 +121,8 @@ private:
     // 解码线程函数
     void mainDecodeThread();
     bool setupDecodingSession(const std::string &path);
-    void decodeAndProcessPacket(bool &isSongLoopActive, bool &playbackFinishedNaturally);
+    // 优化：传入 AVPacket 指针以重用
+    void decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActive, bool &playbackFinishedNaturally);
     bool processFrame(AVFrame *frame);
     void triggerPreload(double currentPts);
     void calculateQueueSize(int out_bytes_per_sample);

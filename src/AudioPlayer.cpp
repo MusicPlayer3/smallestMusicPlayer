@@ -304,6 +304,13 @@ void AudioPlayer::play()
     {
         isFirstPlay = false;
         playingState = PlayerState::PLAYING;
+
+        // 优化：立即解除设备暂停，以实现即时播放
+        if (m_audioDeviceID != 0)
+        {
+            SDL_PauseAudioDevice(m_audioDeviceID, 0);
+        }
+
         stateCondVar.notify_one();
     }
 }
@@ -314,6 +321,13 @@ void AudioPlayer::pause()
     if (playingState != PlayerState::PAUSED)
     {
         playingState = PlayerState::PAUSED;
+
+        // 优化：立即暂停设备，以实现即时暂停
+        if (m_audioDeviceID != 0)
+        {
+            SDL_PauseAudioDevice(m_audioDeviceID, 1);
+        }
+
         stateCondVar.notify_one();
     }
 }
@@ -385,6 +399,7 @@ bool AudioPlayer::openAudioDevice()
     deviceParams.channels = obtainedSpec.channels;
     deviceSpec = obtainedSpec;
 
+    // 优化：默认保持暂停，直到 play() 被调用
     SDL_PauseAudioDevice(m_audioDeviceID, 1);
     return true;
 }
@@ -462,9 +477,22 @@ void AudioPlayer::mainDecodeThread()
             bool playbackFinishedNaturally = false;
             bool isSongLoopActive = true;
 
+            AVPacket *packet = av_packet_alloc();
+            if (!packet)
+            {
+                SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Failed to allocate AVPacket");
+                isSongLoopActive = false;
+            }
+
             {
                 std::lock_guard<std::mutex> lock(stateMutex);
                 playingState = isFirstPlay ? PlayerState::PAUSED : PlayerState::PLAYING;
+
+                // 优化：如果非首次播放，立即取消暂停设备
+                if (!isFirstPlay && m_audioDeviceID != 0)
+                {
+                    SDL_PauseAudioDevice(m_audioDeviceID, 0);
+                }
             }
             stateCondVar.notify_one(); // Notify to handle initial state
 
@@ -480,22 +508,21 @@ void AudioPlayer::mainDecodeThread()
                         return true;
                     }
                     if (playingState == PlayerState::PLAYING) {
+                        std::lock_guard<std::mutex> queueLock(audioFrameQueueMutex);
                         return audioFrameQueue.size() < audioFrameQueueMaxSize.load();
                     }
                     // For PAUSED state, we wait, so return false
                     return false; });
 
-                // Woke up, check for loop-terminating conditions
                 if (quitFlag.load() || playingState == PlayerState::STOPPED)
                 {
                     isSongLoopActive = false;
                     continue;
                 }
 
-                // Handle SEEKING state
                 if (playingState == PlayerState::SEEKING)
                 {
-                    SDL_PauseAudioDevice(m_audioDeviceID, 1); // 修复：确保在seek时暂停音频设备
+                    SDL_PauseAudioDevice(m_audioDeviceID, 1);
                     {
                         std::lock_guard<std::mutex> queueLock(audioFrameQueueMutex);
                         std::queue<std::unique_ptr<AudioFrame>> emptyQueue;
@@ -513,22 +540,25 @@ void AudioPlayer::mainDecodeThread()
                         swr_init(m_currentSource->swrCtx);
 
                     playingState = PlayerState::PLAYING;
-                    // Loop will continue to handle the new PLAYING state
+                    // 优化：在seek后立即取消暂停，以继续播放
+                    SDL_PauseAudioDevice(m_audioDeviceID, 0);
                 }
 
-                // Correctly set audio device state based on player state
+                // 优化：移除了多余的 SDL_PauseAudioDevice 调用
+                // play() 和 pause() 函数现在负责立即控制设备状态
                 if (playingState == PlayerState::PLAYING)
                 {
-                    SDL_PauseAudioDevice(m_audioDeviceID, 0); // Un-pause
-                    lock.unlock();                            // Unlock before heavy decoding work
-                    decodeAndProcessPacket(isSongLoopActive, playbackFinishedNaturally);
+                    lock.unlock();
+                    decodeAndProcessPacket(packet, isSongLoopActive, playbackFinishedNaturally);
                 }
                 else
-                {                                             // Handles PAUSED
-                    SDL_PauseAudioDevice(m_audioDeviceID, 1); // Pause
+                {
+                    // 处于 PAUSED 状态时，线程会在此处阻塞在 stateCondVar.wait()
+                    // 设备已由 pause() 函数暂停，所以此处无需操作
                 }
             } // End of single song loop
 
+            av_packet_free(&packet);
             freeResources();
 
             if (playbackFinishedNaturally)
@@ -545,9 +575,8 @@ void AudioPlayer::mainDecodeThread()
     }
 }
 
-void AudioPlayer::decodeAndProcessPacket(bool &isSongLoopActive, bool &playbackFinishedNaturally)
+void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActive, bool &playbackFinishedNaturally)
 {
-    AVPacket *packet = av_packet_alloc();
     if (!packet)
     {
         isSongLoopActive = false;
@@ -557,9 +586,6 @@ void AudioPlayer::decodeAndProcessPacket(bool &isSongLoopActive, bool &playbackF
     int ret = av_read_frame(m_currentSource->pFormatCtx, packet);
     if (ret < 0)
     {
-        // 修复：在读取失败时也要释放packet
-        av_packet_free(&packet);
-
         if (ret == AVERROR_EOF)
         {
             std::unique_lock<std::mutex> lock(audioFrameQueueMutex);
@@ -571,7 +597,6 @@ void AudioPlayer::decodeAndProcessPacket(bool &isSongLoopActive, bool &playbackF
                 }
                 isSongLoopActive = false;
             }
-            // If queue is not empty, let it drain. The loop will continue waiting.
         }
         else
         {
@@ -588,7 +613,7 @@ void AudioPlayer::decodeAndProcessPacket(bool &isSongLoopActive, bool &playbackF
             AVFrame *frame = av_frame_alloc();
             if (!frame)
             {
-                av_packet_free(&packet);
+                av_packet_unref(packet);
                 isSongLoopActive = false;
                 return;
             }
@@ -604,7 +629,7 @@ void AudioPlayer::decodeAndProcessPacket(bool &isSongLoopActive, bool &playbackF
             av_frame_free(&frame);
         }
     }
-    av_packet_free(&packet);
+    av_packet_unref(packet);
 }
 
 bool AudioPlayer::setupDecodingSession(const std::string &path)
@@ -613,7 +638,7 @@ bool AudioPlayer::setupDecodingSession(const std::string &path)
     if (!m_currentSource->initDecoder(path, errorBuffer))
         return false;
 
-    if (!openAudioDevice())
+    if (!openAudioDevice()) // openAudioDevice 内部已设置为默认暂停
         return false;
 
     if (!m_currentSource->openSwrContext(deviceParams, volume, errorBuffer))
@@ -669,7 +694,6 @@ bool AudioPlayer::processFrame(AVFrame *frame)
 
 void AudioPlayer::triggerPreload(double currentPts)
 {
-    // 修复：添加对当前源的检查
     if (outputMode.load() != OUTPUT_MIXING || hasPreloaded.load() || currentPts < 0 || !m_currentSource)
         return;
 
@@ -705,14 +729,13 @@ void AudioPlayer::triggerPreload(double currentPts)
 
 void AudioPlayer::calculateQueueSize(int out_bytes_per_sample)
 {
-    // 修复：使用原子操作避免竞争条件
     bool expected = false;
     if (!hasCalculatedQueueSize.compare_exchange_strong(expected, true))
         return;
 
     if (totalDecodedFrames.load() < 5)
     {
-        hasCalculatedQueueSize.store(false); // 重置状态
+        hasCalculatedQueueSize.store(false);
         return;
     }
 
@@ -720,14 +743,14 @@ void AudioPlayer::calculateQueueSize(int out_bytes_per_sample)
     int64_t totalFrames = totalDecodedFrames.load();
     if (totalFrames == 0)
     {
-        hasCalculatedQueueSize.store(false); // 重置状态
+        hasCalculatedQueueSize.store(false);
         return;
     }
 
     int avgFrameBytes = static_cast<int>(totalBytes / totalFrames);
     if (avgFrameBytes == 0)
     {
-        hasCalculatedQueueSize.store(false); // 重置状态
+        hasCalculatedQueueSize.store(false);
         return;
     }
 
