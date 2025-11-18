@@ -25,6 +25,13 @@ pkg_check_modules(FFMPEG REQUIRED
     libavfilter
 )
 
+include(CheckCXXCompilerFlag)
+
+CHECK_CXX_COMPILER_FLAG("-mavx2" COMPILER_SUPPORTS_AVX2)
+if(COMPILER_SUPPORTS_AVX2)
+    add_compile_options(-mavx2 -mfma)
+endif()
+
 pkg_check_modules(SDL2 REQUIRED sdl2)
 
 include_directories(

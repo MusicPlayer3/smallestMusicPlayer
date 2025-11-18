@@ -134,6 +134,12 @@ public:
 
     static bool isValidAudio(const std::string &path);
 
+    static std::vector<int> buildAudioWaveform(const std::string &filepath,
+                                               int barCount,
+                                               int totalWidth,
+                                               int &barWidth,
+                                               int maxHeight);
+
     bool setPath(const std::string &path);
     void setPreloadPath(const std::string &path);
 
