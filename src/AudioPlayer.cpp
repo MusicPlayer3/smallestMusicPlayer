@@ -183,7 +183,7 @@ AudioPlayer::AudioPlayer()
 {
     if (SDL_Init(SDL_INIT_AUDIO) != 0)
     {
-        std::cerr << "Failed to initialize SDL: " << SDL_GetError() << std::endl;
+        std::cerr << "Failed to initialize SDL: " << SDL_GetError() << '\n';
         exit(1);
     }
     decodeThread = std::thread(&AudioPlayer::mainDecodeThread, this);
@@ -654,16 +654,16 @@ bool AudioPlayer::processFrame(AVFrame *frame)
         return false;
 
     double pts = (frame->best_effort_timestamp == AV_NOPTS_VALUE) ? -1.0 :
-                                                                    frame->best_effort_timestamp * av_q2d(m_currentSource->pFormatCtx->streams[m_currentSource->audioStreamIndex]->time_base);
+                                                                    static_cast<double>(frame->best_effort_timestamp) * av_q2d(m_currentSource->pFormatCtx->streams[m_currentSource->audioStreamIndex]->time_base);
 
     triggerPreload(pts);
 
-    int out_samples = av_rescale_rnd(
+    int64_t out_samples = av_rescale_rnd(
         swr_get_delay(m_currentSource->swrCtx, frame->sample_rate) + frame->nb_samples,
         deviceParams.sampleRate, frame->sample_rate, AV_ROUND_UP);
 
     int out_bytes_per_sample = av_get_bytes_per_sample(deviceParams.sampleFormat);
-    int out_buffer_size = out_samples * deviceParams.channels * out_bytes_per_sample;
+    int64_t out_buffer_size = out_samples * deviceParams.channels * out_bytes_per_sample;
 
     auto audioFrame = std::make_unique<AudioFrame>();
     audioFrame->data.reset((uint8_t *)av_malloc(out_buffer_size));
@@ -671,7 +671,7 @@ bool AudioPlayer::processFrame(AVFrame *frame)
         return false;
 
     uint8_t *out_buffer_ptr = audioFrame->data.get();
-    int converted_samples = swr_convert(m_currentSource->swrCtx, &out_buffer_ptr, out_samples,
+    int64_t converted_samples = swr_convert(m_currentSource->swrCtx, &out_buffer_ptr, out_samples,
                                         (const uint8_t **)frame->data, frame->nb_samples);
 
     if (converted_samples < 0)

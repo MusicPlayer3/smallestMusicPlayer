@@ -30,7 +30,7 @@ struct AudioParams
 struct AudioFrame
 {
     std::unique_ptr<uint8_t, decltype(&av_free)> data;
-    int size;
+    int64_t size;
     double pts;
     AudioFrame() :
         data(nullptr, &av_free), size(0), pts(0.0)
