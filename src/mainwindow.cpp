@@ -35,6 +35,14 @@ MainWindow::MainWindow(QWidget *parent) :
             qWarning() << "无效的音频文件:" << filename;
             return;
         }
+        int barWidth = 0;
+        auto res = AudioPlayer::buildAudioWaveform(filename.toStdString(), 100, 200, barWidth, 100);
+        std::cout << "res of audioWaveForm:\n";
+        for (const auto &item : res)
+        {
+            std::cout << item << " ";
+        }
+        std::cout << "\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待播放器准备好
         int64_t duration = player.getAudioDuration();
         QString durationStr = QString::asprintf("%02ld:%02ld", duration / 60, duration % 60);
