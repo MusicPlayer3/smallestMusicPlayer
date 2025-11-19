@@ -25,8 +25,13 @@ pkg_check_modules(FFMPEG REQUIRED
     libavfilter
 )
 
+pkg_check_modules(SDBUSCPP REQUIRED sdbus-c++)
+
 include(CheckCXXCompilerFlag)
 
+# ------------------------------
+# 硬件指令集优化 (AVX2)
+# ------------------------------
 CHECK_CXX_COMPILER_FLAG("-mavx2" COMPILER_SUPPORTS_AVX2)
 if(COMPILER_SUPPORTS_AVX2)
     add_compile_options(-mavx2 -mfma)
@@ -40,23 +45,49 @@ include_directories(
     ${SDL2_INCLUDE_DIRS}
 )
 
-# link_directories(${FFMPEG_LIBRARY_DIRS}) 
-# link_directories(${SDL2_LIBRARY_DIRS})   
-
 qt_add_executable(smallestMusicPlayer
     WIN32 MACOSX_BUNDLE
 
-    src/main.cpp
-    src/mainwindow.cpp
-    src/AudioPlayer.cpp
+    ui/mainwindow.ui
 
     inc/mainwindow.h
     inc/AudioPlayer.hpp
     inc/Precompiled.h
     inc/MetaData.hpp
+    inc/MprisService.h
 
-    ui/mainwindow.ui
+    src/main.cpp
+    src/mainwindow.cpp
+    src/AudioPlayer.cpp
+    src/MprisService.cpp
 )
+
+# -----------------------------------------------------------------------------
+# [新增/修改] 针对 Debug 和 Release 的差异化编译选项
+# -----------------------------------------------------------------------------
+if(MSVC)
+    # Visual Studio (MSVC) 编译器选项
+    # Debug:   /Od (禁用优化), /Zi (生成调试信息)
+    # Release: /O2 (最大化速度), /Ob2 (内联扩展)
+    target_compile_options(smallestMusicPlayer PRIVATE
+        $<$<CONFIG:Debug>:/Od /Zi>
+        $<$<CONFIG:Release>:/O2 /Ob2>
+    )
+else()
+    # GCC / Clang / MinGW 编译器选项
+    # Debug:   -Og (优化调试体验), -g (生成调试符号)
+    # Release: -O3 (激进优化), -DNDEBUG (禁用assert)
+    target_compile_options(smallestMusicPlayer PRIVATE
+        $<$<CONFIG:Debug>:-Og -g>
+        $<$<CONFIG:Release>:-O3 -DNDEBUG>
+    )
+endif()
+
+# [建议] Release 模式下开启 IPO/LTO (链接时优化)
+# 这允许编译器在链接阶段跨文件优化（如跨模块内联），对音视频项目性能提升明显
+set_property(TARGET smallestMusicPlayer PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+
+# -----------------------------------------------------------------------------
 
 qt_add_translations(
     TARGETS smallestMusicPlayer
