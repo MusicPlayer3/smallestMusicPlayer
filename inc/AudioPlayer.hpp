@@ -22,18 +22,19 @@ struct AudioParams
 {
     int sampleRate = 96000;
     AVSampleFormat sampleFormat = AV_SAMPLE_FMT_FLT;
-    AVChannelLayout ch_layout = AV_CHANNEL_LAYOUT_STEREO; // 通道布局
+    AVChannelLayout ch_layout = AV_CHANNEL_LAYOUT_STEREO;
     int channels = 2;
 };
 
 // 音频帧结构体
 struct AudioFrame
 {
-    std::unique_ptr<uint8_t, decltype(&av_free)> data;
+    // 使用 unique_ptr 管理 av_malloc 分配的内存
+    std::unique_ptr<uint8_t, void (*)(void *)> data;
     int64_t size;
     double pts;
-    AudioFrame() :
-        data(nullptr, &av_free), size(0), pts(0.0)
+
+    AudioFrame() : data(nullptr, av_free), size(0), pts(0.0)
     {
     }
 };
@@ -44,17 +45,18 @@ private:
     // --- 路径和线程同步 ---
     mutable std::mutex pathMutex;
     std::condition_variable pathCondVar;
-    std::string currentPath = ""; // 当前播放歌曲的路径
-    std::string preloadPath = ""; // 预加载歌曲的路径
+    std::string currentPath = "";
+    std::string preloadPath = "";
 
     std::thread decodeThread;
     std::atomic<bool> quitFlag{false};
 
     // --- 状态 ---
     mutable std::mutex stateMutex;
-    std::condition_variable stateCondVar; // 统一的条件变量，用于所有状态和队列通知
+    std::condition_variable stateCondVar;
     std::atomic<outputMod> outputMode{OUTPUT_MIXING};
-    PlayerState playingState{PlayerState::STOPPED}; // 由 stateMutex 保护
+    // playingState 由 stateMutex 保护
+    PlayerState playingState{PlayerState::STOPPED};
     std::atomic<int64_t> seekTarget{0};
     bool isFirstPlay = true;
     std::atomic<bool> hasPreloaded{false};
@@ -99,6 +101,8 @@ private:
         {
             free();
         }
+
+        // 禁止拷贝，允许移动
         AudioStreamSource(const AudioStreamSource &) = delete;
         AudioStreamSource &operator=(const AudioStreamSource &) = delete;
         AudioStreamSource(AudioStreamSource &&) = default;
@@ -115,18 +119,19 @@ private:
     // --- 私有方法 ---
     void freeResources();
     bool openAudioDevice();
+    void closeAudioDevice();
 
     static void sdl2_audio_callback(void *userdata, Uint8 *stream, int len);
 
     // 解码线程函数
     void mainDecodeThread();
     bool setupDecodingSession(const std::string &path);
-    // 优化：传入 AVPacket 指针以重用
     void decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActive, bool &playbackFinishedNaturally);
     bool processFrame(AVFrame *frame);
     void triggerPreload(double currentPts);
     void calculateQueueSize(int out_bytes_per_sample);
     bool performSeamlessSwitch();
+    void flushQueue();
 
 public:
     AudioPlayer();
@@ -158,4 +163,5 @@ public:
     int64_t getNowPlayingTime() const;
     int64_t getAudioDuration() const;
 };
+
 #endif // AUDIOPLAYER_HPP
