@@ -54,6 +54,7 @@ qt_add_executable(smallestMusicPlayer
     inc/AudioPlayer.hpp
     inc/Precompiled.h
     inc/MetaData.hpp
+    inc/mpris_server.hpp
 
     src/main.cpp
     src/mainwindow.cpp
