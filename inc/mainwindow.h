@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include "AudioPlayer.hpp"
+#include "MetaDataSharer.hpp"
 
 QT_BEGIN_NAMESPACE
 namespace Ui
@@ -42,6 +43,7 @@ private:
     std::thread uiThread;
 
     std::atomic<bool> isQuit = false;
+    MetaDataSharer Sharer;
 
     void UIUpdateLoop();
 };

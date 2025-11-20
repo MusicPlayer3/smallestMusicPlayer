@@ -43,6 +43,7 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/inc
     ${FFMPEG_INCLUDE_DIRS}
     ${SDL2_INCLUDE_DIRS}
+    ${SDBUSCPP_INCLUDE_DIRS}
 )
 
 qt_add_executable(smallestMusicPlayer
@@ -55,10 +56,12 @@ qt_add_executable(smallestMusicPlayer
     inc/Precompiled.h
     inc/MetaData.hpp
     inc/mpris_server.hpp
+    inc/MetaDataSharer.hpp
 
     src/main.cpp
     src/mainwindow.cpp
     src/AudioPlayer.cpp
+    src/MetaDataSharer.cpp
 )
 
 # -----------------------------------------------------------------------------
@@ -100,6 +103,7 @@ target_link_libraries(smallestMusicPlayer
         Qt6::Multimedia
         ${FFMPEG_LIBRARIES}
         ${SDL2_LIBRARIES}
+        ${SDBUSCPP_LIBRARIES}
 )
 
 include(GNUInstallDirs)
