@@ -152,12 +152,6 @@ qt_add_executable(smallestMusicPlayer
     src/MetaDataSharer.cpp
 )
 
-# [新增] 仅在 Linux 上编译 mpris_server.cpp
-if(SDBUSCPP_FOUND)
-    target_sources(smallestMusicPlayer PRIVATE src/mpris_server.cpp)
-endif()
-
-
 # -----------------------------------------------------------------------------
 # [原有逻辑] 针对 Debug 和 Release 的差异化编译选项
 # -----------------------------------------------------------------------------
