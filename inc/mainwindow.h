@@ -43,7 +43,6 @@ private:
     std::thread uiThread;
 
     std::atomic<bool> isQuit = false;
-    MetaDataSharer Sharer;
 
     void UIUpdateLoop();
 };

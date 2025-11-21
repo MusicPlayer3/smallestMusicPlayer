@@ -3,6 +3,13 @@
 #include <algorithm>
 #include <iostream>
 
+std::string av_strerror(int errnum)
+{
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    av_make_error_string(errbuf, sizeof(errbuf), errnum);
+    return errbuf;
+}
+
 // --- Constants ---
 namespace
 {
@@ -586,7 +593,7 @@ void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActiv
         }
         else
         {
-            SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Read frame error: %s", av_err2str(ret));
+            SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Read frame error: %s", av_strerror(ret).c_str());
             isSongLoopActive = false;
         }
         return;

@@ -1,14 +1,13 @@
 #include "mainwindow.h"
 #include "AudioPlayer.hpp"
 #include "MetaDataSharer.hpp"
-#include "SDL_log.h"
 #include "ui_mainwindow.h"
 #include <QFileDialog>
 #include <memory>
 #include "mpris_server.hpp"
 
 MainWindow::MainWindow(QWidget *parent) :
-    QMainWindow(parent), ui(new Ui::MainWindow), Sharer(std::shared_ptr<AudioPlayer>(&player))
+    QMainWindow(parent), ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
 #ifdef Q_OS_WIN
@@ -54,7 +53,6 @@ MainWindow::MainWindow(QWidget *parent) :
         ui->nowTime->setText("00:00");
         ui->remainingTime->setText(durationStr);
         uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
-        Sharer.setMetaData(baseName.toStdString(), {"test"}, {"Test"}, "", "", player.getAudioDuration());
     }
 }
 
@@ -75,13 +73,11 @@ void MainWindow::on_play_clicked()
     {
         ui->play->setText("暂停");
         player.play();
-        Sharer.setPlayBackStatus(mpris::PlaybackStatus::Playing);
     }
     else
     {
         ui->play->setText("播放");
         player.pause();
-        Sharer.setPlayBackStatus(mpris::PlaybackStatus::Paused);
     }
 }
 
@@ -147,7 +143,6 @@ void MainWindow::on_pushButton_clicked()
             qWarning() << "无效的音频文件:" << filename;
             return;
         }
-        Sharer.setMetaData(baseName.toStdString(), {"test"}, {"Test"}, "", "", player.getAudioDuration());
     }
 }
 
