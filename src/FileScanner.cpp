@@ -1,19 +1,12 @@
 #include "FileScanner.hpp"
 #include "MetaData.hpp"
+#include "AudioPlayer.hpp"
 #include "Precompiled.h"
-#include <filesystem>
 
 namespace fs = std::filesystem;
-bool isffmpeg(const std::string &route)
+inline bool isffmpeg(const std::string &route)
 {
-    AVFormatContext *fmtCtx = nullptr;
-    // avformat_open_input 返回 0 表示成功
-    if (avformat_open_input(&fmtCtx, route.c_str(), nullptr, nullptr) < 0)
-    {
-        return false;
-    }
-    avformat_close_input(&fmtCtx);
-    return true;
+    return AudioPlayer::isValidAudio(route);
 }
 
 static TagLib::ByteVector extractCoverData(const char *fileName)
@@ -56,31 +49,23 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
 {
     fs::path path(musicPath);
     MetaData musicData;
-    if (fs::is_regular_file(path))
+    if (fs::is_regular_file(path) && isffmpeg(musicPath))
     {
-        if (isffmpeg(musicPath))
+        TagLib::FileRef f(musicPath.c_str());
+        if (f.isNull() || f.tag() == nullptr)
         {
-            TagLib::FileRef f(musicPath.c_str());
-            if (f.isNull() || f.tag() == nullptr)
-            {
-                return musicData;
-            }
-            TagLib::Tag *tag = f.tag();
-            musicData.setFilePath(musicPath);
-            musicData.setParentDir(path.parent_path().string());
-            musicData.setTitle(tag->title().toCString());
-            musicData.setArtist(tag->artist().toCString());
-            musicData.setAlbum(tag->album().toCString());
-            musicData.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
-            // 提取封面到tmp目录下
-        
+            return musicData;
         }
+        TagLib::Tag *tag = f.tag();
+        musicData.setFilePath(musicPath);
+        musicData.setParentDir(path.parent_path().string());
+        musicData.setTitle(tag->title().toCString());
+        musicData.setArtist(tag->artist().toCString());
+        musicData.setAlbum(tag->album().toCString());
+        musicData.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
+        // 提取封面到tmp目录下
     }
-    else
-    {
-        return musicData;
-    }
-
+    return musicData;
 }
 
 void getinfo(const std::string &route, std::vector<MetaData> &items) // 读取并存储该路径下的音频文件信息

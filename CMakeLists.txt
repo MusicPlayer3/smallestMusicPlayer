@@ -137,19 +137,23 @@ qt_add_executable(smallestMusicPlayer
 
     ui/mainwindow.ui
 
-    inc/mainwindow.h
     inc/AudioPlayer.hpp
-    inc/Precompiled.h
+    inc/FileScanner.hpp
+    inc/mainwindow.h
     inc/MetaData.hpp
     inc/MetaDataSharer.hpp
+    inc/mpris_server.hpp
+    inc/Playlist.hpp
+    inc/Precompiled.h
+    inc/stb_image_write.h
+    inc/stb_image.h
     
-    # [新增] 仅在 Linux 上编译 mpris_server.hpp
-    $<$<BOOL:${SDBUSCPP_FOUND}>:inc/mpris_server.hpp> 
-
+    src/AudioPlayer.cpp
+    src/FileScanner.cpp
     src/main.cpp
     src/mainwindow.cpp
-    src/AudioPlayer.cpp
     src/MetaDataSharer.cpp
+    src/Playlist.cpp
 )
 
 # -----------------------------------------------------------------------------
