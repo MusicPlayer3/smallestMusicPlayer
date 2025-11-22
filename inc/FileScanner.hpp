@@ -21,6 +21,8 @@ public:
     {
     }
 
+    static MetaData getMetaData(const std::string &musicPath);
+
     void startScan()
     {
         scanThread = std::thread(&FileScanner::scanDir, this);
