@@ -1,25 +1,20 @@
 #include "MetaDataSharer.hpp"
+#include "SDL_log.h"
 
 #ifdef __linux__
-#include "mpris_server.hpp"
-// 引入 sdbus 头文件以使用 sdbus::ObjectPath 和 sdbus::Variant
-#include <sdbus-c++/sdbus-c++.h>
-#include <vector>
-#include <map>
+
 #endif
 
-MetaDataSharer::MetaDataSharer(std::shared_ptr<AudioPlayer> player)
+MetaDataSharer::MetaDataSharer(AudioPlayer &pplayer) : player(pplayer)
 {
-    this->player = std::move(player);
-
 #ifdef __linux__
     // 创建 Server 实例
     server = mpris::Server::make("smallestMusicPlayer");
 
     if (!server)
     {
-        std::cerr << "[MetaDataSharer] Error: Can't connect to D-Bus. MPRIS disabled.\n";
-        return;
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[MetaDataSharer] Error: Can't create MPRIS server. MPRIS disabled.\n");
+        throw std::runtime_error("Can't create MPRIS server.");
     }
 
     // 基础信息设置
@@ -85,7 +80,10 @@ void MetaDataSharer::setMetaData(const std::string &title, const std::vector<std
 {
 #ifdef __linux__
     if (!server)
+    {
+        std::cerr << "error! no mpris server!";
         return;
+    }
 
     // 修复：使用 map<mpris::Field, sdbus::Variant> 构建元数据
     std::map<mpris::Field, sdbus::Variant> meta;
@@ -175,95 +173,64 @@ std::string MetaDataSharer::localPathToUri(const std::string &path)
 void MetaDataSharer::onQuit()
 {
     std::cout << "[MetaDataSharer] Action: Quit" << std::endl;
-    if (player)
-    {
-        // player->quit(); // 假设 AudioPlayer 有此接口
-    }
     exit(0);
 }
 
 void MetaDataSharer::onNext()
 {
     std::cout << "[MetaDataSharer] Action: Next" << std::endl;
-    if (player)
-    {
-        // player->next();
-    }
 }
 
 void MetaDataSharer::onPrevious()
 {
     std::cout << "[MetaDataSharer] Action: Previous" << std::endl;
-    if (player)
-    {
-        // player->previous();
-    }
 }
 
 void MetaDataSharer::onPause()
 {
     std::cout << "[MetaDataSharer] Action: Pause" << std::endl;
-    if (player)
-    {
-        player->pause();
-    }
+
+    player.pause();
+
     setPlayBackStatus(mpris::PlaybackStatus::Paused);
 }
 
 void MetaDataSharer::onPlay()
 {
     std::cout << "[MetaDataSharer] Action: Play" << std::endl;
-    if (player)
-    {
-        player->play();
-    }
+
+    player.play();
     setPlayBackStatus(mpris::PlaybackStatus::Playing);
 }
 
 void MetaDataSharer::onPlayPause()
 {
     std::cout << "[MetaDataSharer] Action: PlayPause" << std::endl;
-    if (player)
+
+    if (player.isPlaying())
     {
-        if (player->isPlaying())
-        {
-            player->pause();
-        }
-        else
-        {
-            player->play();
-        }
+        player.pause();
+    }
+    else
+    {
+        player.play();
     }
 }
 
 void MetaDataSharer::onStop()
 {
     std::cout << "[MetaDataSharer] Action: Stop" << std::endl;
-    if (player)
-    {
-        // player->stop();
-    }
     setPlayBackStatus(mpris::PlaybackStatus::Stopped);
 }
 
 void MetaDataSharer::onSeek(int64_t offset)
 {
     std::cout << "[MetaDataSharer] Action: Seek, Offset = " << offset << " us" << std::endl;
-    if (player)
-    {
-        // 注意：MPRIS 的 Seek 是相对当前位置的偏移量
-        // player->seekRelative(std::chrono::microseconds(offset));
-    }
 }
 
 void MetaDataSharer::onSetPosition(int64_t position)
 {
     std::cout << "[MetaDataSharer] Action: SetPosition, Pos = " << position << " us" << std::endl;
-    if (player)
-    {
-        // MPRIS 的 SetPosition 是绝对位置
-        // player->seekAbsolute(std::chrono::microseconds(position));
-    }
 }
 
 #else // Not Linux

@@ -6,8 +6,13 @@
 #include <memory>
 #include "mpris_server.hpp"
 
+#ifdef __linux__
+MainWindow::MainWindow(QWidget *parent) :
+    QMainWindow(parent), ui(new Ui::MainWindow),sharer(player)
+#elifdef __WIN32__
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow)
+#endif
 {
     ui->setupUi(this);
 #ifdef Q_OS_WIN
@@ -53,6 +58,9 @@ MainWindow::MainWindow(QWidget *parent) :
         ui->nowTime->setText("00:00");
         ui->remainingTime->setText(durationStr);
         uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
+#ifdef __linux__
+        
+#endif
     }
 }
 

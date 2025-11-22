@@ -10,18 +10,17 @@
 #include <iostream>
 #include <chrono>
 
-// 前置声明
-namespace mpris
-{
-class Server;
-enum class PlaybackStatus;
-} // namespace mpris
+#ifdef __linux__
+#include "mpris_server.hpp"
+// 引入 sdbus 头文件以使用 sdbus::ObjectPath 和 sdbus::Variant
+#include <sdbus-c++/sdbus-c++.h>
+#endif
 
 class MetaDataSharer
 {
 private:
     // 后端AudioPlayer实例
-    std::shared_ptr<AudioPlayer> player;
+    AudioPlayer &player;
 
 #ifdef __linux__
     // mpris服务器实例
@@ -52,7 +51,7 @@ private:
 #endif
 
 public:
-    MetaDataSharer(std::shared_ptr<AudioPlayer> player);
+    MetaDataSharer(AudioPlayer &player);
     ~MetaDataSharer();
 
     /**

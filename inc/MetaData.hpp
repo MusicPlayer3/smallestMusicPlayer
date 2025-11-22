@@ -11,6 +11,7 @@ private:
     std::string year;      // 出版年份
     std::string filePath;  // 文件路径
     std::string parentDir; // 上级目录
+    std::string coverPath; // 封面路径
 
 public:
     MetaData();
@@ -19,13 +20,15 @@ public:
              const std::string &album,
              const std::string &year,
              const std::string &filePath,
-             const std::string &parentDir) :
+             const std::string &parentDir,
+             const std::string &coverPath) :
         title(title),
         artist(artist),
         album(album),
         year(year),
         filePath(filePath),
-        parentDir(parentDir)
+        parentDir(parentDir),
+        coverPath(coverPath)
     {
     }
 
@@ -105,6 +108,11 @@ public:
         return parentDir;
     }
 
+    const std::string &getCoverPath() const
+    {
+        return coverPath;
+    }
+
     // setter
     void setTitle(const std::string &title)
     {
@@ -129,6 +137,11 @@ public:
     void setParentDir(const std::string &parentDir)
     {
         this->parentDir = parentDir;
+    }
+
+    void setCoverPath(const std::string &coverPath)
+    {
+        this->coverPath = coverPath;
     }
 };
 

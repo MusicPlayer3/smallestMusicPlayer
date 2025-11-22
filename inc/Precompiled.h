@@ -10,8 +10,18 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <filesystem>
+#include <stack>
 
 #include <taglib/tbytevector.h>
+#include <taglib/tag.h>
+#include <taglib/fileref.h>
+#include <taglib/tstring.h>
+#include <taglib/tpropertymap.h>
+#include <taglib/mpegfile.h>
+#include <taglib/id3v2tag.h>
+#include <taglib/attachedpictureframe.h>
+#include <taglib/flacfile.h>
 
 extern "C"
 {
