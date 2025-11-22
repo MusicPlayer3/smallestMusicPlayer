@@ -2,6 +2,10 @@
 #include "MetaData.hpp"
 #include "AudioPlayer.hpp"
 #include "Precompiled.h"
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
 namespace fs = std::filesystem;
 inline bool isffmpeg(const std::string &route)
@@ -63,7 +67,55 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
         musicData.setArtist(tag->artist().toCString());
         musicData.setAlbum(tag->album().toCString());
         musicData.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
+        musicData.setDuration(f.audioProperties()->lengthInMilliseconds() * 1000);
+
         // 提取封面到tmp目录下
+        TagLib::ByteVector coverData = extractCoverData(musicPath.c_str());
+        if (coverData.isEmpty())
+        {
+            musicData.setCoverPath("");
+        }
+        else
+        {
+            static constexpr std::string outputDir = "./tmp";
+            if (!fs::exists(outputDir))
+            {
+                fs::create_directory(outputDir);
+            }
+            SDL_Log("[Info] Found cover art. Size: %d bytes.\n", coverData.size());
+
+            int width, height, channels;
+            unsigned char *imgPixels = stbi_load_from_memory(
+                reinterpret_cast<const unsigned char *>(coverData.data()),
+                coverData.size(),
+                &width,
+                &height,
+                &channels,
+                0 // 强制通道数，0 表示保持原样
+            );
+
+            if (!imgPixels)
+            {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load image from memory: %s\n", stbi_failure_reason());
+                musicData.setCoverPath("");
+            }
+
+            SDL_Log("[Info] Image loaded. Width: %d, Height: %d, Channels: %d\n", width, height, channels);
+
+            std::string coverPath = outputDir + "/" + std::string(tag->title().toCString()) + ".png";
+
+            int success = stbi_write_png(coverPath.c_str(), width, height, channels, imgPixels, 0);
+            stbi_image_free(imgPixels);
+
+            if (success)
+            {
+                musicData.setCoverPath(coverPath);
+            }
+            else
+            {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to write PNG image: %s\n", stbi_failure_reason());
+            }
+        }
     }
     return musicData;
 }

@@ -92,6 +92,7 @@ void MetaDataSharer::setMetaData(const std::string &title, const std::vector<std
     meta[mpris::Field::TrackId] = sdbus::Variant(sdbus::ObjectPath("/org/mpris/MediaPlayer2/Track/Current"));
 
     // 2. Title
+    std::cout << "title:" << title << std::endl;
     meta[mpris::Field::Title] = sdbus::Variant(title);
 
     // 3. Artist (MPRIS 标准要求是字符串列表 "as")
@@ -122,14 +123,7 @@ void MetaDataSharer::setMetaData(const std::string &title, const std::vector<std
 
 void MetaDataSharer::setMetaData(const MetaData &metadata)
 {
-    // 假设 MetaData 结构体包含以下字段
-    // 如果字段名不同，请自行修改
-    // setMetaData(metadata.getTitle(),
-    //             metadata.getArtist(),
-    //             metadata.getAlbum(),
-    //             metadata.getFilePath(),       // 或 metadata.filePath
-    //             metadata.getc, // 假设有封面路径
-    //             metadata.duration); // 假设有时长
+    setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), "", metadata.getCoverPath(), metadata.getDuration());
 }
 
 #ifdef __linux__

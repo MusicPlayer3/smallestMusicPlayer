@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "AudioPlayer.hpp"
+#include "FileScanner.hpp"
 #include "MetaDataSharer.hpp"
 #include "ui_mainwindow.h"
 #include <QFileDialog>
@@ -8,7 +9,7 @@
 
 #ifdef __linux__
 MainWindow::MainWindow(QWidget *parent) :
-    QMainWindow(parent), ui(new Ui::MainWindow),sharer(player)
+    QMainWindow(parent), ui(new Ui::MainWindow), sharer(player)
 #elifdef __WIN32__
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow)
@@ -59,7 +60,8 @@ MainWindow::MainWindow(QWidget *parent) :
         ui->remainingTime->setText(durationStr);
         uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
 #ifdef __linux__
-        
+        auto metadata = FileScanner::getMetaData(filename.toStdString());
+        sharer.setMetaData(metadata);
 #endif
     }
 }
@@ -81,11 +83,17 @@ void MainWindow::on_play_clicked()
     {
         ui->play->setText("暂停");
         player.play();
+#ifdef __linux__
+        sharer.setPlayBackStatus(mpris::PlaybackStatus::Playing);
+#endif
     }
     else
     {
         ui->play->setText("播放");
         player.pause();
+#ifdef __linux__
+        sharer.setPlayBackStatus(mpris::PlaybackStatus::Paused);
+#endif
     }
 }
 
@@ -116,6 +124,8 @@ void MainWindow::UIUpdateLoop()
         ui->horizontalSlider->setValue(position);
         ui->horizontalSlider->blockSignals(false);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        auto durationInMicroseconds = std::chrono::microseconds(duration * 1000);
+        sharer.setPosition(durationInMicroseconds);
     }
     std::cout << "UIUpdateLoop exit\n";
 }

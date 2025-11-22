@@ -12,23 +12,26 @@ private:
     std::string filePath;  // 文件路径
     std::string parentDir; // 上级目录
     std::string coverPath; // 封面路径
+    int64_t duration;      // 歌曲时长(单位微秒)
 
 public:
-    MetaData();
+    MetaData() = default;
     MetaData(const std::string &title,
              const std::string &artist,
              const std::string &album,
              const std::string &year,
              const std::string &filePath,
              const std::string &parentDir,
-             const std::string &coverPath) :
+             const std::string &coverPath,
+             int64_t duration) :
         title(title),
         artist(artist),
         album(album),
         year(year),
         filePath(filePath),
         parentDir(parentDir),
-        coverPath(coverPath)
+        coverPath(coverPath),
+        duration(duration)
     {
     }
 
@@ -113,6 +116,11 @@ public:
         return coverPath;
     }
 
+    int64_t getDuration() const
+    {
+        return duration;
+    }
+
     // setter
     void setTitle(const std::string &title)
     {
@@ -142,6 +150,11 @@ public:
     void setCoverPath(const std::string &coverPath)
     {
         this->coverPath = coverPath;
+    }
+
+    void setDuration(int64_t duration)
+    {
+        this->duration = duration;
     }
 };
 
