@@ -1,12 +1,6 @@
-#include"FileScanner.hpp"
+#include "FileScanner.hpp"
 #include "MetaData.hpp"
-#include <filesystem>
-#include <taglib/tag.h>
-#include <taglib/fileref.h>
-#include <taglib/tstring.h>
-#include <vector>
-#include <stack>
-#include <libavformat/avformat.h>
+#include "Precompiled.h"
 
 namespace fs = std::filesystem;
 bool isffmpeg(const std::string &route)
@@ -20,13 +14,13 @@ bool isffmpeg(const std::string &route)
     avformat_close_input(&fmtCtx);
     return true;
 }
-void getinfo(const std::string &route,std::vector<MetaData>&items) //读取并存储该路径下的音频文件信息
+void getinfo(const std::string &route, std::vector<MetaData> &items) // 读取并存储该路径下的音频文件信息
 {
     fs::path r(route);
     MetaData music;
     TagLib::FileRef f(route.c_str());
 
-    if (f.isNull() ||f.tag() == nullptr)
+    if (f.isNull() || f.tag() == nullptr)
     {
         return;
     }
@@ -39,8 +33,9 @@ void getinfo(const std::string &route,std::vector<MetaData>&items) //读取并�
     music.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
     items.push_back(music);
 }
-void FileScanner::scanDir(){ //扫描路径并获取路径下所有音频文件信息
-    if(!fs::exists(rootDir))
+void FileScanner::scanDir()
+{ // 扫描路径并获取路径下所有音频文件信息
+    if (!fs::exists(rootDir))
     {
         hasScanCpld = true;
         return;
@@ -49,7 +44,7 @@ void FileScanner::scanDir(){ //扫描路径并获取路径下所有音频文件�
     {
         if (isffmpeg(rootDir))
         {
-            getinfo(rootDir,items);
+            getinfo(rootDir, items);
         }
         hasScanCpld = true;
         return;
@@ -57,11 +52,11 @@ void FileScanner::scanDir(){ //扫描路径并获取路径下所有音频文件�
 
     std::stack<std::string> dirStack;
     dirStack.push(rootDir);
-    while (!dirStack.empty())//dfs层次遍历文件夹或读入音频文件信息
+    while (!dirStack.empty()) // dfs层次遍历文件夹或读入音频文件信息
     {
         std::string currentDir = dirStack.top();
         dirStack.pop();
-        for(const auto &entry : fs::directory_iterator(currentDir))
+        for (const auto &entry : fs::directory_iterator(currentDir))
         {
             if (entry.is_directory())
             {
