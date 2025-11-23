@@ -9,7 +9,7 @@
 
 #ifdef __linux__
 MainWindow::MainWindow(QWidget *parent) :
-    QMainWindow(parent), ui(new Ui::MainWindow), sharer(player)
+    QMainWindow(parent), ui(new Ui::MainWindow)
 #elifdef __WIN32__
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow)
@@ -60,12 +60,6 @@ MainWindow::MainWindow(QWidget *parent) :
         ui->remainingTime->setText(durationStr);
 
         uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
-#ifdef __linux__
-        auto metadata = FileScanner::getMetaData(filename.toStdString());
-        // 确保 metadata 中包含准确的时长信息 (MPRIS 要求微秒)
-        metadata.setDuration(player.getDurationMicroseconds());
-        sharer.setMetaData(metadata);
-#endif
     }
 }
 
@@ -86,17 +80,11 @@ void MainWindow::on_play_clicked()
     {
         ui->play->setText("暂停");
         player.play();
-#ifdef __linux__
-        sharer.setPlayBackStatus(mpris::PlaybackStatus::Playing);
-#endif
     }
     else
     {
         ui->play->setText("播放");
         player.pause();
-#ifdef __linux__
-        sharer.setPlayBackStatus(mpris::PlaybackStatus::Paused);
-#endif
     }
 }
 
@@ -154,11 +142,6 @@ void MainWindow::UIUpdateLoop()
         ui->horizontalSlider->blockSignals(false);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        // [修改 3] 修正 MPRIS 更新逻辑
-        // 原代码传递的是 duration，这里应该传递当前播放位置 positionMicro
-        // 并且 MPRIS 需要微秒
-        sharer.setPosition(std::chrono::microseconds(positionMicro));
     }
     std::cout << "UIUpdateLoop exit\n";
 }
@@ -179,11 +162,6 @@ void MainWindow::on_horizontalSlider_valueChanged(int value)
     // 只有当 Slider 没有被 blockSignals 时（即用户手动拖动时）才会触发这里
     // 但为了保险，通常会检查 isSliderDown()，不过你的 Loop 中加了 blockSignals 应该够了
     player.seek(static_cast<int64_t>(value) * 1000);
-
-#ifdef __linux__
-    // 拖动进度条时，最好也通知 MPRIS 位置变了
-    sharer.setPosition(std::chrono::microseconds(static_cast<int64_t>(value) * 1000));
-#endif
 }
 
 // 切歌按钮
@@ -212,12 +190,6 @@ void MainWindow::on_pushButton_clicked()
         std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 给解码线程一点时间解析 header
         int64_t durationMs = player.getDurationMillisecond();
         ui->horizontalSlider->setMaximum(static_cast<int>(durationMs));
-
-#ifdef __linux__
-        auto metadata = FileScanner::getMetaData(filename.toStdString());
-        metadata.setDuration(player.getDurationMicroseconds());
-        sharer.setMetaData(metadata);
-#endif
     }
 }
 
