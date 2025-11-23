@@ -39,6 +39,8 @@ private:
     // MPRIS SetPosition 传入的是绝对位置(微秒)
     void onSetPosition(int64_t position);
 
+    void onVolumeChange(double vol);
+
     /**
      * @brief 辅助函数：将本地路径转换为 file:// URI
      */

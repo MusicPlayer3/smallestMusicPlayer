@@ -150,7 +150,7 @@ public:
 
     void play();
     void pause();
-    void seek(int64_t time);
+    void seek(int64_t timeMicroseconds);
     void setVolume(double vol);
 
     void setMixingParameters(const AudioParams &params);
@@ -162,6 +162,15 @@ public:
     const std::string getCurrentPath() const;
     int64_t getNowPlayingTime() const;
     int64_t getAudioDuration() const;
+
+    // 获取当前播放位置（微秒），用于 MPRIS Position
+    int64_t getCurrentPositionMicroseconds() const;
+
+    // 获取总时长（毫秒），用于某些UI显示
+    int64_t getDurationMillisecond() const;
+
+    // 获取总时长（微秒），用于 MPRIS Metadata mpris:length
+    int64_t getDurationMicroseconds() const;
 };
 
 #endif // AUDIOPLAYER_HPP

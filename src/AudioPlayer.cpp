@@ -322,13 +322,20 @@ void AudioPlayer::pause()
     }
 }
 
-void AudioPlayer::seek(int64_t time)
+void AudioPlayer::seek(int64_t timeMicroseconds)
 {
     std::lock_guard<std::mutex> lock(stateMutex);
-    seekTarget.store(static_cast<int64_t>(time * AV_TIME_BASE));
-    // Transition to SEEKING. Decoder thread handles the actual FFmpeg seek
+
+    // [修改前] seekTarget.store(static_cast<int64_t>(time * AV_TIME_BASE));
+    // [修改后] 直接存储微秒值。
+    // 注意：FFmpeg 的 AV_TIME_BASE 正好就是 1,000,000 (微秒基准)，
+    // 所以解码线程中的 av_rescale_q 逻辑不需要动，它本来就是把 AV_TIME_BASE 转换为流的 time_base。
+    seekTarget.store(timeMicroseconds);
+
+    // 切换状态为 SEEKING，解码线程会处理剩下的逻辑
     playingState = PlayerState::SEEKING;
-    // Pause device during seek to prevent garbage audio
+
+    // 如果设备已打开，暂停以防爆音
     if (m_audioDeviceID != 0)
     {
         SDL_PauseAudioDevice(m_audioDeviceID, 1);
@@ -378,6 +385,9 @@ bool AudioPlayer::openAudioDevice()
     desiredSpec.callback = AudioPlayer::sdl2_audio_callback;
     desiredSpec.userdata = this;
 
+    SDL_SetHint(SDL_HINT_APP_NAME, "smallestMusicPlayer");
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "AudioPlayback");
+
     m_audioDeviceID = SDL_OpenAudioDevice(nullptr, 0, &desiredSpec, &obtainedSpec, 0);
     if (m_audioDeviceID == 0)
     {
@@ -420,7 +430,7 @@ void AudioPlayer::sdl2_audio_callback(void *userdata, Uint8 *stream, int len)
             player->m_currentFramePos = 0;
             if (player->m_currentFrame)
             {
-                player->nowPlayingTime.store(static_cast<int64_t>(player->m_currentFrame->pts));
+                player->nowPlayingTime.store(static_cast<int64_t>(player->m_currentFrame->pts * 1000000.0));
             }
             lock.unlock();                     // Unlock ASAP
             player->stateCondVar.notify_one(); // Notify decode thread space is available
@@ -781,7 +791,7 @@ const std::string AudioPlayer::getCurrentPath() const
 
 int64_t AudioPlayer::getNowPlayingTime() const
 {
-    return nowPlayingTime.load();
+    return nowPlayingTime.load() / 1000000;
 }
 
 int64_t AudioPlayer::getAudioDuration() const
@@ -948,4 +958,32 @@ std::vector<int> AudioPlayer::buildAudioWaveform(const std::string &filepath,
     }
 
     return barHeights;
+}
+
+int64_t AudioPlayer::getCurrentPositionMicroseconds() const
+{
+    // 直接返回原子变量中的微秒值
+    return nowPlayingTime.load();
+}
+
+// 获取总时长 (毫秒)
+int64_t AudioPlayer::getDurationMillisecond() const
+{
+    // audioDuration 存储的是 FFmpeg 的 AV_TIME_BASE (微秒)
+    int64_t duration = audioDuration.load();
+    if (duration == AV_NOPTS_VALUE)
+        return 0;
+
+    return duration / 1000;
+}
+
+// 获取总时长 (微秒)
+int64_t AudioPlayer::getDurationMicroseconds() const
+{
+    // audioDuration 原生就是微秒单位
+    int64_t duration = audioDuration.load();
+    if (duration == AV_NOPTS_VALUE)
+        return 0;
+
+    return duration;
 }

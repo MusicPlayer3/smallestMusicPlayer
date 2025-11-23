@@ -14,6 +14,7 @@ powered py https://github.com/chrg127/mpris-server
 #include <variant>
 #include <vector>
 #include <memory>
+#include <iostream>
 
 #ifndef MPRIS_SERVER_NO_IMPL
 #include <sdbus-c++/sdbus-c++.h>
@@ -182,8 +183,9 @@ class Server
 
     bool can_control() const
     {
-        return bool(loop_status_changed_fn) && bool(shuffle_changed_fn)
-               && bool(volume_changed_fn) && bool(stop_fn);
+        return bool(stop_fn) || bool(next_fn) || bool(previous_fn)
+               || bool(play_fn) || bool(pause_fn) || bool(play_pause_fn)
+               || bool(seek_fn) || bool(set_position_fn) || bool(open_uri_fn);
     }
     bool can_go_next() const
     {
@@ -269,6 +271,7 @@ public:
     void on_set_position(auto &&fn)
     {
         set_position_fn = fn;
+        std::cout << "set_position_fn" << std::endl;
         control_props_changed("CanSeek");
     }
     void on_open_uri(auto &&fn)
@@ -482,11 +485,41 @@ inline void Server::set_volume_external(double value)
 
 inline void Server::set_position_method(sdbus::ObjectPath id, int64_t pos)
 {
+    std::cout << "set_position_method" << std::endl
+              << "can seek:" << can_seek() << std::endl;
     if (!can_seek())
+    {
+        std::cout << "return in can_seek" << std::endl;
         return;
+    }
     auto tid = metadata.find(detail::field_to_string(Field::TrackId));
-    if (tid == metadata.end() || tid->second.get<std::string>() != id)
+    if (tid == metadata.end())
+    {
+        std::cout << "no trackid in metadata" << std::endl;
         return;
+    }
+
+    std::string trackid_str;
+
+    // 正确获取 object path
+    try
+    {
+        trackid_str = tid->second.get<sdbus::ObjectPath>().c_str();
+    }
+    catch (...)
+    {
+        std::cout << "trackid is not ObjectPath" << std::endl;
+        return;
+    }
+
+    // 比较 object path
+    std::string id_str = id.c_str();
+
+    if (trackid_str != id_str)
+    {
+        std::cout << "trackid not match: " << trackid_str << " vs " << id_str << std::endl;
+        return;
+    }
     set_position_fn(pos);
 }
 

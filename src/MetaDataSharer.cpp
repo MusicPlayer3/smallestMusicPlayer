@@ -21,7 +21,7 @@ MetaDataSharer::MetaDataSharer(AudioPlayer &pplayer) : player(pplayer)
     server->set_identity("smallestMusicPlayer");
     // server->set_desktop_entry("smallestMusicPlayer"); // 需对应 .desktop 文件名
     server->set_supported_uri_schemes({"file"});
-    server->set_supported_mime_types({"application/octet-stream", "audio/mpeg", "audio/flac", "audio/x-wav"});
+    server->set_supported_mime_types({"application/octet-stream", "audio/mpeg", "audio/flac", "audio/x-wav", "text/plain"});
 
     // --- 绑定回调函数  ---
     server->on_quit([this]()
@@ -46,8 +46,8 @@ MetaDataSharer::MetaDataSharer(AudioPlayer &pplayer) : player(pplayer)
     server->on_shuffle_changed([](bool shuffle)
                                { std::cout << "[MPRIS] Shuffle changed (Not implemented)" << std::endl; });
 
-    server->on_volume_changed([](double volume)
-                              { std::cout << "[MPRIS] Volume changed (Not implemented)" << std::endl; });
+    server->on_volume_changed([this](double volume)
+                              { this->onVolumeChange(volume); });
 
     // Seek 传入 int64_t (Offset)
     server->on_seek([this](int64_t offset)
@@ -56,7 +56,7 @@ MetaDataSharer::MetaDataSharer(AudioPlayer &pplayer) : player(pplayer)
     // SetPosition 传入 int64_t (Absolute Position)
     // 注意：mpris_server.hpp 中 set_position_method 会先检查 TrackId，然后调用此回调
     server->on_set_position([this](int64_t pos)
-                            { this->onSetPosition(pos); });
+                            { std::cout<<"in lambda function, pos = "<<pos<<std::endl;this->onSetPosition(pos); });
 
     // 启动 DBus 事件循环 (必须调用，否则收不到信号)
     server->start_loop_async();
@@ -220,11 +220,43 @@ void MetaDataSharer::onStop()
 void MetaDataSharer::onSeek(int64_t offset)
 {
     std::cout << "[MetaDataSharer] Action: Seek, Offset = " << offset << " us" << std::endl;
+    int64_t currentPos = player.getCurrentPositionMicroseconds();
+    int64_t duration = player.getDurationMicroseconds();
+
+    int64_t targetPos = currentPos + offset;
+    // 3. 边界处理 (Clamp)
+    if (targetPos < 0)
+    {
+        targetPos = 0;
+    }
+    else if (targetPos > duration)
+    {
+        targetPos = duration;
+        // 有些播放器策略是跳到下一首，但标准行为通常是停在末尾或跳到末尾
+    }
+    player.seek(targetPos);
+    server->set_position(targetPos);
 }
 
 void MetaDataSharer::onSetPosition(int64_t position)
 {
     std::cout << "[MetaDataSharer] Action: SetPosition, Pos = " << position << " us" << std::endl;
+
+    int64_t duration = player.getDurationMicroseconds();
+
+    if (position < 0)
+        position = 0;
+    if (position > duration)
+        position = duration;
+
+    // 直接跳转
+    player.seek(position);
+    server->set_position(position);
+}
+
+void MetaDataSharer::onVolumeChange(double vol)
+{
+    player.setVolume(vol);
 }
 
 #else // Not Linux

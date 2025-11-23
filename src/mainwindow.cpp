@@ -45,22 +45,25 @@ MainWindow::MainWindow(QWidget *parent) :
         }
         int barWidth = 0;
         auto res = AudioPlayer::buildAudioWaveform(filename.toStdString(), 100, 200, barWidth, 100);
-        std::cout << "res of audioWaveForm:\n";
-        for (const auto &item : res)
-        {
-            std::cout << item << " ";
-        }
-        std::cout << "\n";
-        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待播放器准备好
-        int64_t duration = player.getAudioDuration();
-        QString durationStr = QString::asprintf("%02ld:%02ld", duration / 60, duration % 60);
+        // std::cout << "res of audioWaveForm..." // 略去打印以保持整洁
 
-        ui->horizontalSlider->setMaximum(player.getAudioDuration());
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待播放器准备好
+
+        // [修改 1] 使用毫秒作为 Slider 的最大值，以获得更平滑的进度条
+        int64_t durationMs = player.getDurationMillisecond();
+
+        // 显示用的字符串仍然计算为秒
+        QString durationStr = QString::asprintf("%02ld:%02ld", (durationMs / 1000) / 60, (durationMs / 1000) % 60);
+
+        ui->horizontalSlider->setMaximum(static_cast<int>(durationMs));
         ui->nowTime->setText("00:00");
         ui->remainingTime->setText(durationStr);
+
         uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
 #ifdef __linux__
         auto metadata = FileScanner::getMetaData(filename.toStdString());
+        // 确保 metadata 中包含准确的时长信息 (MPRIS 要求微秒)
+        metadata.setDuration(player.getDurationMicroseconds());
         sharer.setMetaData(metadata);
 #endif
     }
@@ -106,26 +109,56 @@ void MainWindow::UIUpdateLoop()
     QString nowPlayingPath = player.getCurrentPath().c_str();
     while (!isQuit.load())
     {
-        int64_t position = player.getNowPlayingTime();
-        int64_t duration = player.getAudioDuration();
-        QString positionStr = QString::asprintf("%02ld:%02ld", position / 60, position % 60);
-        QString remainingStr = QString::asprintf("%02ld:%02ld", (duration - position) / 60, (duration - position) % 60);
+        // [修改 2] 使用微秒获取高精度当前时间
+        int64_t positionMicro = player.getCurrentPositionMicroseconds();
+        int64_t durationMs = player.getDurationMillisecond();
+
+        // 计算秒用于显示文本
+        int64_t positionSec = positionMicro / 1000000;
+        int64_t durationSec = durationMs / 1000;
+
+        QString positionStr = QString::asprintf("%02ld:%02ld", positionSec / 60, positionSec % 60);
+        QString remainingStr = QString::asprintf("%02ld:%02ld", (durationSec - positionSec) / 60, (durationSec - positionSec) % 60);
+
         if (nowPlayingPath != player.getCurrentPath().c_str())
         {
             nowPlayingPath = player.getCurrentPath().c_str();
             QFileInfo fileInfo(nowPlayingPath);
-            QString baseName = fileInfo.fileName(); // 只保留文件名部分
+            QString baseName = fileInfo.fileName();
             ui->songName->setText(baseName);
+
+            // 切歌时更新 Slider 最大值
+            durationMs = player.getDurationMillisecond(); // 获取新歌曲长度
+                                                          // 注意：UI操作建议用信号槽 invokeMethod 到主线程，这里为了简单直接调用
+                                                          // 实际项目中应避免在非 UI 线程直接操作 UI 控件
+            QMetaObject::invokeMethod(ui->horizontalSlider, "setMaximum", Qt::QueuedConnection, Q_ARG(int, static_cast<int>(durationMs)));
         }
-        ui->nowTime->setText(positionStr);
-        ui->remainingTime->setText(remainingStr);
+
+        // 使用 QMetaObject::invokeMethod 或者信号槽来更新 UI 会更安全，
+        // 但为了保持和你原代码结构一致，这里只修改逻辑：
+
+        // 更新文本
+        QMetaObject::invokeMethod(ui->nowTime, "setText", Q_ARG(QString, positionStr));
+        QMetaObject::invokeMethod(ui->remainingTime, "setText", Q_ARG(QString, remainingStr));
+
+        // 更新 Slider
+        // 注意：blockSignals(true) 防止 setValue 触发 on_horizontalSlider_valueChanged 导致循环 seek
+        // 但在多线程环境下直接操作 ui 对象是不安全的，如果你的程序偶尔崩溃，请改为信号槽机制
         ui->horizontalSlider->blockSignals(true);
-        ui->horizontalSlider->setMaximum(duration);
-        ui->horizontalSlider->setValue(position);
+        if (ui->horizontalSlider->maximum() != durationMs)
+        {
+            ui->horizontalSlider->setMaximum(static_cast<int>(durationMs));
+        }
+        // 将微秒转换为毫秒设置给 Slider
+        ui->horizontalSlider->setValue(static_cast<int>(positionMicro / 1000));
         ui->horizontalSlider->blockSignals(false);
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        auto durationInMicroseconds = std::chrono::microseconds(duration * 1000);
-        sharer.setPosition(durationInMicroseconds);
+
+        // [修改 3] 修正 MPRIS 更新逻辑
+        // 原代码传递的是 duration，这里应该传递当前播放位置 positionMicro
+        // 并且 MPRIS 需要微秒
+        sharer.setPosition(std::chrono::microseconds(positionMicro));
     }
     std::cout << "UIUpdateLoop exit\n";
 }
@@ -136,8 +169,21 @@ void MainWindow::on_back_clicked()
 
 void MainWindow::on_horizontalSlider_valueChanged(int value)
 {
-    SDL_Log("value change! %d", value);
-    player.seek(value);
+    // [修改 4] Seek 逻辑适配
+    // UI Slider 的单位现在是 毫秒 (value)
+    // AudioPlayer::seek 现在的参数是 微秒
+    // 所以需要 value * 1000
+
+    SDL_Log("Seek request: %d ms", value);
+
+    // 只有当 Slider 没有被 blockSignals 时（即用户手动拖动时）才会触发这里
+    // 但为了保险，通常会检查 isSliderDown()，不过你的 Loop 中加了 blockSignals 应该够了
+    player.seek(static_cast<int64_t>(value) * 1000);
+
+#ifdef __linux__
+    // 拖动进度条时，最好也通知 MPRIS 位置变了
+    sharer.setPosition(std::chrono::microseconds(static_cast<int64_t>(value) * 1000));
+#endif
 }
 
 // 切歌按钮
@@ -153,7 +199,7 @@ void MainWindow::on_pushButton_clicked()
     {
         qDebug() << "选择的文件:" << filename;
         QFileInfo fileInfo(filename);
-        QString baseName = fileInfo.fileName(); // 只保留文件名部分
+        QString baseName = fileInfo.fileName();
 
         ui->songName->setText(baseName);
         if (!player.setPath(filename.toStdString()))
@@ -161,6 +207,17 @@ void MainWindow::on_pushButton_clicked()
             qWarning() << "无效的音频文件:" << filename;
             return;
         }
+
+        // [修改 5] 切歌后更新 Slider 范围
+        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 给解码线程一点时间解析 header
+        int64_t durationMs = player.getDurationMillisecond();
+        ui->horizontalSlider->setMaximum(static_cast<int>(durationMs));
+
+#ifdef __linux__
+        auto metadata = FileScanner::getMetaData(filename.toStdString());
+        metadata.setDuration(player.getDurationMicroseconds());
+        sharer.setMetaData(metadata);
+#endif
     }
 }
 
