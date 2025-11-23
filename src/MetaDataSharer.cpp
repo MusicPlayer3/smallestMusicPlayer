@@ -5,7 +5,7 @@
 
 #endif
 
-MetaDataSharer::MetaDataSharer(AudioPlayer &pplayer) : player(pplayer)
+MetaDataSharer::MetaDataSharer(std::shared_ptr<AudioPlayer> player)
 {
 #ifdef __linux__
     // 创建 Server 实例
@@ -16,6 +16,8 @@ MetaDataSharer::MetaDataSharer(AudioPlayer &pplayer) : player(pplayer)
         SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[MetaDataSharer] Error: Can't create MPRIS server. MPRIS disabled.\n");
         throw std::runtime_error("Can't create MPRIS server.");
     }
+
+    this->player = std::move(player);
 
     // 基础信息设置
     server->set_identity("smallestMusicPlayer");
@@ -184,7 +186,7 @@ void MetaDataSharer::onPause()
 {
     std::cout << "[MetaDataSharer] Action: Pause" << std::endl;
 
-    player.pause();
+    player->pause();
 
     setPlayBackStatus(mpris::PlaybackStatus::Paused);
 }
@@ -193,7 +195,7 @@ void MetaDataSharer::onPlay()
 {
     std::cout << "[MetaDataSharer] Action: Play" << std::endl;
 
-    player.play();
+    player->play();
     setPlayBackStatus(mpris::PlaybackStatus::Playing);
 }
 
@@ -201,13 +203,13 @@ void MetaDataSharer::onPlayPause()
 {
     std::cout << "[MetaDataSharer] Action: PlayPause" << std::endl;
 
-    if (player.isPlaying())
+    if (player->isPlaying())
     {
-        player.pause();
+        player->pause();
     }
     else
     {
-        player.play();
+        player->play();
     }
 }
 
@@ -220,8 +222,8 @@ void MetaDataSharer::onStop()
 void MetaDataSharer::onSeek(int64_t offset)
 {
     std::cout << "[MetaDataSharer] Action: Seek, Offset = " << offset << " us" << std::endl;
-    int64_t currentPos = player.getCurrentPositionMicroseconds();
-    int64_t duration = player.getDurationMicroseconds();
+    int64_t currentPos = player->getCurrentPositionMicroseconds();
+    int64_t duration = player->getDurationMicroseconds();
 
     int64_t targetPos = currentPos + offset;
     // 3. 边界处理 (Clamp)
@@ -234,7 +236,7 @@ void MetaDataSharer::onSeek(int64_t offset)
         targetPos = duration;
         // 有些播放器策略是跳到下一首，但标准行为通常是停在末尾或跳到末尾
     }
-    player.seek(targetPos);
+    player->seek(targetPos);
     server->set_position(targetPos);
 }
 
@@ -242,7 +244,7 @@ void MetaDataSharer::onSetPosition(int64_t position)
 {
     std::cout << "[MetaDataSharer] Action: SetPosition, Pos = " << position << " us" << std::endl;
 
-    int64_t duration = player.getDurationMicroseconds();
+    int64_t duration = player->getDurationMicroseconds();
 
     if (position < 0)
         position = 0;
@@ -250,13 +252,13 @@ void MetaDataSharer::onSetPosition(int64_t position)
         position = duration;
 
     // 直接跳转
-    player.seek(position);
+    player->seek(position);
     server->set_position(position);
 }
 
 void MetaDataSharer::onVolumeChange(double vol)
 {
-    player.setVolume(vol);
+    player->setVolume(vol);
 }
 
 #else // Not Linux

@@ -20,7 +20,7 @@ class MetaDataSharer
 {
 private:
     // 后端AudioPlayer实例
-    AudioPlayer &player;
+    std::shared_ptr<AudioPlayer> player;
 
 #ifdef __linux__
     // mpris服务器实例
@@ -53,7 +53,7 @@ private:
 #endif
 
 public:
-    MetaDataSharer(AudioPlayer &player);
+    MetaDataSharer(std::shared_ptr<AudioPlayer> player);
     ~MetaDataSharer();
 
     /**
