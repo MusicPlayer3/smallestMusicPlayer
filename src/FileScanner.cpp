@@ -63,9 +63,9 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
         TagLib::Tag *tag = f.tag();
         musicData.setFilePath(musicPath);
         musicData.setParentDir(path.parent_path().string());
-        musicData.setTitle(tag->title().toCString());
-        musicData.setArtist(tag->artist().toCString());
-        musicData.setAlbum(tag->album().toCString());
+        musicData.setTitle(tag->title().toCString(true));
+        musicData.setArtist(tag->artist().toCString(true));
+        musicData.setAlbum(tag->album().toCString(true));
         musicData.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
         musicData.setDuration(f.audioProperties()->lengthInMilliseconds() * 1000);
 
@@ -77,7 +77,7 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
         }
         else
         {
-            static constexpr std::string outputDir = "./tmp";
+            std::string outputDir = std::filesystem::current_path().string() + "/tmp";
             if (!fs::exists(outputDir))
             {
                 fs::create_directory(outputDir);
@@ -102,7 +102,7 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
 
             SDL_Log("[Info] Image loaded. Width: %d, Height: %d, Channels: %d\n", width, height, channels);
 
-            std::string coverPath = outputDir + "/" + std::string(tag->title().toCString()) + ".png";
+            std::string coverPath = outputDir + "/" + std::string(tag->title().toCString(true)) + ".png";
 
             int success = stbi_write_png(coverPath.c_str(), width, height, channels, imgPixels, 0);
             stbi_image_free(imgPixels);
@@ -133,9 +133,9 @@ void getinfo(const std::string &route, std::vector<MetaData> &items) // 读取�
     TagLib::Tag *tag = f.tag();
     music.setFilePath(route);
     music.setParentDir(r.parent_path().string());
-    music.setTitle(tag->title().toCString());
-    music.setArtist(tag->artist().toCString());
-    music.setAlbum(tag->album().toCString());
+    music.setTitle(tag->title().toCString(true));
+    music.setArtist(tag->artist().toCString(true));
+    music.setAlbum(tag->album().toCString(true));
     music.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
     items.push_back(music);
 }
