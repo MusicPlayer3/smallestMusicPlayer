@@ -64,11 +64,12 @@ public:
     // 构造函数
     explicit MediaController()
     {
-        if (instance == nullptr)
+        if (MediaController::instance == nullptr)
         {
-            instance = this;
+            MediaController::instance = this;
             player = std::make_unique<AudioPlayer>();
             sharer = std::make_unique<MetaDataSharer>(player);
+            scanner = std::make_unique<FileScanner>("/home/kaizen857/Music/#ffffff Records - The Unfinished - DELUXE Edition/");
 #ifdef DEBUG
             initPlayList();
 #endif
@@ -167,18 +168,14 @@ public:
     }
     /**
      * @brief 上一首
-     *
      */
     void previous();
     /**
      * @brief 下一首
-     *
      */
     void next();
 
     // TODO:播放列表相关函数
-
-
 };
 
 #endif

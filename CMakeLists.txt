@@ -147,6 +147,7 @@ qt_add_executable(smallestMusicPlayer
     inc/Precompiled.h
     inc/stb_image_write.h
     inc/stb_image.h
+    inc/MediaController.hpp
     
     src/AudioPlayer.cpp
     src/FileScanner.cpp
@@ -154,6 +155,7 @@ qt_add_executable(smallestMusicPlayer
     src/mainwindow.cpp
     src/MetaDataSharer.cpp
     src/Playlist.cpp
+    src/MediaController.cpp
 )
 
 # -----------------------------------------------------------------------------

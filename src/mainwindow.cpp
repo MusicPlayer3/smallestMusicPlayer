@@ -6,6 +6,7 @@
 #include <QFileDialog>
 #include <memory>
 #include "mpris_server.hpp"
+#include "MediaController.hpp"
 
 #ifdef __linux__
 MainWindow::MainWindow(QWidget *parent) :
@@ -38,28 +39,30 @@ MainWindow::MainWindow(QWidget *parent) :
         QString baseName = fileInfo.fileName(); // 只保留文件名部分
 
         ui->songName->setText(baseName);
-        if (!player.setPath(filename.toStdString()))
-        {
-            qWarning() << "无效的音频文件:" << filename;
-            return;
-        }
-        int barWidth = 0;
-        auto res = AudioPlayer::buildAudioWaveform(filename.toStdString(), 100, 200, barWidth, 100);
-        // std::cout << "res of audioWaveForm..." // 略去打印以保持整洁
+        MediaController controller;
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待播放器准备好
+        // if (!player.setPath(filename.toStdString()))
+        // {
+        //     qWarning() << "无效的音频文件:" << filename;
+        //     return;
+        // }
+        // int barWidth = 0;
+        // auto res = AudioPlayer::buildAudioWaveform(filename.toStdString(), 100, 200, barWidth, 100);
+        // // std::cout << "res of audioWaveForm..." // 略去打印以保持整洁
 
-        // [修改 1] 使用毫秒作为 Slider 的最大值，以获得更平滑的进度条
-        int64_t durationMs = player.getDurationMillisecond();
+        // std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待播放器准备好
 
-        // 显示用的字符串仍然计算为秒
-        QString durationStr = QString::asprintf("%02ld:%02ld", (durationMs / 1000) / 60, (durationMs / 1000) % 60);
+        // // [修改 1] 使用毫秒作为 Slider 的最大值，以获得更平滑的进度条
+        // int64_t durationMs = player.getDurationMillisecond();
 
-        ui->horizontalSlider->setMaximum(static_cast<int>(durationMs));
-        ui->nowTime->setText("00:00");
-        ui->remainingTime->setText(durationStr);
+        // // 显示用的字符串仍然计算为秒
+        // QString durationStr = QString::asprintf("%02ld:%02ld", (durationMs / 1000) / 60, (durationMs / 1000) % 60);
 
-        uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
+        // ui->horizontalSlider->setMaximum(static_cast<int>(durationMs));
+        // ui->nowTime->setText("00:00");
+        // ui->remainingTime->setText(durationStr);
+
+        // uiThread = std::thread(&MainWindow::UIUpdateLoop, this);
     }
 }
 
