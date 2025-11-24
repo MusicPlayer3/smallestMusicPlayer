@@ -4,7 +4,7 @@
 
 void MediaController::initPlayList()
 {
-    // TODO: 初始化用来debug的a播放列表
+    // TODO: 初始化用来debug的播放列表
 }
 
 #endif

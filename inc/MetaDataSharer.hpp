@@ -66,8 +66,8 @@ public:
      * @param duration 歌曲长度(微秒) (可选，默认0)
      */
     void setMetaData(const std::string &title, const std::vector<std::string> &artist,
-                     const std::string &album, const std::string &uri,
-                     const std::string &coverPath = "", int64_t duration = 0);
+                     const std::string &album,
+                     const std::string &coverPath = "", int64_t duration = 0, const std::string &uri = "");
 
     /**
      * @brief 设置元数据 (重载)

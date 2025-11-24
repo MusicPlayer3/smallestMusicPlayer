@@ -14,7 +14,7 @@ private:
     static MediaController *instance;
 
     // 音量
-    double volume;
+    std::atomic<double> volume;
 
     // 元数据共享器实例
     std::unique_ptr<MetaDataSharer> sharer;
@@ -25,6 +25,12 @@ private:
     // 文件扫描器实例
     std::unique_ptr<FileScanner> scanner;
 
+    std::atomic<int64_t> currentPosMicroseconds;
+    std::atomic<int64_t> durationMicroseconds;
+
+    std::atomic<int64_t> currentPosMillisecond;
+    std::atomic<int64_t> durationMillisecond;
+
 #ifdef DEBUG
 
     std::vector<MetaData> playlist;
@@ -32,6 +38,27 @@ private:
     void initPlayList();
 
 #endif
+    /**
+     * @brief 设置当前播放状态
+     *
+     */
+    void setPlayBackStatus(mpris::PlaybackStatus);
+
+    /**
+     * @brief 设置当前播放位置
+     *
+     */
+    void setPosition(std::chrono::microseconds);
+
+    /**
+     * @brief 设置与系统共享的
+     *
+     * @param metadata
+     */
+    void setMetaData(const MetaData &metadata)
+    {
+        sharer->setMetaData(metadata);
+    }
 
 public:
     // 构造函数
@@ -48,7 +75,7 @@ public:
         }
     }
 
-    // player的控制函数
+    // TODO:播放相关函数
     void play()
     {
         player->play();
@@ -64,7 +91,13 @@ public:
 
     void setVolume(double vol)
     {
+        volume.store(vol);
         player->setVolume(vol);
+    }
+
+    double getVolume() const
+    {
+        return volume.load();
     }
 
     bool setNowPlayingPath(const std::string &path)
@@ -132,11 +165,19 @@ public:
     {
         return player->getDurationMicroseconds();
     }
+    /**
+     * @brief 上一首
+     *
+     */
+    void previous();
+    /**
+     * @brief 下一首
+     *
+     */
+    void next();
 
     // TODO:播放列表相关函数
 
-
-    
 
 };
 

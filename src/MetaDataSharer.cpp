@@ -77,8 +77,8 @@ MetaDataSharer::~MetaDataSharer()
 }
 
 void MetaDataSharer::setMetaData(const std::string &title, const std::vector<std::string> &artist,
-                                 const std::string &album, const std::string &uri,
-                                 const std::string &coverPath, int64_t duration)
+                                 const std::string &album,
+                                 const std::string &coverPath, int64_t duration, const std::string &uri)
 {
 #ifdef __linux__
     if (!server)
@@ -103,8 +103,10 @@ void MetaDataSharer::setMetaData(const std::string &title, const std::vector<std
     // 4. Album
     meta[mpris::Field::Album] = sdbus::Variant(album);
 
-    // 5. URL
-    meta[mpris::Field::Url] = sdbus::Variant(localPathToUri(uri));
+    if (!uri.empty())
+    { // 5. URL
+        meta[mpris::Field::Url] = sdbus::Variant(localPathToUri(uri));
+    }
 
     // 6. Art URL (封面)
     if (!coverPath.empty())
@@ -125,7 +127,7 @@ void MetaDataSharer::setMetaData(const std::string &title, const std::vector<std
 
 void MetaDataSharer::setMetaData(const MetaData &metadata)
 {
-    setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), "", metadata.getCoverPath(), metadata.getDuration());
+    setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), metadata.getCoverPath(), metadata.getDuration());
 }
 
 #ifdef __linux__
