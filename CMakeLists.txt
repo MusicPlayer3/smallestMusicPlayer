@@ -141,7 +141,6 @@ qt_add_executable(smallestMusicPlayer
     inc/FileScanner.hpp
     inc/mainwindow.h
     inc/MetaData.hpp
-    inc/MetaDataSharer.hpp
     inc/mpris_server.hpp
     inc/Playlist.hpp
     inc/Precompiled.h
@@ -153,7 +152,6 @@ qt_add_executable(smallestMusicPlayer
     src/FileScanner.cpp
     src/main.cpp
     src/mainwindow.cpp
-    src/MetaDataSharer.cpp
     src/Playlist.cpp
     src/MediaController.cpp
 )

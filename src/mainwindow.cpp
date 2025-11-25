@@ -1,7 +1,6 @@
 #include "mainwindow.h"
 #include "AudioPlayer.hpp"
 #include "FileScanner.hpp"
-#include "MetaDataSharer.hpp"
 #include "ui_mainwindow.h"
 #include <QFileDialog>
 #include <memory>
