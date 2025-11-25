@@ -2,14 +2,16 @@
 #define _FILE_SCANNER_HPP_
 
 #include "MetaData.hpp"
+#include "Playlist.hpp"
 
 class FileScanner
 {
 private:
     std::string rootDir;
-    std::vector<MetaData> items;
 
     std::thread scanThread;
+
+    std::shared_ptr<PlaylistNode> rootNode;
 
     std::atomic<bool> hasScanCpld{false};
 
@@ -23,28 +25,20 @@ public:
 
     static MetaData getMetaData(const std::string &musicPath);
 
-    void startScan()
+    void startScan()//开始扫描
     {
         scanThread = std::thread(&FileScanner::scanDir, this);
         scanThread.detach();
     }
 
-    bool isScanCompleted() const
+    bool isScanCompleted() const //是否遍历完成
     {
         return hasScanCpld.load();
     }
 
-    const std::vector<MetaData> &getItems() const
+    std::shared_ptr<PlaylistNode> buildPlaylistTree() const//构建播放列表
     {
-        if (hasScanCpld.load())
-        {
-            return items;
-        }
-        else
-        {
-            static const std::vector<MetaData> empty;
-            return empty;
-        }
+        return rootNode; 
     }
 };
 

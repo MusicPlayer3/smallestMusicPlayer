@@ -37,6 +37,8 @@ extern "C"
 #include <SDL2/SDL_stdinc.h>
 #include <SDL2/SDL_audio.h>
 
+#ifndef FILESCANNER_TEST // 测试 FileScanner 时不需要 Qt
 #include <QMainWindow>
+#endif
 
 #endif
