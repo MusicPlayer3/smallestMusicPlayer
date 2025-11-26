@@ -11,6 +11,8 @@
 /obj
 /out
 /.vscode
+/tmp
+/temp
 
 compile_commands.json
 
