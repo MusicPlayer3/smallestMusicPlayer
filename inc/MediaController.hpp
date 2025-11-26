@@ -81,10 +81,22 @@ public:
     double getVolume();
 
     // 获取当前播放位置
-    int64_t getCurrentPosMicroseconds();
-    int64_t getDurationMicroseconds();
-    int64_t getCurrentPosMillisecond();
-    int64_t getDurationMillisecond();
+    int64_t getCurrentPosMicroseconds()
+    {
+        return currentPosMicroseconds.load();
+    }
+    int64_t getDurationMicroseconds()
+    {
+        return durationMicroseconds.load();
+    }
+    int64_t getCurrentPosMillisecond()
+    {
+        return currentPosMillisecond.load();
+    }
+    int64_t getDurationMillisecond()
+    {
+        return durationMillisecond.load();
+    }
 
     // 播放列表相关函数
 
@@ -122,6 +134,7 @@ public:
         if (isScanCplt() && rootNode == nullptr)
         {
             rootNode = scanner->getPlaylistTree();
+            currentNode = rootNode.get();
         }
         return rootNode;
     }
@@ -131,9 +144,29 @@ public:
         return currentNode;
     }
 
-    void setCurrentNode(PlaylistNode *node);
+    void setCurrentNode(PlaylistNode *node)
+    {
+        currentNode = node;
+    }
 
     void currentNodeUp()
+    {
+        if (currentNode->getParent() != nullptr)
+        {
+            currentNode = currentNode->getParent().get();
+        }
+    }
+
+    void currentNodeDown(const std::string &dirName)
+    {
+
+    }
+
+    void currentNodeNext()
+    {
+        
+    }
+    void currentNodePrev()
     {
         
     }

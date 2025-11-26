@@ -36,6 +36,8 @@ public:
 
     static MetaData getMetaData(const std::string &musicPath);
 
+    static std::string getCoverDir(const std::string &musicPath);
+
     void startScan() // 开始扫描
     {
         scanThread = std::thread(&FileScanner::scanDir, this);
