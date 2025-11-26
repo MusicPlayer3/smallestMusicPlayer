@@ -2,7 +2,7 @@
 #define _FILE_SCANNER_HPP_
 
 #include "MetaData.hpp"
-#include "Playlist.hpp"
+#include "PlaylistNode.hpp"
 
 class FileScanner
 {

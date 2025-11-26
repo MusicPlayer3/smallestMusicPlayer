@@ -134,6 +134,7 @@ buildNodeFromDir(const fs::path &dirPath)
             if (entry.is_directory())
             {
                 auto childDirNode = buildNodeFromDir(entry.path());
+                childDirNode->setParent(node); // 设置父节点
                 tmpChildren.push_back(childDirNode);
             }
             else if (entry.is_regular_file())
@@ -146,7 +147,8 @@ buildNodeFromDir(const fs::path &dirPath)
                     // 用 FileScanner::getMetaData 获取元数据
                     MetaData md = FileScanner::getMetaData(filePath);
                     fileNode->setMetaData(md);
-
+                    fileNode->setParent(node); // 设置父节点
+                    // 将文件节点加入 tmpChildren
                     tmpChildren.push_back(fileNode);
                 }
             }
