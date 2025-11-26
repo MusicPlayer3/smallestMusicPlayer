@@ -1,5 +1,6 @@
 #include "SysMediaService.hpp"
 #include "SDL_log.h"
+#include "MediaController.hpp"
 
 #ifdef __linux__
 SysMediaService::SysMediaService(MediaController &controller_) : controller(controller_)
@@ -75,7 +76,6 @@ void SysMediaService::setMetaData(const std::string &title, const std::vector<st
     meta[mpris::Field::TrackId] = sdbus::Variant(sdbus::ObjectPath("/org/mpris/MediaPlayer2/Track/Current"));
 
     // 2. Title
-    std::cout << "title:" << title << std::endl;
     meta[mpris::Field::Title] = sdbus::Variant(title);
 
     // 3. Artist (MPRIS 标准要求是字符串列表 "as")
@@ -98,7 +98,7 @@ void SysMediaService::setMetaData(const std::string &title, const std::vector<st
     // 7. Length (单位微秒，int64_t)
     if (duration > 0)
     {
-        meta[mpris::Field::Length] = sdbus::Variant((int64_t)duration);
+        meta[mpris::Field::Length] = sdbus::Variant(duration);
     }
 
     // 调用 set_metadata
@@ -127,6 +127,15 @@ std::string SysMediaService::localPathToUri(const std::string &path)
     return uri;
 }
 
+void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
+{
+    if (!server)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[SysMediaService] Error: MPRIS server not initialized.\n");
+    }
+    server->set_playback_status(status);
+}
+
 void SysMediaService::onQuit()
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Quit signal received.\n");
@@ -136,37 +145,44 @@ void SysMediaService::onQuit()
 void SysMediaService::onNext()
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Next signal received.\n");
-    // TODO: next
+    //  next
+    controller.next();
 }
 
 void SysMediaService::onPrevious()
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Previous signal received.\n");
-    // TODO: previous
+    //  previous
+    controller.prev();
 }
 
 void SysMediaService::onPause()
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Pause signal received.\n");
-    // TODO:pause
+    // pause
+    controller.pause();
 }
 
 void SysMediaService::onPlayPause()
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] PlayPause signal received.\n");
-    // TODO: playPause
+    //  playPause
+    controller.playpluse();
 }
 
 void SysMediaService::onStop()
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Stop signal received.\n");
-    // TODO: stop
+    //  stop
+    controller.stop();
 }
 
 void SysMediaService::onPlay()
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Play signal received.\n");
-    // TODO: play
+    //  play
+    controller.play();
+    setPlayBackStatus(mpris::PlaybackStatus::Playing);
 }
 
 void SysMediaService::onLoopStatusChanged(mpris::LoopStatus status)
@@ -184,19 +200,46 @@ void SysMediaService::onShuffleChanged(bool shuffle)
 void SysMediaService::onVolumeChanged(double volume)
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] VolumeChanged signal received: %f\n", volume);
-    // TODO: volumeChanged
+    //  volumeChanged
+    controller.setVolume(volume);
 }
 
 void SysMediaService::onSeek(std::chrono::microseconds offset)
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Seek signal received: %lld\n", offset.count());
-    // TODO: seek
+    //  seek
+    int64_t currentPos = controller.getCurrentPosMicroseconds();
+    int64_t duration = controller.getDurationMicroseconds();
+
+    int64_t targetPos = currentPos + offset.count();
+    // 3. 边界处理 (Clamp)
+    if (targetPos < 0)
+    {
+        targetPos = 0;
+    }
+    else if (targetPos > duration)
+    {
+        targetPos = duration;
+        // 有些播放器策略是跳到下一首，但标准行为通常是停在末尾或跳到末尾
+    }
+    controller.seek(targetPos);
+    server->set_position(targetPos);
 }
 
 void SysMediaService::onSetPosition(std::chrono::microseconds pos)
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] SetPosition signal received: %lld\n", pos.count());
-    // TODO: setPosition
+    // setPosition
+    int64_t duration = controller.getDurationMicroseconds();
+    int64_t position = pos.count();
+    if (position < 0)
+        position = 0;
+    if (position > duration)
+        position = duration;
+
+    // 直接跳转
+    controller.seek(position);
+    server->set_position(position);
 }
 
 #endif

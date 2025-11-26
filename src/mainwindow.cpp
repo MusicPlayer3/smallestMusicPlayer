@@ -38,7 +38,6 @@ MainWindow::MainWindow(QWidget *parent) :
         QString baseName = fileInfo.fileName(); // 只保留文件名部分
 
         ui->songName->setText(baseName);
-        MediaController controller;
 
         // if (!player.setPath(filename.toStdString()))
         // {

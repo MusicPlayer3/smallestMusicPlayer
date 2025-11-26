@@ -1,26 +1,47 @@
 #include "MediaController.hpp"
+#include "FileScanner.hpp"
+#include "SysMediaService.hpp"
+#include <memory>
 
 #ifdef DEBUG
 
 void MediaController::initPlayList()
 {
-    // TODO: 初始化用来debug的播放列表
-    scanner->startScan();
-    while (!scanner->isScanCompleted())
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    playlist = scanner->getItems();
-    for (const auto &i : playlist)
-    {
-        std::cout << "Title: " << i.getTitle() << "\n"
-                  << "Artist: " << i.getArtist() << "\n"
-                  << "Album: " << i.getAlbum() << "\n"
-                  << "Year: " << i.getYear() << "\n"
-                  << "File Path: " << i.getFilePath() << "\n"
-                  << "Parent Directory: " << i.getParentDir() << "\n";
-    }
-    
+}
+
+MediaController::MediaController()
+{
+    player = std::make_shared<AudioPlayer>();
+    mediaService = std::make_shared<SysMediaService>(*this);
+    scanner = std::make_unique<FileScanner>();
+}
+
+void MediaController::play()
+{
+    player->play();
+    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
+}
+
+void MediaController::pause()
+{
+    player->pause();
+    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Paused);
+}
+
+void MediaController::stop()
+{
+    // TODO: stop()
+    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+}
+
+void MediaController::next()
+{
+    // TODO: next()
+}
+
+void MediaController::prev()
+{
+    // TODO: prev()
 }
 
 #endif

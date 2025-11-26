@@ -63,6 +63,13 @@ public:
      * @param position 播放位置（微秒为单位）
      */
     void setPosition(std::chrono::microseconds position);
+
+    /**
+     * @brief 设置播放状态
+     *
+     * @param status
+     */
+    void setPlayBackStatus(mpris::PlaybackStatus status);
 };
 
 #endif
