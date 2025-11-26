@@ -5,16 +5,7 @@
 #include <unordered_map>
 #include <memory>
 #include <string>
-
-struct CoverImage
-{
-    int width = 0;
-    int height = 0;
-    int channels = 0; // 原图是多少通道就是多少
-
-    // 像素数据，大小 = width * height * channels
-    std::vector<std::uint8_t> pixels;
-};
+#include "CoverImage.hpp"
 
 class CoverCache
 {
@@ -40,6 +31,6 @@ private:
     CoverCache() = default;
 
     std::unordered_map<std::string, std::shared_ptr<CoverImage>> covercache; // 专辑名 -> 缩略图
-    friend void run_cover_test();//测试用
+    friend void run_cover_test();                                            // 测试用
 };
 #endif

@@ -1,5 +1,5 @@
 #include "FileScanner.hpp"
-#include "Cover.hpp"
+#include "CoverCache.hpp"
 #include "MetaData.hpp"
 #include "AudioPlayer.hpp"
 #include "Precompiled.h"
@@ -12,21 +12,21 @@
 namespace fs = std::filesystem;
 inline bool isffmpeg(const std::string &route)
 {
-    #ifndef FILESCANNER_TEST
-        // 正式版本：用 AudioPlayer 做准确判断
-        return AudioPlayer::isValidAudio(route);
-    #else
-        // 测试版本：简单按后缀名判断
-        std::string lower = route;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                    [](unsigned char c)
-                    { return std::tolower(c); });
+#ifndef FILESCANNER_TEST
+    // 正式版本：用 AudioPlayer 做准确判断
+    return AudioPlayer::isValidAudio(route);
+#else
+    // 测试版本：简单按后缀名判断
+    std::string lower = route;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c)
+                   { return std::tolower(c); });
 
-        return lower.ends_with(".mp3")
-            || lower.ends_with(".flac")
-            || lower.ends_with(".wav")
-            || lower.ends_with(".ogg");
-    #endif
+    return lower.ends_with(".mp3")
+           || lower.ends_with(".flac")
+           || lower.ends_with(".wav")
+           || lower.ends_with(".ogg");
+#endif
 }
 // 从音频文件中提取封面二进制数据
 static TagLib::ByteVector extractCoverData(const char *fileName)
@@ -83,23 +83,16 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
         musicData.setArtist(tag->artist().toCString(true));
         musicData.setAlbum(tag->album().toCString(true));
         musicData.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
-        musicData.setDuration(f.audioProperties()->lengthInMilliseconds());
+        musicData.setDuration(f.audioProperties()->lengthInMilliseconds() * 1000ll);
 
-        // 提取封面到tmp目录下
         TagLib::ByteVector coverData = extractCoverData(musicPath.c_str());
         if (coverData.isEmpty())
         {
-            musicData.setCoverPath("");
+            return musicData;
         }
         else
         {
-            std::string outputDir = std::filesystem::current_path().string() + "/tmp";
-            if (!fs::exists(outputDir))
-            {
-                fs::create_directory(outputDir);
-            }
             SDL_Log("[Info] Found cover art. Size: %d bytes.\n", coverData.size());
-
             int width, height, channels;
             unsigned char *imgPixels = stbi_load_from_memory(
                 reinterpret_cast<const unsigned char *>(coverData.data()),
@@ -107,34 +100,20 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
                 &width,
                 &height,
                 &channels,
-                0 // 强制通道数，0 表示保持原样
+                STBI_rgb_alpha //
             );
 
             if (!imgPixels)
             {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to load image from memory: %s\n", stbi_failure_reason());
-                musicData.setCoverPath("");
                 return musicData;
             }
 
             SDL_Log("[Info] Image loaded. Width: %d, Height: %d, Channels: %d\n", width, height, channels);
 
-            std::string coverPath = outputDir + "/" + std::string(tag->title().toCString(true)) + ".png";
-
-            int success = stbi_write_png(coverPath.c_str(), width, height, channels, imgPixels, 0);
-            
             CoverCache::instance().putCompressedFromPixels(musicData.getAlbum(), imgPixels, width, height, channels);
 
             stbi_image_free(imgPixels);
-
-            if (success)
-            {
-                musicData.setCoverPath(coverPath);
-            }
-            else
-            {
-                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to write PNG image: %s\n", stbi_failure_reason());
-            }
         }
     }
     return musicData;
@@ -198,7 +177,7 @@ buildNodeFromDir(const fs::path &dirPath)
 }
 
 void FileScanner::scanDir() // 扫描路径并获取路径下所有音频文件信息
-{ 
+{
     fs::path rootPath(rootDir);
 
     if (!fs::exists(rootPath))
@@ -209,7 +188,7 @@ void FileScanner::scanDir() // 扫描路径并获取路径下所有音频文件�
         return;
     }
 
-    if(fs::is_regular_file(rootPath))
+    if (fs::is_regular_file(rootPath))
     {
         if (isffmpeg(rootDir))
         {
@@ -228,7 +207,7 @@ void FileScanner::scanDir() // 扫描路径并获取路径下所有音频文件�
 
     // 根是目录：递归构建整棵树
     rootNode = buildNodeFromDir(rootPath);
-    //建树完成后，对rootNode遍历可以按照目录结构遍历所有文件
+    // 建树完成后，对rootNode遍历可以按照目录结构遍历所有文件
 
     hasScanCpld = true; // 扫描完成
 }

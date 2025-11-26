@@ -22,23 +22,34 @@ public:
         rootDir(rootDir)
     {
     }
+    FileScanner() = default;
+
+    void setRootDir(const std::string &rootDir)
+    {
+        this->rootDir = rootDir;
+    }
+
+    const std::string getRootDir() const
+    {
+        return rootDir;
+    }
 
     static MetaData getMetaData(const std::string &musicPath);
 
-    void startScan()//开始扫描
+    void startScan() // 开始扫描
     {
         scanThread = std::thread(&FileScanner::scanDir, this);
         scanThread.detach();
     }
 
-    bool isScanCompleted() const //是否遍历完成
+    bool isScanCompleted() const // 是否遍历完成
     {
         return hasScanCpld.load();
     }
 
-    std::shared_ptr<PlaylistNode> buildPlaylistTree() const//构建播放列表
+    std::shared_ptr<PlaylistNode> getPlaylistTree() const // 构建播放列表
     {
-        return rootNode; 
+        return rootNode;
     }
 };
 
