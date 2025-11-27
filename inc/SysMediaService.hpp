@@ -37,7 +37,7 @@ class SysMediaService
 
 public:
     SysMediaService(MediaController &controller);
-    ~SysMediaService();
+    ~SysMediaService() = default;
 
     /**
      * @brief 设置元数据

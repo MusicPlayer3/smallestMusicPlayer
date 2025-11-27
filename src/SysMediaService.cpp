@@ -195,6 +195,7 @@ void SysMediaService::onShuffleChanged(bool shuffle)
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] ShuffleChanged signal received: %d\n", shuffle);
     // TODO: shuffleChanged
+    controller.setShuffle(shuffle);
 }
 
 void SysMediaService::onVolumeChanged(double volume)

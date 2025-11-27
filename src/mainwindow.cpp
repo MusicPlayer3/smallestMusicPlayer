@@ -47,7 +47,7 @@ MainWindow::MainWindow(QWidget *parent) :
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        controller.getRootNode();
+        auto rootnode = controller.getRootNode();
         controller.play();
     }
 }

@@ -1,9 +1,36 @@
 #include "MediaController.hpp"
-#include <iostream>
-#include <algorithm>
-#include <random>
 #include "mpris_server.hpp"
 #include "SysMediaService.hpp"
+#include <random>
+
+// --- 静态辅助函数：递归查找第一个有效音频 ---
+// 解决根目录下只有文件夹（如 Disc 01/02）导致无法播放的问题
+static PlaylistNode *findFirstValidAudio(PlaylistNode *node)
+{
+    if (!node)
+        return nullptr;
+
+    const auto &children = node->getChildren();
+    for (const auto &child : children)
+    {
+        if (child->isDir())
+        {
+            // 如果是目录，递归查找
+            PlaylistNode *found = findFirstValidAudio(child.get());
+            if (found)
+                return found;
+        }
+        else
+        {
+            // 如果是文件，检查是否为有效音频
+            if (AudioPlayer::isValidAudio(child->getPath()))
+            {
+                return child.get();
+            }
+        }
+    }
+    return nullptr;
+}
 
 // --- 构造与析构 ---
 
@@ -15,6 +42,7 @@ MediaController::MediaController()
 
     monitorRunning = true;
     monitorThread = std::thread(&MediaController::monitorLoop, this);
+    mediaService = std::make_shared<SysMediaService>(*this);
 }
 
 MediaController::~MediaController()
@@ -96,6 +124,12 @@ void MediaController::monitorLoop()
                 mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
             }
         }
+
+        // 更新播放进度
+        if (isPlaying.load())
+        {
+            mediaService->setPosition(std::chrono::microseconds(player->getCurrentPositionMicroseconds()));
+        }
     }
 }
 
@@ -112,8 +146,7 @@ PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current)
     // 如果是乱序模式
     if (isShuffle.load())
     {
-        // 在当前目录下随机找一首（排除自己，除非只有一首）
-        // *注：播放列表树逻辑通常是在同级文件夹乱序*
+        // 在当前目录下随机找一首
         return pickRandomSong(parent.get());
     }
 
@@ -213,6 +246,7 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
 
     // 2. 告诉播放器切歌
     player->setPath(node->getPath());
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     player->play();
 
     // 3. 更新状态
@@ -231,23 +265,23 @@ void MediaController::play()
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
 
-    // 如果没有正在播放的，尝试播放当前目录下的第一首
+    // 如果指针为空（尚未播放过），尝试从当前目录或根目录查找第一首
     if (!currentPlayingSongs)
     {
-        if (currentDir)
+        // 确定搜索起点：优先 currentDir，若为空则用 rootNode
+        PlaylistNode *searchStart = currentDir ? currentDir : rootNode.get();
+
+        // 使用递归查找，跳过非歌曲文件和空文件夹
+        PlaylistNode *firstSong = findFirstValidAudio(searchStart);
+
+        if (firstSong)
         {
-            for (auto &child : currentDir->getChildren())
-            {
-                if (!child->isDir())
-                {
-                    playNode(child.get());
-                    return;
-                }
-            }
+            playNode(firstSong);
         }
         return;
     }
 
+    // 正常恢复播放
     player->play();
     isPlaying = true;
     mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
@@ -299,8 +333,8 @@ void MediaController::prev()
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
 
     // 1. 如果当前播放时间长，则是重头放
-    if (getCurrentPosMicroseconds() > 3000000)
-    { // 3秒
+    if (getCurrentPosMicroseconds() > 10000000) // 10秒 (原代码逻辑)
+    {
         seek(0);
         return;
     }
@@ -311,13 +345,9 @@ void MediaController::prev()
         PlaylistNode *prevNode = playHistory.back();
         playHistory.pop_back(); // 弹出最近的一首
 
-        // 特殊处理：playNode 默认会把当前 currentPlayingSongs 压入 history
-        // 但我们在做“返回”，所以不需要把刚才那首(即现在的current)压回去，
-        // 或者说，刚才那首本来就是最新的历史。
-        // 为了简单，我们直接手动设置，避开 playNode 的 history 逻辑
-
         currentPlayingSongs = prevNode;
         player->setPath(prevNode->getPath());
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
         player->play();
         isPlaying = true;
         lastDetectedPath = prevNode->getPath();
@@ -330,7 +360,6 @@ void MediaController::prev()
     else
     {
         // 没有历史，尝试按顺序上一首
-        // ... (此处省略顺序上一首的查找逻辑，通常就是重头放)
         seek(0);
     }
 }
@@ -354,9 +383,6 @@ void MediaController::setShuffle(bool shuffle)
         std::lock_guard<std::recursive_mutex> lock(controllerMutex);
         preloadNextSong();
     }
-
-    // 通知 MPRIS (假设 Service 有此接口)
-    // mediaService->setShuffle(shuffle);
 }
 
 bool MediaController::getShuffle()
@@ -383,9 +409,6 @@ void MediaController::enterDirectory(PlaylistNode *dirNode)
     if (dirNode && dirNode->isDir())
     {
         currentDir = dirNode;
-        // 注意：进入目录不影响 currentPlayingSongs，也不影响 history（history只存歌）
-        // 目录层级的“返回”通常由 UI 维护目录栈，或者 MediaController 也可以维护一个目录栈
-        // 既然题目只说了 history 是存歌的，目录导航这里只改变 currentDir
     }
 }
 
@@ -412,7 +435,7 @@ PlaylistNode *MediaController::getCurrentPlayingNode()
 
 // --- 辅助信息 ---
 
-void MediaController::updateMetaData( PlaylistNode *node)
+void MediaController::updateMetaData(PlaylistNode *node)
 {
     if (!node)
         return;
