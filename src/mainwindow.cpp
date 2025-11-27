@@ -51,7 +51,7 @@ MainWindow::MainWindow(QWidget *parent) :
         auto endTime = std::chrono::steady_clock::now();
         auto totalTimeMili = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
         qDebug() << "扫描耗时:" << totalTimeMili << "ms";
-        run_cover_test();
+        // run_cover_test();
         auto rootnode = controller.getRootNode();
         controller.play();
     }

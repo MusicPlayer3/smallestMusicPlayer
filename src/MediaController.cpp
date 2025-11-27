@@ -256,6 +256,7 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     // 4. 更新元数据
     updateMetaData(node);
     mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
+    mediaService->setPosition(std::chrono::microseconds(0));
 
     // 5. *** 关键：设置下一首预加载 ***
     preloadNextSong();
@@ -444,7 +445,7 @@ void MediaController::updateMetaData(PlaylistNode *node)
     auto data = node->getMetaData();
     if (node->getMetaData().getCoverPath() == "")
     {
-        data.setCoverPath(FileScanner::extractCoverToTempFile(data.getFilePath()));
+        FileScanner::extractCoverToTempFile(data.getFilePath(), data);
     }
     mediaService->setMetaData(data);
 }

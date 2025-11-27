@@ -30,7 +30,7 @@ public:
     }
 
     static MetaData getMetaData(const std::string &musicPath);
-    static std::string extractCoverToTempFile(const std::string &musicPath);
+    static void extractCoverToTempFile(const std::string &musicPath, MetaData &data);
 
     void startScan()
     {
@@ -50,8 +50,6 @@ public:
 
     // [新增] 初始化支持的音频后缀列表 (通常自动调用，也可手动调用)
     static void initSupportedExtensions();
-
-    
 };
 
 #endif

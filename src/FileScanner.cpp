@@ -626,7 +626,7 @@ static std::string detectImageExtension(const TagLib::ByteVector &data)
 }
 
 // [新增实现] 提取封面到临时文件
-std::string FileScanner::extractCoverToTempFile(const std::string &musicPath)
+void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData &data)
 {
     fs::path tmpDir = "./tmp";
 
@@ -641,29 +641,16 @@ std::string FileScanner::extractCoverToTempFile(const std::string &musicPath)
     catch (const std::exception &e)
     {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create tmp dir: %s", e.what());
-        return "";
+        return;
     }
 
     // 2. 为了获取专辑名，我们需要简单解析一下 Tag
     // 注意：这里为了获取专辑名作为文件名，必须读一次 Tag。
     // 如果调用者已经有了 MetaData，最好传 MetaData 进来以避免这次重复 IO。
     // 但按照要求，参数仅为 musicPath。
-    std::string albumName = "Unknown_Album";
-    {
-        // 使用 TagLib::FileRef 是获取通用 Tag 最简单的方法
-        TagLib::FileRef f(musicPath.c_str());
-        if (!f.isNull() && f.tag())
-        {
-            std::string tempAlbum = f.tag()->album().toCString(true);
-            if (!tempAlbum.empty())
-            {
-                albumName = tempAlbum;
-            }
-        }
-    }
 
-    // 3. 清洗文件名
-    std::string safeAlbumName = sanitizeFilename(albumName);
+    // // 3. 清洗文件名
+    // std::string safeAlbumName = sanitizeFilename(albumName);
 
     // 4. 调用现有的 extractCoverData 获取二进制数据
     // (复用之前优化过的 extractCoverData 函数)
@@ -671,14 +658,14 @@ std::string FileScanner::extractCoverToTempFile(const std::string &musicPath)
 
     if (coverData.isEmpty())
     {
-        return ""; // 无封面
+        return; // 无封面
     }
 
     // 5. 确定后缀名
     std::string ext = detectImageExtension(coverData);
 
     // 6. 构建目标路径
-    fs::path targetPath = tmpDir / (safeAlbumName + ext);
+    fs::path targetPath = tmpDir / (data.getAlbum() + ext);
 
     // 7. 检查文件是否已存在 (避免重复写入同一张专辑封面)
     if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
@@ -686,11 +673,12 @@ std::string FileScanner::extractCoverToTempFile(const std::string &musicPath)
         // 甚至可以进一步比较文件大小，但通常同名专辑封面是一样的
         try
         {
-            return fs::absolute(targetPath).string();
+            data.setCoverPath(fs::absolute(targetPath).string());
         }
-        catch (...)
+        catch (std::exception &e)
         {
-            return targetPath.string();
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to set album path: %s\nerror:%s", targetPath.string().c_str(), e.what());
+            data.setCoverPath(targetPath.string());
         }
     }
 
@@ -703,11 +691,12 @@ std::string FileScanner::extractCoverToTempFile(const std::string &musicPath)
 
         try
         {
-            return fs::absolute(targetPath).string();
+            data.setCoverPath(fs::absolute(targetPath).string());
         }
-        catch (...)
+        catch (std::exception &e)
         {
-            return targetPath.string();
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to set album path: %s\nerror:%s", targetPath.string().c_str(), e.what());
+            data.setCoverPath(targetPath.string());
         }
     }
     else
@@ -715,5 +704,5 @@ std::string FileScanner::extractCoverToTempFile(const std::string &musicPath)
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to write cover file: %s", targetPath.string().c_str());
     }
 
-    return "";
+    return;
 }
