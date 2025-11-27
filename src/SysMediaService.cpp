@@ -242,4 +242,12 @@ void SysMediaService::onSetPosition(std::chrono::microseconds pos)
     server->set_position(position);
 }
 
+void SysMediaService::setShuffle(bool shuffle)
+{
+    if (server)
+    {
+        server->set_shuffle(shuffle);
+    }
+}
+
 #endif

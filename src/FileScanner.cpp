@@ -167,8 +167,8 @@ buildNodeFromDir(const fs::path &dirPath)
               [](const std::shared_ptr<PlaylistNode> &a,
                  const std::shared_ptr<PlaylistNode> &b)
               {
-                  if (a->getIsDir() != b->getIsDir())
-                      return a->getIsDir() && !b->getIsDir(); // 目录在前
+                  if (a->isDir() != b->isDir())
+                      return a->isDir() && !b->isDir(); // 目录在前
                   return a->getPath() < b->getPath();
               });
 

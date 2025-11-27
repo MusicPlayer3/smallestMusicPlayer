@@ -62,7 +62,10 @@ public:
      * @brief 设置当前播放位置
      * @param position 播放位置（微秒为单位）
      */
-    void setPosition(std::chrono::microseconds position);
+    void setPosition(std::chrono::microseconds position)
+    {
+        server->set_position(position.count());
+    }
 
     /**
      * @brief 设置播放状态
@@ -70,6 +73,13 @@ public:
      * @param status
      */
     void setPlayBackStatus(mpris::PlaybackStatus status);
+
+    void setLoopStatus(mpris::LoopStatus status)
+    {
+        server->set_loop_status(status);
+    }
+
+    void setShuffle(bool shuffle);
 };
 
 #endif

@@ -13,18 +13,18 @@ namespace fs = std::filesystem;
 class PlaylistNode
 {
 private:
-    bool isDir; // 是否是目录
-    std::string path; // 完整路径（从根开始）
-    MetaData metaData; // 音频文件元数据(如果不是目录的话)
+    bool _isDir;                                         // 是否是目录
+    std::string path;                                    // 完整路径（从根开始）
+    MetaData metaData;                                   // 音频文件元数据(如果不是目录的话)
     std::vector<std::shared_ptr<PlaylistNode>> children; // 这个目录下的子目录+音频文件
-    std::weak_ptr<PlaylistNode> parent; // 父节点   (如果是根节点则为空)
+    std::weak_ptr<PlaylistNode> parent;                  // 父节点   (如果是根节点则为空)
 public:
-    PlaylistNode(const std::string &path = std::string(), bool isDir = false) : isDir(isDir), path(path)
+    PlaylistNode(const std::string &path = std::string(), bool isDir = false) : _isDir(isDir), path(path)
     {
     }
-    const bool &getIsDir() const
+    const bool &isDir() const
     {
-        return isDir;
+        return _isDir;
     }
     const std::string &getPath() const
     {
@@ -40,7 +40,7 @@ public:
     }
     void setIsDir(const bool &isDir)
     {
-        this->isDir = isDir;
+        this->_isDir = isDir;
     }
     void setMetaData(const MetaData &metaData)
     {
