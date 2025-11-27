@@ -138,22 +138,26 @@ qt_add_executable(smallestMusicPlayer
     ui/mainwindow.ui
 
     inc/AudioPlayer.hpp
+    inc/CoverCache.hpp
+    inc/CoverImage.hpp
     inc/FileScanner.hpp
     inc/mainwindow.h
+    inc/MediaController.hpp
     inc/MetaData.hpp
     inc/mpris_server.hpp
-    inc/Playlist.hpp
     inc/Precompiled.h
+    inc/stb_image_resize2.h
     inc/stb_image_write.h
     inc/stb_image.h
-    inc/MediaController.hpp
+    inc/SysMediaService.hpp
     
     src/AudioPlayer.cpp
+    src/CoverCache.cpp
     src/FileScanner.cpp
     src/main.cpp
     src/mainwindow.cpp
-    src/Playlist.cpp
     src/MediaController.cpp
+    src/SysMediaService.cpp
 )
 
 # -----------------------------------------------------------------------------
