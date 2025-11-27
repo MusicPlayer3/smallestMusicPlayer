@@ -97,6 +97,11 @@ else()
         libavfilter
     )
 
+    # ========================================================
+    # [修复点] 添加 SDL2 的查找
+    # ========================================================
+    pkg_check_modules(SDL2 REQUIRED sdl2)
+
     pkg_check_modules(TAGLIB REQUIRED taglib)
 
     # sdbus-c++ 仅在 Linux 上查找 (用于 MPRIS 等)
@@ -157,6 +162,7 @@ qt_add_executable(smallestMusicPlayer
     src/main.cpp
     src/mainwindow.cpp
     src/MediaController.cpp
+    src/StbImpl.cpp
     src/SysMediaService.cpp
 )
 

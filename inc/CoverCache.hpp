@@ -1,10 +1,6 @@
 #ifndef COVER_HPP
 #define COVER_HPP
-#include <vector>
-#include <cstdint>
-#include <unordered_map>
-#include <memory>
-#include <string>
+#include "Precompiled.h"
 #include "CoverImage.hpp"
 
 class CoverCache

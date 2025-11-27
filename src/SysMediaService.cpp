@@ -1,5 +1,4 @@
 #include "SysMediaService.hpp"
-#include "SDL_log.h"
 #include "MediaController.hpp"
 
 #ifdef __linux__

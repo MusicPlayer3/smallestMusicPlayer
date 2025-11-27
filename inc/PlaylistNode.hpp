@@ -2,10 +2,7 @@
 #define PLAYLISTNODE_HPP
 
 #include "MetaData.hpp"
-#include <filesystem>
-#include <memory>
-#include <string>
-#include <vector>
+#include "Precompiled.h"
 
 namespace fs = std::filesystem;
 

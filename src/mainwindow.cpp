@@ -3,11 +3,11 @@
 #include "FileScanner.hpp"
 #include "ui_mainwindow.h"
 #include <QFileDialog>
-#include <chrono>
-#include <memory>
-#include <thread>
 #include "mpris_server.hpp"
 #include "MediaController.hpp"
+#include "CoverCache.hpp"
+
+void run_cover_test();
 
 #ifdef __linux__
 MainWindow::MainWindow(QWidget *parent) :
@@ -42,11 +42,16 @@ MainWindow::MainWindow(QWidget *parent) :
         ui->songName->setText(baseName);
         auto &controller = MediaController::getInstance();
         controller.setRootPath(filename.toStdString());
+        auto startTime = std::chrono::steady_clock::now();
         controller.startScan();
         while (!controller.isScanCplt())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+        auto endTime = std::chrono::steady_clock::now();
+        auto totalTimeMili = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+        qDebug() << "扫描耗时:" << totalTimeMili << "ms";
+        run_cover_test();
         auto rootnode = controller.getRootNode();
         controller.play();
     }

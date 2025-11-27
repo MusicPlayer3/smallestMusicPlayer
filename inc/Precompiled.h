@@ -31,6 +31,17 @@ extern "C"
 #include <libavutil/opt.h>
 }
 
+#include "stb_image_write.h"
+#include "stb_image.h"
+#include "stb_image_resize2.h"
+
+#include <fstream>
+#include <regex>
+#include <set>
+#include <algorithm>
+#include <mutex>
+#include <vector>
+
 #define USE_SDL
 
 #include <SDL2/SDL.h>

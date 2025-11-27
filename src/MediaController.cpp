@@ -438,8 +438,15 @@ PlaylistNode *MediaController::getCurrentPlayingNode()
 void MediaController::updateMetaData(PlaylistNode *node)
 {
     if (!node)
+    {
         return;
-    mediaService->setMetaData(node->getMetaData());
+    }
+    auto data = node->getMetaData();
+    if (node->getMetaData().getCoverPath() == "")
+    {
+        data.setCoverPath(FileScanner::extractCoverToTempFile(data.getFilePath()));
+    }
+    mediaService->setMetaData(data);
 }
 
 int64_t MediaController::getCurrentPosMicroseconds()

@@ -1,8 +1,10 @@
 #include "CoverCache.hpp"
-#include <SDL2/SDL_log.h>
 
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "stb_image_resize2.h"
+// resize 库实现 (保持原样)
+
+// [新增] write 库实现，用于导出图片
+
+namespace fs = std::filesystem;
 
 void CoverCache::putCompressedFromPixels(const std::string &album,
                                          const unsigned char *srcPixels,
@@ -14,8 +16,8 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
     if (covercache.find(album) != covercache.end())
         return;
 
-    const int targetW = 200;
-    const int targetH = 200;
+    const int targetW = 256;
+    const int targetH = 256;
 
     // ============================================================
     // 修改点 1: 在创建 CoverImage 对象前，先分配好内存
@@ -53,10 +55,10 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
     // ============================================================
     // 修改点 2: 写入到临时的 resizedPixels 中
     // ============================================================
-    unsigned char *res = stbir_resize_uint8_srgb(
+    auto res = stbir_resize_uint8_srgb(
         srcPixels,
         srcW, srcH, srcStride,
-        resizedPixels.data(), // 这里直接传入 vector 的指针
+        resizedPixels.data(),
         targetW, targetH, dstStride,
         layout);
 
@@ -101,4 +103,89 @@ std::shared_ptr<CoverImage> CoverCache::get(const std::string &album) // 获取�
 void CoverCache::clear()
 {
     covercache.clear();
+}
+
+// 辅助函数：清洗文件名，防止非法字符导致写入失败
+static std::string sanitize_filename(std::string name)
+{
+    const std::string illegal_chars = "\\/:?\"<>|*";
+    // 将非法字符替换为下划线
+    std::replace_if(name.begin(), name.end(), [&illegal_chars](char c)
+                    {
+                        return illegal_chars.find(c) != std::string::npos || c < 32; // <32 是控制字符
+                    },
+                    '_');
+    return name;
+}
+
+void run_cover_test()
+{
+    SDL_Log("=== Starting Cover Cache Export Test ===");
+
+    // 1. 创建 ./ttemp 目录
+    fs::path exportDir = "./ttemp";
+    try
+    {
+        if (!fs::exists(exportDir))
+        {
+            fs::create_directories(exportDir);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Test: Failed to create dir ./ttemp: %s", e.what());
+        return;
+    }
+
+    // 2. 获取单例引用
+    CoverCache &cache = CoverCache::instance();
+
+    // 3. 遍历私有 map
+    if (cache.covercache.empty())
+    {
+        SDL_Log("Test: CoverCache is empty. Nothing to export.");
+        return;
+    }
+
+    int count = 0;
+    for (const auto &[albumName, imgPtr] : cache.covercache)
+    {
+        if (!imgPtr || !imgPtr->isValid())
+        {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Test: Invalid image for album: %s", albumName.c_str());
+            continue;
+        }
+
+        // 清洗文件名
+        std::string safeName = sanitize_filename(albumName);
+        if (safeName.empty())
+            safeName = "Unknown_Album_" + std::to_string(count);
+
+        // 构造输出路径 (保存为 PNG)
+        fs::path outPath = exportDir / (safeName + ".png");
+
+        // 4. 写入文件
+        // stbi_write_png 参数: filename, w, h, comp(channels), data, stride_in_bytes
+        int stride = imgPtr->width() * imgPtr->channels();
+
+        int result = stbi_write_png(
+            outPath.string().c_str(),
+            imgPtr->width(),
+            imgPtr->height(),
+            imgPtr->channels(),
+            imgPtr->data(),
+            stride);
+
+        if (result)
+        {
+            // SDL_Log("Test: Exported [%s]", outPath.string().c_str());
+        }
+        else
+        {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Test: Failed to write [%s]", outPath.string().c_str());
+        }
+        count++;
+    }
+
+    SDL_Log("=== Cover Cache Export Finished. Total: %d files ===", count);
 }

@@ -8,18 +8,14 @@ class FileScanner
 {
 private:
     std::string rootDir;
-
     std::thread scanThread;
-
     std::shared_ptr<PlaylistNode> rootNode;
-
     std::atomic<bool> hasScanCpld{false};
 
     void scanDir();
 
 public:
-    FileScanner(std::string rootDir) :
-        rootDir(rootDir)
+    FileScanner(std::string rootDir) : rootDir(rootDir)
     {
     }
     FileScanner() = default;
@@ -28,31 +24,34 @@ public:
     {
         this->rootDir = rootDir;
     }
-
     const std::string getRootDir() const
     {
         return rootDir;
     }
 
     static MetaData getMetaData(const std::string &musicPath);
+    static std::string extractCoverToTempFile(const std::string &musicPath);
 
-    static std::string getCoverDir(const std::string &musicPath);
-
-    void startScan() // 开始扫描
+    void startScan()
     {
         scanThread = std::thread(&FileScanner::scanDir, this);
         scanThread.detach();
     }
 
-    bool isScanCompleted() const // 是否遍历完成
+    bool isScanCompleted() const
     {
         return hasScanCpld.load();
     }
 
-    std::shared_ptr<PlaylistNode> getPlaylistTree() const // 构建播放列表
+    std::shared_ptr<PlaylistNode> getPlaylistTree() const
     {
         return rootNode;
     }
+
+    // [新增] 初始化支持的音频后缀列表 (通常自动调用，也可手动调用)
+    static void initSupportedExtensions();
+
+    
 };
 
 #endif

@@ -1,7 +1,4 @@
 #include "AudioPlayer.hpp"
-#include <cmath>
-#include <algorithm>
-#include <iostream>
 
 std::string av_strerror(int errnum)
 {

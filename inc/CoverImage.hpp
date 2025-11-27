@@ -1,10 +1,7 @@
 #ifndef _COVERIMAGE_HPP_
 #define _COVERIMAGE_HPP_
 
-#include <vector>
-#include <cstdint>
-#include <utility>   // for std::move, std::exchange
-#include <stdexcept> // for std::invalid_argument
+#include "Precompiled.h"
 
 class CoverImage
 {
