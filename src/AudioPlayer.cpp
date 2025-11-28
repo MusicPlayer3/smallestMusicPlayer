@@ -323,10 +323,7 @@ void AudioPlayer::seek(int64_t timeMicroseconds)
 {
     std::lock_guard<std::mutex> lock(stateMutex);
 
-    // [修改前] seekTarget.store(static_cast<int64_t>(time * AV_TIME_BASE));
-    // [修改后] 直接存储微秒值。
-    // 注意：FFmpeg 的 AV_TIME_BASE 正好就是 1,000,000 (微秒基准)，
-    // 所以解码线程中的 av_rescale_q 逻辑不需要动，它本来就是把 AV_TIME_BASE 转换为流的 time_base。
+    // 直接存储微秒值。
     seekTarget.store(timeMicroseconds);
 
     // 切换状态为 SEEKING，解码线程会处理剩下的逻辑
@@ -582,21 +579,17 @@ void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActiv
         if (ret == AVERROR_EOF)
         {
             // EOF reached. Check if we can switch or if we are done.
-            // We must wait until queue drains to truly "finish" or switch seamlessly.
-            // However, seamless switch needs to happen *before* queue runs dry ideally,
-            // or right at this moment.
-
-            if (!performSeamlessSwitch())
+            if (performSeamlessSwitch())
             {
-                // No preload, just wait for queue to drain?
-                // Simplified: mark as finished naturally.
-                playbackFinishedNaturally = true;
+                // Seamless switch successful!
+                // We do NOT set isSongLoopActive to false.
+                // Instead, we return immediately so the loop continues with the new source.
+                return;
             }
-            isSongLoopActive = false; // Exit inner loop either way (new source needs new session setup or stop)
 
-            // Important: If we switched source, `isSongLoopActive=false` breaks the inner loop,
-            // `mainDecodeThread` loops back, sees `currentPath` updated by `performSeamlessSwitch`,
-            // and calls `setupDecodingSession` for the new track.
+            // No preload or switch failed, playback finished naturally.
+            playbackFinishedNaturally = true;
+            isSongLoopActive = false;
         }
         else
         {
