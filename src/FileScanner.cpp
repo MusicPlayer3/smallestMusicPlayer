@@ -695,7 +695,7 @@ static std::string detectImageExtension(const TagLib::ByteVector &data)
 // [新增实现] 提取封面到临时文件
 void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData &data)
 {
-    fs::path tmpDir = "./tmp";
+    fs::path tmpDir = std::filesystem::temp_directory_path() / "SmallestMusicPlayer";
 
     // 1. 确保 tmp 目录存在
     try
