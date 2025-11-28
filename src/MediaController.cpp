@@ -103,6 +103,9 @@ void MediaController::monitorLoop()
 
                     // 同步元数据到系统
                     updateMetaData(currentPlayingSongs);
+                    // *** 关键修复：自动切歌后，显式发送 Seeked(0) 信号 ***
+                    // 确保客户端知道这首歌是从头开始的，而不是上一首的延续
+                    mediaService->triggerSeeked(std::chrono::microseconds(0));
 
                     // *** 关键：这首歌开始放了，立刻预加载再下一首 ***
                     preloadNextSong();
@@ -256,7 +259,9 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     // 4. 更新元数据
     updateMetaData(node);
     mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
-    mediaService->setPosition(std::chrono::microseconds(0));
+
+    // *** 关键修复：手动切歌时也强制重置进度 ***
+    mediaService->triggerSeeked(std::chrono::microseconds(0));
 
     // 5. *** 关键：设置下一首预加载 ***
     preloadNextSong();
@@ -354,6 +359,9 @@ void MediaController::prev()
         lastDetectedPath = prevNode->getPath();
         updateMetaData(prevNode);
         mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
+
+        // *** 关键修复：切回上一首也要重置进度 ***
+        mediaService->triggerSeeked(std::chrono::microseconds(0));
 
         // 恢复播放旧歌后，重新计算这首旧歌之后的“下一首”用于预加载
         preloadNextSong();

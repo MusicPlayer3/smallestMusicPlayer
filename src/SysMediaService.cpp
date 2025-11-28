@@ -1,5 +1,6 @@
 #include "SysMediaService.hpp"
 #include "MediaController.hpp"
+#include <functional> // for std::hash
 
 #ifdef __linux__
 SysMediaService::SysMediaService(MediaController &controller_) : controller(controller_)
@@ -71,8 +72,13 @@ void SysMediaService::setMetaData(const std::string &title, const std::vector<st
     // 修复：使用 map<mpris::Field, sdbus::Variant> 构建元数据
     std::map<mpris::Field, sdbus::Variant> meta;
 
-    // 1. Track ID (必须是 ObjectPath 类型)
-    meta[mpris::Field::TrackId] = sdbus::Variant(sdbus::ObjectPath("/org/mpris/MediaPlayer2/Track/Current"));
+    // 1. Track ID (关键修复：必须唯一，否则客户端不会重置进度)
+    // 使用 URI 的哈希值生成唯一的 TrackID
+    std::string uniqueIdStr = uri.empty() ? title : uri;
+    std::size_t hash = std::hash<std::string>{}(uniqueIdStr);
+    std::string trackIdPath = "/org/mpris/MediaPlayer2/Track/ID_" + std::to_string(hash);
+
+    meta[mpris::Field::TrackId] = sdbus::Variant(sdbus::ObjectPath(trackIdPath));
 
     // 2. Title
     meta[mpris::Field::Title] = sdbus::Variant(title);
@@ -106,7 +112,7 @@ void SysMediaService::setMetaData(const std::string &title, const std::vector<st
 
 void SysMediaService::setMetaData(const MetaData &metadata)
 {
-    setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), metadata.getCoverPath(), metadata.getDuration());
+    setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), metadata.getCoverPath(), metadata.getDuration(), metadata.getFilePath());
 }
 
 std::string SysMediaService::localPathToUri(const std::string &path)
@@ -131,8 +137,21 @@ void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
     if (!server)
     {
         SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[SysMediaService] Error: MPRIS server not initialized.\n");
+        return;
     }
     server->set_playback_status(status);
+}
+
+void SysMediaService::triggerSeeked(std::chrono::microseconds position)
+{
+    if (!server)
+        return;
+
+    int64_t pos = position.count();
+    // 1. 更新内部状态，防止客户端随后查询到旧时间
+    server->set_position(pos);
+    // 2. 发送信号通知客户端重置
+    server->send_seeked_signal(pos);
 }
 
 void SysMediaService::onQuit()
@@ -249,5 +268,4 @@ void SysMediaService::setShuffle(bool shuffle)
         server->set_shuffle(shuffle);
     }
 }
-
 #endif

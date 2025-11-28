@@ -64,8 +64,17 @@ public:
      */
     void setPosition(std::chrono::microseconds position)
     {
-        server->set_position(position.count());
+#ifdef __linux__
+        if (server)
+            server->set_position(position.count());
+#endif
     }
+
+    /**
+     * @brief 触发 Seeked 信号（用于切歌时强制重置客户端进度条）
+     * @param position 跳转到的位置（通常为0）
+     */
+    void triggerSeeked(std::chrono::microseconds position);
 
     /**
      * @brief 设置播放状态
@@ -76,7 +85,10 @@ public:
 
     void setLoopStatus(mpris::LoopStatus status)
     {
-        server->set_loop_status(status);
+#ifdef __linux__
+        if (server)
+            server->set_loop_status(status);
+#endif
     }
 
     void setShuffle(bool shuffle);
