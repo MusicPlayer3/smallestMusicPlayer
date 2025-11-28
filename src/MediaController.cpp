@@ -481,17 +481,16 @@ void MediaController::startScan()
 
 bool MediaController::isScanCplt()
 {
-    return scanner->isScanCompleted();
+    bool cplt = scanner->isScanCompleted();
+    if (cplt && rootNode == nullptr)
+    {
+        rootNode = scanner->getPlaylistTree();
+    }
+    return cplt;
 }
 
 std::shared_ptr<PlaylistNode> MediaController::getRootNode()
 {
-    if (rootNode == nullptr && scanner->isScanCompleted())
-    {
-        rootNode = scanner->getPlaylistTree();
-        std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-        currentDir = rootNode.get();
-    }
     return rootNode;
 }
 
