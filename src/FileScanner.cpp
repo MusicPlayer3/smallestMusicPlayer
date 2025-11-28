@@ -581,6 +581,7 @@ void FileScanner::scanDir()
         return;
     }
 
+    // 情况1：rootDir 就是一个单独文件，逻辑保持不变
     if (fs::is_regular_file(rootPath))
     {
         if (isffmpeg(rootDir))
@@ -601,7 +602,147 @@ void FileScanner::scanDir()
         return;
     }
 
-    rootNode = buildNodeFromDir(rootPath);
+    // 情况2：rootDir 是目录，启用“根目录并行扫描”
+
+    // 给整个库建一个根节点
+    auto root = std::make_shared<PlaylistNode>(rootPath.string(), true);
+
+    // 为了并行，我们先把根目录下的所有 entry 收集起来
+    std::vector<fs::directory_entry> entries;
+    try
+    {
+        for (const auto &entry : fs::directory_iterator(rootPath))
+        {
+            entries.push_back(entry);
+        }
+    }
+    catch (...)
+    {
+        // 读目录失败就当空目录处理
+    }
+
+    // 没有子项，直接结束
+    if (entries.empty())
+    {
+        rootNode = root;
+        hasScanCpld = true;
+        return;
+    }
+
+    // 决定使用多少线程（最多 entries.size() 个，最少 1 个）
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0)
+        hw = 4; // 保险一点
+    unsigned int threadCount = std::min<unsigned int>(hw, entries.size());
+
+    // 每个线程处理 entries 的一段区间
+    struct WorkerResult
+    {
+        std::vector<std::shared_ptr<PlaylistNode>> children; // 建好的子节点
+    };
+
+    std::vector<std::thread> threads;
+    std::vector<WorkerResult> results(threadCount);
+
+    auto worker = [&](unsigned int idx, unsigned int begin, unsigned int end)
+    {
+        WorkerResult local;
+        for (unsigned int i = begin; i < end; ++i)
+        {
+            const auto &entry = entries[i];
+            try
+            {
+                if (entry.is_directory())
+                {
+                    // 子目录：调用原来的递归函数 buildNodeFromDir
+                    auto childDirNode = buildNodeFromDir(entry.path());
+                    if (childDirNode)
+                    {
+                        childDirNode->setParent(root);
+                        local.children.push_back(childDirNode);
+                    }
+                }
+                else if (entry.is_regular_file())
+                {
+                    std::string filePath = entry.path().string();
+                    if (isffmpeg(filePath))
+                    {
+                        std::string canonicalPath = filePath;
+                        try
+                        {
+                            canonicalPath = fs::canonical(entry.path()).string();
+                        }
+                        catch (...)
+                        {
+                        }
+
+                        auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
+                        MetaData md = FileScanner::getMetaData(filePath);
+
+                        std::string dirCover = findDirectoryCover(entry.path().parent_path());
+                        if (!dirCover.empty())
+                            md.setCoverPath(dirCover);
+
+                        fileNode->setMetaData(md);
+                        fileNode->setParent(root);
+                        local.children.push_back(fileNode);
+                    }
+                }
+            }
+            catch (...)
+            {
+                // 单个文件/目录出问题就跳过，不影响整体
+            }
+        }
+        results[idx] = std::move(local);
+    };
+
+    // 按区间划分任务
+    unsigned int chunkSize = (entries.size() + threadCount - 1) / threadCount;
+    for (unsigned int t = 0; t < threadCount; ++t)
+    {
+        unsigned int begin = t * chunkSize;
+        unsigned int end = std::min<unsigned int>(begin + chunkSize, entries.size());
+        if (begin >= end)
+        {
+            // 最后几个线程可能没活干
+            break;
+        }
+        threads.emplace_back(worker, t, begin, end);
+    }
+
+    // 等所有线程完成
+    for (auto &th : threads)
+    {
+        if (th.joinable())
+            th.join();
+    }
+
+    // 汇总所有子节点
+    std::vector<std::shared_ptr<PlaylistNode>> tmpChildren;
+    for (auto &r : results)
+    {
+        for (auto &ch : r.children)
+        {
+            if (ch)
+                tmpChildren.push_back(ch);
+        }
+    }
+
+    // 排序规则沿用原来的：目录在前，路径字典序
+    std::sort(tmpChildren.begin(), tmpChildren.end(), [](auto &a, auto &b)
+              {
+                  if (a->isDir() != b->isDir())
+                      return a->isDir() && !b->isDir();
+                  return a->getPath() < b->getPath(); });
+
+    // 挂到 root 下面
+    for (auto &child : tmpChildren)
+    {
+        root->addChild(child);
+    }
+
+    rootNode = root;
     hasScanCpld = true;
 }
 
