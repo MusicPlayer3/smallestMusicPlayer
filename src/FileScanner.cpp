@@ -44,35 +44,62 @@ static std::vector<std::string> splitString(const std::string &s, char delimiter
     return tokens;
 }
 
+// 定义一个极全的音频后缀列表（包含常见、发烧、游戏、古老格式）
+static const std::vector<std::string> kKnownAudioExtensions = {
+    // 常见有损
+    "mp3", "aac", "m4a", "ogg", "wma", "opus", "mpc", "mp+", "mpp",
+    // 无损格式
+    "flac", "ape", "wav", "aiff", "aif", "wv", "tta", "alac", "shn", "tak",
+    // DSD / 高解析度
+    "dsf", "dff", "dxd",
+    // 容器格式（通常用于纯音频的）
+    "mka", "webm", // 注意：webm 和 mka 也可能含视频，但常用于音频
+    // 模组音乐 (Tracker Music - MOD/XM/IT) - FFmpeg 通常支持
+    "mod", "it", "s3m", "xm", "mtm", "umx", "mdz", "s3z", "itgz", "xmz",
+    // 游戏音频 / Chiptune
+    "vgm", "vgz", "spc", "psf", "psf2", "minipsf", "usf", "miniusf", "ssdl",
+    "adx", "hca", "brstm", "bcstm", "bfstm",
+    // 老旧或特定格式
+    "au", "snd", "voc", "ra", "rm", "amr", "awb", "gsm", "act", "3g2", "3gp", "caf", "qcp",
+    // DTS / AC3 / 影院音频
+    "dts", "dtshd", "ac3", "eac3", "mlp", "truehd"};
+
 void FileScanner::initSupportedExtensions()
 {
     std::call_once(g_initFlag, []()
                    {
-        std::set<std::string> audioWhitelist = {
-            "mp3", "flac", "wav", "ogg", "opus", 
-            "m4a", "aac", "alac", "ape", "wma", 
-            "aiff", "aif", "dsf", "dff", "mp2", "mp1", "wv"
-        };
+                       SDL_Log("[FileScanner] Detecting supported audio extensions via FFmpeg...");
 
-        SDL_Log("[FileScanner] Initializing supported audio extensions from FFmpeg...");
-        void *opaque = nullptr;
-        const AVInputFormat *fmt = nullptr;
-        while ((fmt = av_demuxer_iterate(&opaque))) {
-            if (fmt->extensions) {
-                auto exts = splitString(fmt->extensions, ',');
-                for (auto &ext : exts) {
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if (audioWhitelist.count(ext)) {
-                        g_supportedAudioExts.insert("." + ext);
-                    }
-                }
-            }
-        } });
+                       // 确保 ffmpeg 网络/设备已注册（新版 ffmpeg 不需要，但为了兼容旧版）
+                       // av_register_all();
+
+                       for (const auto &ext : kKnownAudioExtensions)
+                       {
+                           // 核心逻辑：av_guess_format
+                           // 问 FFmpeg：如果有一个文件名叫 test.xxx，你有对应的 Demuxer 吗？
+                           const AVInputFormat *fmt = av_find_input_format(ext.c_str());
+
+                           if (fmt)
+                           {
+                               // 找到了对应的 Demuxer，说明当前链接的 FFmpeg 库支持这种格式
+                               g_supportedAudioExts.insert("." + ext);
+
+                               // 调试日志：看看具体映射到了哪个 Demuxer（例如 opus -> ogg, m4a -> mov）
+                               // SDL_Log("Extension .%s supported by demuxer: %s", ext.c_str(), fmt->name);
+                           }
+                       }
+
+                       // SDL_Log("[FileScanner] Total supported extensions: %d", (int)g_supportedAudioExts.size());
+                       // SDL_Log("[FileScanner] Extensions\n");
+                       // for (const auto &ext : g_supportedAudioExts)
+                       // {
+                       //     SDL_Log("%s", ext.c_str());
+                       // }
+                   });
 }
 
 inline bool isffmpeg(const std::string &route)
 {
-    FileScanner::initSupportedExtensions();
     fs::path p(route);
     if (!p.has_extension())
         return false;
@@ -583,23 +610,63 @@ void FileScanner::scanDir()
 // ==========================================
 
 // 辅助：清洗文件名，移除非法字符
+#if defined(_WIN32) || defined(_WIN64)
+#define OS_WINDOWS
+#endif
+
+static bool isIllegalChar(char c)
+{
+#ifdef _WIN32
+    // Windows 下的非法字符列表（NTFS/FAT）
+    constexpr const char *illegalChars = "<>:\"/\\|?*";
+    // 控制字符（0~31）也非法
+    if (c >= 0 && c < 32)
+        return true;
+    return std::strchr(illegalChars, c) != nullptr;
+#else
+    // Linux / macOS：只有 '/' 和 '\0' 是非法
+    return (c == '/' || c == '\0');
+#endif
+}
+
 static std::string sanitizeFilename(const std::string &name)
 {
-    std::string safeName = name;
-    const std::string illegalChars = "\\/:?\"<>|*";
-    for (char &c : safeName)
+    std::string safeName;
+    safeName.reserve(name.size());
+
+    // 按字节逐个检查，但 Unicode（UTF-8）高字节不会被匹配非法字符 → 安全通过
+    for (unsigned char c : name)
     {
-        if (illegalChars.find(c) != std::string::npos || c < 32)
-        {
-            c = '_'; // 将非法字符替换为下划线
-        }
+        if (isIllegalChar(c))
+            safeName.push_back('_');
+        else
+            safeName.push_back(c);
     }
-    // 如果名字为空或全是空格，给个默认名
+
+    // 如果处理后为空或全空白，则给默认名
     if (safeName.empty() || std::all_of(safeName.begin(), safeName.end(), [](unsigned char c)
                                         { return std::isspace(c); }))
     {
         return "Unknown_Album";
     }
+
+#ifdef _WIN32
+    // Windows 额外：避免保留名（CON, PRN, AUX, NUL, COM1...）
+    static const char *reserved[] = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
+
+    std::string upper = safeName;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+
+    for (auto &r : reserved)
+    {
+        if (upper == r)
+            return safeName + "_"; // 添加下划线避免冲突
+    }
+#endif
+
     return safeName;
 }
 
@@ -650,7 +717,7 @@ void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData 
     // 但按照要求，参数仅为 musicPath。
 
     // // 3. 清洗文件名
-    // std::string safeAlbumName = sanitizeFilename(albumName);
+    std::string safeAlbumName = sanitizeFilename(data.getAlbum());
 
     // 4. 调用现有的 extractCoverData 获取二进制数据
     // (复用之前优化过的 extractCoverData 函数)
@@ -665,7 +732,7 @@ void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData 
     std::string ext = detectImageExtension(coverData);
 
     // 6. 构建目标路径
-    fs::path targetPath = tmpDir / (data.getAlbum() + ext);
+    fs::path targetPath = tmpDir / (safeAlbumName + ext);
 
     // 7. 检查文件是否已存在 (避免重复写入同一张专辑封面)
     if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
