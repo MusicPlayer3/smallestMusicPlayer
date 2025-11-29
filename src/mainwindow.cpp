@@ -54,6 +54,13 @@ MainWindow::MainWindow(QWidget *parent) :
         // run_cover_test();
         auto rootnode = controller.getRootNode();
         controller.play();
+        auto current = controller.getCurrentPlayingNode()->getMetaData().getFilePath();
+        int barWidth;
+        startTime = std::chrono::steady_clock::now();
+        AudioPlayer::buildAudioWaveform(current, 100, 200, barWidth, 100);
+        endTime = std::chrono::steady_clock::now();
+        totalTimeMili = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+        qDebug() << "绘制耗时:" << totalTimeMili << "ms";
     }
 }
 
