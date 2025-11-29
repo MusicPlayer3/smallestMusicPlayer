@@ -64,6 +64,7 @@ void MediaController::monitorLoop()
 
         // 获取播放器当前正在播放的实际文件路径
         std::string realCurrentPath = player->getCurrentPath();
+        bool justSwitched = false; // 新增标记
 
         // 1. 检测是否发生了底层自动切歌 (AudioPlayer 完成了无缝切换)
         // 条件：路径变了，且不为空，且上一首也不为空（避免刚启动时的误判）
@@ -106,7 +107,7 @@ void MediaController::monitorLoop()
                     // *** 关键修复：自动切歌后，显式发送 Seeked(0) 信号 ***
                     // 确保客户端知道这首歌是从头开始的，而不是上一首的延续
                     mediaService->triggerSeeked(std::chrono::microseconds(0));
-
+                    justSwitched = true;
                     // *** 关键：这首歌开始放了，立刻预加载再下一首 ***
                     preloadNextSong();
                 }
@@ -131,7 +132,10 @@ void MediaController::monitorLoop()
         // 更新播放进度
         if (isPlaying.load())
         {
-            mediaService->setPosition(std::chrono::microseconds(player->getCurrentPositionMicroseconds()));
+            if (!justSwitched)
+            {
+                mediaService->setPosition(std::chrono::microseconds(player->getCurrentPositionMicroseconds()));
+            }
         }
     }
 }
@@ -261,6 +265,7 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
 
     // *** 关键修复：手动切歌时也强制重置进度 ***
+    mediaService->setPosition(std::chrono::microseconds(0));
     mediaService->triggerSeeked(std::chrono::microseconds(0));
 
     // 5. *** 关键：设置下一首预加载 ***
