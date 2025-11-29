@@ -133,6 +133,8 @@ private:
     bool performSeamlessSwitch();
     void flushQueue();
 
+    void applyFadeOutToLastFrame();
+
 public:
     AudioPlayer();
     ~AudioPlayer();

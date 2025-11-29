@@ -748,7 +748,7 @@ bool AudioPlayer::performSeamlessSwitch()
 {
     if (outputMode.load() != OUTPUT_MIXING || !hasPreloaded.load() || !m_preloadSource)
         return false;
-
+    applyFadeOutToLastFrame();
     SDL_Log("Seamless switch -> %s", m_preloadSource->path.c_str());
     m_currentSource = std::move(m_preloadSource);
 
@@ -763,6 +763,7 @@ bool AudioPlayer::performSeamlessSwitch()
     totalDecodedBytes.store(0);
     totalDecodedFrames.store(0);
     hasCalculatedQueueSize.store(false);
+    nowPlayingTime.store(0);
     return true;
 }
 
@@ -976,4 +977,33 @@ int64_t AudioPlayer::getDurationMicroseconds() const
         return 0;
 
     return duration;
+}
+
+void AudioPlayer::applyFadeOutToLastFrame()
+{
+    std::lock_guard<std::mutex> lock(audioFrameQueueMutex);
+    if (audioFrameQueue.empty())
+        return;
+
+    // 获取队列中最后一帧（即当前歌曲的最后一帧音频）
+    auto &frame = audioFrameQueue.back();
+    if (!frame || !frame->data || frame->size <= 0)
+        return;
+
+    // 我们假设输出格式是 Float (AV_SAMPLE_FMT_FLT)，这是本播放器的默认设置
+    // 如果使用了其他格式（如 S16），需要写对应的处理逻辑，但这里我们主要处理 Float
+    if (deviceParams.sampleFormat == AV_SAMPLE_FMT_FLT)
+    {
+        float *samples = reinterpret_cast<float *>(frame->data.get());
+        int totalSamples = frame->size / sizeof(float); // 总样本数（包含所有通道）
+
+        // 对这一整帧进行线性淡出
+        // 这一帧通常只有几十毫秒，淡出不会被听觉感知为“声音变小”，但能消除爆音
+        for (int i = 0; i < totalSamples; ++i)
+        {
+            // gain 从 1.0 线性降至 0.0
+            float gain = 1.0f - (static_cast<float>(i) / totalSamples);
+            samples[i] *= gain;
+        }
+    }
 }
