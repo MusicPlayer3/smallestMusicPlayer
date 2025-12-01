@@ -269,3 +269,21 @@ void SysMediaService::setShuffle(bool shuffle)
     }
 }
 #endif
+
+#ifdef __WIN32__
+void SysMediaService::triggerSeeked(std::chrono::microseconds position)
+{
+}
+
+void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
+{
+}
+
+void SysMediaService::setShuffle(bool shuffle)
+{
+}
+void SysMediaService::setMetaData(const MetaData &metadata)
+{
+    // setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), metadata.getCoverPath(), metadata.getDuration(), metadata.getFilePath());
+}
+#endif

@@ -42,7 +42,9 @@ MediaController::MediaController()
 
     monitorRunning = true;
     monitorThread = std::thread(&MediaController::monitorLoop, this);
+#ifndef __WIN32__
     mediaService = std::make_shared<SysMediaService>(*this);
+#endif
 }
 
 MediaController::~MediaController()
@@ -652,7 +654,7 @@ void MediaController::seek(int64_t pos_microsec)
 void MediaController::setRootPath(const std::string &path)
 {
     rootPath = path;
-    scanner->setRootDir(rootPath);
+    scanner->setRootDir(rootPath.string());
 }
 
 void MediaController::startScan()

@@ -136,14 +136,25 @@ qt_add_qml_module(appMusicPlayer
 # ------------------------------
 # 目标属性设置
 # ------------------------------
-set_target_properties(appMusicPlayer PROPERTIES
-    MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
-    MACOSX_BUNDLE TRUE
-    WIN32_EXECUTABLE TRUE
-    # 开启 IPO/LTO (链接时优化) - 这一步对 C++23 音视频项目很重要
-    INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
-)
+if(WIN32)
+        set_target_properties(appMusicPlayer PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
+        MACOSX_BUNDLE TRUE
+        WIN32_EXECUTABLE TRUE
+    )
+else()
+    set_target_properties(appMusicPlayer PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
+        MACOSX_BUNDLE TRUE
+        WIN32_EXECUTABLE TRUE
+        # 开启 IPO/LTO (链接时优化) - 这一步对 C++23 音视频项目很重要
+        INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
+    )
+endif()
+
+target_compile_definitions(appMusicPlayer PRIVATE TAGLIB_STATIC)
 
 # ------------------------------
 # 编译选项优化 (移植自原项目)
@@ -186,6 +197,7 @@ target_link_libraries(appMusicPlayer
         ${FFMPEG_LIBRARIES}
         ${SDL2_LIBRARIES}
         ${TAGLIB_LIBRARIES}
+        z
 )
 
 # 仅在 SDBUSCPP 被找到时才链接它 (Linux)

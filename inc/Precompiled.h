@@ -13,6 +13,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <cstring>
 
 #include <taglib/attachedpictureframe.h>
 #include <taglib/fileref.h>
@@ -24,7 +25,8 @@
 #include <taglib/tpropertymap.h>
 #include <taglib/tstring.h>
 
-extern "C" {
+extern "C"
+{
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
