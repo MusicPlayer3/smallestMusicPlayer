@@ -303,43 +303,77 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     // 1. 历史记录处理
     if (currentPlayingSongs && currentPlayingSongs != node && !isAutoSwitch)
     {
-        // 如果不是自动切歌（是手动点的），把前一首加入历史
         playHistory.push_back(currentPlayingSongs);
         if (playHistory.size() > MAX_HISTORY_SIZE)
             playHistory.pop_front();
     }
 
+    // 在更新 currentPlayingSongs 之前，先获取当前播放器的实际路径
+    std::string oldPath = player->getCurrentPath();
+    std::string newPath = node->getPath();
+
     currentPlayingSongs = node;
 
-    // 2. 告诉播放器切歌
-    player->setPath(node->getPath());
-
-    // [优化] 核心逻辑调整：先 Play，稍作等待让解码器就绪，再 Seek
-    // 许多后端在 stop 状态下 seek 会被 play 时的初始化重置，因此采用此顺序
-    player->play();
-
-    int64_t offset = node->getMetaData().getOffset();
-
-    // 只有当存在有效偏移时才执行 Seek 逻辑
-    if (offset > 0)
+    // 2. 核心播放控制逻辑 (修复点)
+    if (oldPath != newPath)
     {
-        // 给底层解码线程 10~20ms 时间启动
-        // 这个时间足以让 audio thread 跑起来，但对用户来说几乎不可感知
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        // === 情况 A: 切换到了不同的音频文件 (普通切歌) ===
 
-        // 执行跳转到 CUE 设定的绝对时间
-        player->seek(offset);
+        // 先暂停，让解码线程停止对旧文件的占用
+        player->pause();
+
+        // 设置新路径
+        player->setPath(newPath);
+
+        // // [关键修复] 给底层一点时间关闭旧文件并打开新文件
+        // 50ms 是一个安全值，既不影响体验，又能保证文件句柄切换完成
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        // 开始播放新文件 (默认从头开始)
+        player->play();
+
+        // 如果新文件也有 Offset (极少见的情况，或者是带有 Offset 的普通文件播放请求)，则 Seek
+        // 但通常普通文件播放 Offset 为 0，这里不需要额外操作
+        int64_t offset = node->getMetaData().getOffset();
+        if (offset > 0)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            player->seek(offset);
+        }
+    }
+    else
+    {
+        // === 情况 B: 文件路径相同 (CUE 分轨切换 / 单曲循环重播) ===
+
+        // 确保处于播放状态
+        player->play();
+
+        int64_t offset = node->getMetaData().getOffset();
+
+        // CUE 切歌需要 Seek；如果是单曲循环(Offset=0)也需要 Seek 到 0
+        if (offset > 0)
+        {
+            // 给解码器一点时间缓冲
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            player->seek(offset);
+        }
+        else
+        {
+            // 如果是同一个文件切回来，且 Offset 为 0 (比如重头播放)，直接 Seek 0
+            // 这里不需要 sleep，因为已经在播放中
+            player->seek(0);
+        }
     }
 
     // 3. 更新状态
     isPlaying = true;
-    lastDetectedPath = node->getPath(); // 更新 path 防止 monitor 误判
+    lastDetectedPath = newPath; // 更新 path 防止 monitor 误判
 
     // 4. 更新元数据
     updateMetaData(node);
     mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
 
-    // [关键] 通知 MPRIS 进度归零 (相对于当前 Track 的 00:00)
+    // 通知 MPRIS 进度归零
     mediaService->setPosition(std::chrono::microseconds(0));
     mediaService->triggerSeeked(std::chrono::microseconds(0));
 
@@ -431,31 +465,46 @@ void MediaController::prev()
         PlaylistNode *prevNode = playHistory.back();
         playHistory.pop_back(); // 弹出最近的一首
 
+        std::string oldPath = player->getCurrentPath();
+        std::string newPath = prevNode->getPath();
+
         currentPlayingSongs = prevNode;
 
-        // --- 这里的逻辑也需要同步优化 ---
-        player->setPath(prevNode->getPath());
-
-        // 先 Play
-        player->play();
-
-        int64_t offset = prevNode->getMetaData().getOffset();
-        if (offset > 0)
+        // === 核心修复逻辑 (同 playNode) ===
+        if (oldPath != newPath)
         {
-            // 等待就绪后 Seek
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            player->seek(offset);
+            // 切换不同文件：Pause -> SetPath -> Wait -> Play
+            player->pause();
+            player->setPath(newPath);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            player->play();
+
+            // 如果上一首是 CUE 的某一轨（跨文件CUE），也需要 Seek
+            int64_t offset = prevNode->getMetaData().getOffset();
+            if (offset > 0)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+                player->seek(offset);
+            }
+        }
+        else
+        {
+            // 同文件回退：Play -> Seek
+            player->play();
+            int64_t offset = prevNode->getMetaData().getOffset();
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            player->seek(offset); // Offset 为 0 时也会 Seek 到 0
         }
 
         isPlaying = true;
-        lastDetectedPath = prevNode->getPath();
+        lastDetectedPath = newPath;
         updateMetaData(prevNode);
         mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
 
         // 通知 UI 进度归零
         mediaService->triggerSeeked(std::chrono::microseconds(0));
 
-        // 恢复播放旧歌后，重新计算这首旧歌之后的“下一首”用于预加载
+        // 重新预加载
         preloadNextSong();
     }
     else
