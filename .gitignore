@@ -1,0 +1,85 @@
+# Prerequisites
+*.d
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+/build
+/bin
+/obj
+/out
+/.vscode
+/tmp
+/temp
+
+compile_commands.json
+
+# 忽略 Qt Creator 用户配置文件
+*.user
+*.user.*
+
+# 忽略 Qt Creator 项目数据库和缓存
+.qtcreator/
+.qtc/
+*.pro.user
+*.pro.user.*
+*.creator.user
+*.autosave
+
+# 忽略 CMake 生成的构建目录（根据你的习惯命名）
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+
+.cache/*
+
+# Linker output
+*.ilk
+*.map
+*.exp
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# debug information files
+*.dwo

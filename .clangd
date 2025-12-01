@@ -1,0 +1,16 @@
+CompileFlags:
+  Add: [-Wno-unknown-warning-option]
+  Remove: [-mno-direct-extern-access]
+
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - performance-*
+      - bugprone-*
+    Remove:
+      # 如果想排除某些检查
+      - modernize-use-trailing-return-type
+    CheckOptions:
+      readability-identifier-naming.VariableCase: CamelCase
+    FastCheckFilter: Strict  # 可选
