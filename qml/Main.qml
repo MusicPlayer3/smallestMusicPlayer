@@ -573,15 +573,3 @@ ApplicationWindow {
         Item { Layout.preferredHeight: 40 }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

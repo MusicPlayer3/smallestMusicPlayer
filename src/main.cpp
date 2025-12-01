@@ -9,7 +9,7 @@ int main(int argc, char *argv[])
     qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
 
     QGuiApplication app(argc, argv);
-
+    QQuickStyle::setStyle("Basic");
     QQmlApplicationEngine engine;
 
     // 实例化模型并加载初始数据
