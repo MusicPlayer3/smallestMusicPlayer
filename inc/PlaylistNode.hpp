@@ -12,6 +12,7 @@ class PlaylistNode
 private:
     bool _isDir;                                         // 是否是目录
     std::string path;                                    // 完整路径（从根开始）
+    std::string _coverKey;                               // [新增] 文件夹封面的缓存Key（通常为文件夹路径）
     MetaData metaData;                                   // 音频文件元数据(如果不是目录的话)
     std::vector<std::shared_ptr<PlaylistNode>> children; // 这个目录下的子目录+音频文件
     std::weak_ptr<PlaylistNode> parent;                  // 父节点   (如果是根节点则为空)
@@ -27,6 +28,11 @@ public:
     {
         return path;
     }
+    // [新增] 获取当前文件夹封面的Key
+    const std::string &getThisDirCover() const
+    {
+        return _coverKey;
+    }
     const std::vector<std::shared_ptr<PlaylistNode>> &getChildren() const
     {
         return children;
@@ -38,6 +44,11 @@ public:
     void setIsDir(const bool &isDir)
     {
         this->_isDir = isDir;
+    }
+    // [新增] 设置文件夹封面的Key
+    void setCoverKey(const std::string &key)
+    {
+        this->_coverKey = key;
     }
     void setMetaData(const MetaData &metaData)
     {
@@ -56,30 +67,5 @@ public:
         return parent.lock();
     }
 };
-
-// 整个播放列表：根节点 + 构建函数
-// class Playlist
-// {
-// private:
-//     PlaylistNode root;
-//     std::string rootDir;
-
-// public:
-//     explicit Playlist(const std::string &rootDir);
-
-//     PlaylistNode &getRoot()
-//     {
-//         return root;
-//     }
-//     const PlaylistNode &getRoot() const
-//     {
-//         return root;
-//     }
-//     const std::string &getRootDir() const
-//     {
-//         return rootDir;
-//     }
-
-// };
 
 #endif // PLAYLISTNODE_HPP

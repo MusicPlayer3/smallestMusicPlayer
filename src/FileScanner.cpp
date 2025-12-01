@@ -83,19 +83,8 @@ void FileScanner::initSupportedExtensions()
                            {
                                // 找到了对应的 Demuxer，说明当前链接的 FFmpeg 库支持这种格式
                                g_supportedAudioExts.insert("." + ext);
-
-                               // 调试日志：看看具体映射到了哪个 Demuxer（例如 opus -> ogg, m4a -> mov）
-                               // SDL_Log("Extension .%s supported by demuxer: %s", ext.c_str(), fmt->name);
                            }
-                       }
-
-                       // SDL_Log("[FileScanner] Total supported extensions: %d", (int)g_supportedAudioExts.size());
-                       // SDL_Log("[FileScanner] Extensions\n");
-                       // for (const auto &ext : g_supportedAudioExts)
-                       // {
-                       //     SDL_Log("%s", ext.c_str());
-                       // }
-                   });
+                       } });
 }
 
 inline bool isffmpeg(const std::string &route)
@@ -365,9 +354,6 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     //         data = extractID3v2Cover(file.tag());
     //     }
     // }
-    // 8. Ogg / Opus / Ape / WavPack (暂不支持或较少见)
-    // Ogg/Opus 封面通常是 Base64 编码在 METADATA_BLOCK_PICTURE 中，TagLib 核心库不直接提供解码。
-    // APE 标签支持二进制 Cover Art (Item key: "Cover Art (Front)"), 但较为少见。
 
     return data;
 }
@@ -401,6 +387,41 @@ static std::string findDirectoryCover(const fs::path &dirPath)
     return "";
 }
 
+// [新增] 专门用于处理目录封面的缓存逻辑
+// 1. 如果有 explicitCoverPath (cover.jpg等)，则加载并以 dirPath 为 key 存入缓存
+// 2. 如果没有，则尝试从 fallbackAudioPath (第一首子歌曲) 提取内嵌封面，同样以 dirPath 为 key 存入
+static void cacheDirCover(const std::string &dirPath, const std::string &explicitCoverPath, const std::string &fallbackAudioPath)
+{
+    int width, height, channels;
+    unsigned char *imgPixels = nullptr;
+
+    // A. 尝试加载显式的封面文件 (如 cover.jpg)
+    if (!explicitCoverPath.empty() && fs::exists(explicitCoverPath))
+    {
+        // 使用 stbi_load 加载文件
+        imgPixels = stbi_load(explicitCoverPath.c_str(), &width, &height, &channels, 4);
+    }
+
+    // B. 如果没有显式封面，且有备选音频文件，尝试提取内嵌封面
+    if (!imgPixels && !fallbackAudioPath.empty())
+    {
+        TagLib::ByteVector coverData = extractCoverData(fallbackAudioPath);
+        if (!coverData.isEmpty())
+        {
+            imgPixels = stbi_load_from_memory(
+                reinterpret_cast<const unsigned char *>(coverData.data()),
+                coverData.size(), &width, &height, &channels, 4);
+        }
+    }
+
+    // C. 如果成功获取到了像素数据，存入 CoverCache，key = 文件夹路径
+    if (imgPixels)
+    {
+        CoverCache::instance().putCompressedFromPixels(dirPath, imgPixels, width, height, 4);
+        stbi_image_free(imgPixels);
+    }
+}
+
 MetaData FileScanner::getMetaData(const std::string &musicPath)
 {
     fs::path path(musicPath);
@@ -410,7 +431,6 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
     if (fs::exists(path) && isffmpeg(musicPath))
     {
         // 1. 获取基本元数据
-        // FileRef 是智能的，它会根据扩展名自动选择解析器，所以这里不会有性能问题
         TagLib::FileRef f(musicPath.c_str());
 
         if (!f.isNull() && f.tag())
@@ -428,7 +448,7 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
                 musicData.setDuration(f.audioProperties()->lengthInMilliseconds() * 1000ll);
             }
 
-            // 2. 提取内嵌封面 (这里调用了优化后的函数)
+            // 2. 提取内嵌封面
             TagLib::ByteVector coverData = extractCoverData(musicPath);
 
             if (!coverData.isEmpty())
@@ -457,6 +477,9 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
 static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 {
     auto node = std::make_shared<PlaylistNode>(dirPath.string(), true);
+    // 设置默认的 Cover Key (即文件夹路径)，后续 cacheDirCover 会尝试填充这个 Key 对应的内容
+    node->setCoverKey(dirPath.string());
+
     std::vector<std::shared_ptr<PlaylistNode>> tmpChildren;
 
     std::string dirCoverPath = findDirectoryCover(dirPath);
@@ -567,6 +590,21 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 
     for (auto &child : tmpChildren)
         node->addChild(child);
+
+    // [新增] 处理文件夹封面
+    // 寻找第一首音频文件作为 fallback
+    std::string fallbackAudio;
+    for (const auto &child : tmpChildren)
+    {
+        if (!child->isDir()) // 找到第一个文件节点
+        {
+            fallbackAudio = child->getPath();
+            break;
+        }
+    }
+    // 执行缓存逻辑：优先用 dirCoverPath，没有则提取 fallbackAudio 的封面，存入 Key=dirPath
+    cacheDirCover(dirPath.filename().string(), dirCoverPath, fallbackAudio);
+
     return node;
 }
 
@@ -581,7 +619,7 @@ void FileScanner::scanDir()
         return;
     }
 
-    // 情况1：rootDir 就是一个单独文件，逻辑保持不变
+    // 情况1：rootDir 就是一个单独文件
     if (fs::is_regular_file(rootPath))
     {
         if (isffmpeg(rootDir))
@@ -606,6 +644,8 @@ void FileScanner::scanDir()
 
     // 给整个库建一个根节点
     auto root = std::make_shared<PlaylistNode>(rootPath.string(), true);
+    // 设置根节点的封面Key
+    root->setCoverKey(rootPath.string());
 
     // 为了并行，我们先把根目录下的所有 entry 收集起来
     std::vector<fs::directory_entry> entries;
@@ -618,7 +658,6 @@ void FileScanner::scanDir()
     }
     catch (...)
     {
-        // 读目录失败就当空目录处理
     }
 
     // 没有子项，直接结束
@@ -629,16 +668,14 @@ void FileScanner::scanDir()
         return;
     }
 
-    // 决定使用多少线程（最多 entries.size() 个，最少 1 个）
     unsigned int hw = std::thread::hardware_concurrency();
     if (hw == 0)
-        hw = 4; // 保险一点
+        hw = 4;
     unsigned int threadCount = std::min<unsigned int>(hw, entries.size());
 
-    // 每个线程处理 entries 的一段区间
     struct WorkerResult
     {
-        std::vector<std::shared_ptr<PlaylistNode>> children; // 建好的子节点
+        std::vector<std::shared_ptr<PlaylistNode>> children;
     };
 
     std::vector<std::thread> threads;
@@ -654,7 +691,6 @@ void FileScanner::scanDir()
             {
                 if (entry.is_directory())
                 {
-                    // 子目录：调用原来的递归函数 buildNodeFromDir
                     auto childDirNode = buildNodeFromDir(entry.path());
                     if (childDirNode)
                     {
@@ -667,18 +703,8 @@ void FileScanner::scanDir()
                     std::string filePath = entry.path().string();
                     if (isffmpeg(filePath))
                     {
-                        std::string canonicalPath = filePath;
-                        try
-                        {
-                            canonicalPath = fs::canonical(entry.path()).string();
-                        }
-                        catch (...)
-                        {
-                        }
-
                         auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
                         MetaData md = FileScanner::getMetaData(filePath);
-
                         std::string dirCover = findDirectoryCover(entry.path().parent_path());
                         if (!dirCover.empty())
                             md.setCoverPath(dirCover);
@@ -691,34 +717,27 @@ void FileScanner::scanDir()
             }
             catch (...)
             {
-                // 单个文件/目录出问题就跳过，不影响整体
             }
         }
         results[idx] = std::move(local);
     };
 
-    // 按区间划分任务
     unsigned int chunkSize = (entries.size() + threadCount - 1) / threadCount;
     for (unsigned int t = 0; t < threadCount; ++t)
     {
         unsigned int begin = t * chunkSize;
         unsigned int end = std::min<unsigned int>(begin + chunkSize, entries.size());
         if (begin >= end)
-        {
-            // 最后几个线程可能没活干
             break;
-        }
         threads.emplace_back(worker, t, begin, end);
     }
 
-    // 等所有线程完成
     for (auto &th : threads)
     {
         if (th.joinable())
             th.join();
     }
 
-    // 汇总所有子节点
     std::vector<std::shared_ptr<PlaylistNode>> tmpChildren;
     for (auto &r : results)
     {
@@ -729,18 +748,29 @@ void FileScanner::scanDir()
         }
     }
 
-    // 排序规则沿用原来的：目录在前，路径字典序
     std::sort(tmpChildren.begin(), tmpChildren.end(), [](auto &a, auto &b)
               {
                   if (a->isDir() != b->isDir())
                       return a->isDir() && !b->isDir();
                   return a->getPath() < b->getPath(); });
 
-    // 挂到 root 下面
     for (auto &child : tmpChildren)
     {
         root->addChild(child);
     }
+
+    // [新增] 处理根目录的封面（并行扫描结束后）
+    std::string rootCoverPath = findDirectoryCover(rootPath);
+    std::string fallbackAudio;
+    for (const auto &child : tmpChildren)
+    {
+        if (!child->isDir())
+        {
+            fallbackAudio = child->getPath();
+            break;
+        }
+    }
+    cacheDirCover(rootPath.filename().string(), rootCoverPath, fallbackAudio);
 
     rootNode = root;
     hasScanCpld = true;
@@ -750,7 +780,6 @@ void FileScanner::scanDir()
 // 5. 封面缓存文件生成工具 (新增功能)
 // ==========================================
 
-// 辅助：清洗文件名，移除非法字符
 #if defined(_WIN32) || defined(_WIN64)
 #define OS_WINDOWS
 #endif
@@ -758,14 +787,11 @@ void FileScanner::scanDir()
 static bool isIllegalChar(char c)
 {
 #ifdef _WIN32
-    // Windows 下的非法字符列表（NTFS/FAT）
     constexpr const char *illegalChars = "<>:\"/\\|?*";
-    // 控制字符（0~31）也非法
     if (c >= 0 && c < 32)
         return true;
     return std::strchr(illegalChars, c) != nullptr;
 #else
-    // Linux / macOS：只有 '/' 和 '\0' 是非法
     return (c == '/' || c == '\0');
 #endif
 }
@@ -775,7 +801,6 @@ static std::string sanitizeFilename(const std::string &name)
     std::string safeName;
     safeName.reserve(name.size());
 
-    // 按字节逐个检查，但 Unicode（UTF-8）高字节不会被匹配非法字符 → 安全通过
     for (unsigned char c : name)
     {
         if (isIllegalChar(c))
@@ -784,7 +809,6 @@ static std::string sanitizeFilename(const std::string &name)
             safeName.push_back(c);
     }
 
-    // 如果处理后为空或全空白，则给默认名
     if (safeName.empty() || std::all_of(safeName.begin(), safeName.end(), [](unsigned char c)
                                         { return std::isspace(c); }))
     {
@@ -792,7 +816,6 @@ static std::string sanitizeFilename(const std::string &name)
     }
 
 #ifdef _WIN32
-    // Windows 额外：避免保留名（CON, PRN, AUX, NUL, COM1...）
     static const char *reserved[] = {
         "CON", "PRN", "AUX", "NUL",
         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -804,41 +827,30 @@ static std::string sanitizeFilename(const std::string &name)
     for (auto &r : reserved)
     {
         if (upper == r)
-            return safeName + "_"; // 添加下划线避免冲突
+            return safeName + "_";
     }
 #endif
 
     return safeName;
 }
 
-// 辅助：通过二进制魔数检测图片后缀
 static std::string detectImageExtension(const TagLib::ByteVector &data)
 {
     if (data.size() >= 3 && data[0] == (char)0xFF && data[1] == (char)0xD8 && data[2] == (char)0xFF)
-    {
         return ".jpg";
-    }
     if (data.size() >= 8 && data[0] == (char)0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G')
-    {
         return ".png";
-    }
     if (data.size() >= 2 && data[0] == 'B' && data[1] == 'M')
-    {
         return ".bmp";
-    }
     if (data.size() >= 4 && data[0] == 'G' && data[1] == 'I' && data[2] == 'F')
-    {
         return ".gif";
-    }
-    return ".jpg"; // 默认回退到 jpg
+    return ".jpg";
 }
 
-// [新增实现] 提取封面到临时文件
 void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData &data)
 {
     fs::path tmpDir = std::filesystem::temp_directory_path() / "SmallestMusicPlayer";
 
-    // 1. 确保 tmp 目录存在
     try
     {
         if (!fs::exists(tmpDir))
@@ -852,33 +864,17 @@ void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData 
         return;
     }
 
-    // 2. 为了获取专辑名，我们需要简单解析一下 Tag
-    // 注意：这里为了获取专辑名作为文件名，必须读一次 Tag。
-    // 如果调用者已经有了 MetaData，最好传 MetaData 进来以避免这次重复 IO。
-    // 但按照要求，参数仅为 musicPath。
-
-    // // 3. 清洗文件名
     std::string safeAlbumName = sanitizeFilename(data.getAlbum());
-
-    // 4. 调用现有的 extractCoverData 获取二进制数据
-    // (复用之前优化过的 extractCoverData 函数)
     TagLib::ByteVector coverData = extractCoverData(musicPath);
 
     if (coverData.isEmpty())
-    {
-        return; // 无封面
-    }
+        return;
 
-    // 5. 确定后缀名
     std::string ext = detectImageExtension(coverData);
-
-    // 6. 构建目标路径
     fs::path targetPath = tmpDir / (safeAlbumName + ext);
 
-    // 7. 检查文件是否已存在 (避免重复写入同一张专辑封面)
     if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
     {
-        // 甚至可以进一步比较文件大小，但通常同名专辑封面是一样的
         try
         {
             data.setCoverPath(fs::absolute(targetPath).string());
@@ -890,7 +886,6 @@ void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData 
         }
     }
 
-    // 8. 写入文件
     std::ofstream outFile(targetPath, std::ios::out | std::ios::binary | std::ios::trunc);
     if (outFile.is_open())
     {

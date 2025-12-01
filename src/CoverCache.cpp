@@ -105,17 +105,54 @@ void CoverCache::clear()
     covercache.clear();
 }
 
-// 辅助函数：清洗文件名，防止非法字符导致写入失败
-static std::string sanitize_filename(std::string name)
+static bool isIllegalChar(char c)
 {
-    const std::string illegal_chars = "\\/:?\"<>|*";
-    // 将非法字符替换为下划线
-    std::replace_if(name.begin(), name.end(), [&illegal_chars](char c)
-                    {
-                        return illegal_chars.find(c) != std::string::npos || c < 32; // <32 是控制字符
-                    },
-                    '_');
-    return name;
+#ifdef _WIN32
+    constexpr const char *illegalChars = "<>:\"/\\|?*";
+    if (c >= 0 && c < 32)
+        return true;
+    return std::strchr(illegalChars, c) != nullptr;
+#else
+    return (c == '/' || c == '\0');
+#endif
+}
+
+static std::string sanitizeFilename(const std::string &name)
+{
+    std::string safeName;
+    safeName.reserve(name.size());
+
+    for (unsigned char c : name)
+    {
+        if (isIllegalChar(c))
+            safeName.push_back('_');
+        else
+            safeName.push_back(c);
+    }
+
+    if (safeName.empty() || std::all_of(safeName.begin(), safeName.end(), [](unsigned char c)
+                                        { return std::isspace(c); }))
+    {
+        return "Unknown_Album";
+    }
+
+#ifdef _WIN32
+    static const char *reserved[] = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
+
+    std::string upper = safeName;
+    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+
+    for (auto &r : reserved)
+    {
+        if (upper == r)
+            return safeName + "_";
+    }
+#endif
+
+    return safeName;
 }
 
 void run_cover_test()
@@ -123,7 +160,7 @@ void run_cover_test()
     SDL_Log("=== Starting Cover Cache Export Test ===");
 
     // 1. 创建 ./ttemp 目录
-    fs::path exportDir = "./ttemp";
+    fs::path exportDir = "/tmp/ttemp";
     try
     {
         if (!fs::exists(exportDir))
@@ -133,7 +170,7 @@ void run_cover_test()
     }
     catch (const std::exception &e)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Test: Failed to create dir ./ttemp: %s", e.what());
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Test: Failed to create dir /tmp/ttemp: %s", e.what());
         return;
     }
 
@@ -157,7 +194,7 @@ void run_cover_test()
         }
 
         // 清洗文件名
-        std::string safeName = sanitize_filename(albumName);
+        std::string safeName = sanitizeFilename(albumName);
         if (safeName.empty())
             safeName = "Unknown_Album_" + std::to_string(count);
 

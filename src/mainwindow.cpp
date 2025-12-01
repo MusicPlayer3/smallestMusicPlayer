@@ -61,6 +61,7 @@ MainWindow::MainWindow(QWidget *parent) :
         endTime = std::chrono::steady_clock::now();
         totalTimeMili = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
         qDebug() << "绘制耗时:" << totalTimeMili << "ms";
+        // run_cover_test();
     }
 }
 
