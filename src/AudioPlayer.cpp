@@ -322,11 +322,13 @@ void AudioPlayer::pause()
 void AudioPlayer::seek(int64_t timeMicroseconds)
 {
     std::lock_guard<std::mutex> lock(stateMutex);
+    SDL_Log("[info] seek:%ld us", timeMicroseconds);
 
     // 直接存储微秒值。
     seekTarget.store(timeMicroseconds);
 
     // 切换状态为 SEEKING，解码线程会处理剩下的逻辑
+    oldPlayingState = playingState;
     playingState = PlayerState::SEEKING;
 
     // 如果设备已打开，暂停以防爆音
@@ -539,9 +541,14 @@ void AudioPlayer::mainDecodeThread()
                         // but recreating or re-init cleans state
                     }
 
-                    playingState = PlayerState::PLAYING;
-                    if (m_audioDeviceID != 0)
-                        SDL_PauseAudioDevice(m_audioDeviceID, 0);
+                    playingState = oldPlayingState;
+                    if (playingState == PlayerState::PLAYING)
+                    {
+                        if (m_audioDeviceID != 0)
+                        {
+                            SDL_PauseAudioDevice(m_audioDeviceID, 0);
+                        }
+                    }
                     continue; // Loop back to decode immediately
                 }
 

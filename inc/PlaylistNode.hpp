@@ -7,7 +7,7 @@
 namespace fs = std::filesystem;
 
 // 播放列表节点：对应一个目录，下面挂子目录和子音频文件
-class PlaylistNode
+class PlaylistNode : public std::enable_shared_from_this<PlaylistNode>
 {
 private:
     bool _isDir;                                         // 是否是目录
@@ -19,6 +19,14 @@ private:
 public:
     PlaylistNode(const std::string &path = std::string(), bool isDir = false) : _isDir(isDir), path(path)
     {
+    }
+    void sortChildren()
+    {
+        std::sort(children.begin(), children.end(), [](const std::shared_ptr<PlaylistNode> &a, const std::shared_ptr<PlaylistNode> &b)
+                  {
+        if (a->isDir() != b->isDir()) return a->_isDir; // 目录在前
+        if (a->path != b->path) return a->path < b->path;
+        return a->metaData.getOffset() < b->metaData.getOffset(); });
     }
     const bool &isDir() const
     {
@@ -57,6 +65,7 @@ public:
     void addChild(const std::shared_ptr<PlaylistNode> &child)
     {
         children.push_back(child);
+        child->setParent(shared_from_this()); // 自动认亲
     }
     void setParent(const std::shared_ptr<PlaylistNode> &parent)
     {

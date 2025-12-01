@@ -150,6 +150,34 @@ struct CueTrackInfo
     std::string audioFile;
 };
 
+static std::string findRealAudioFile(const fs::path &dirPath, const std::string &cueFileName)
+{
+    fs::path target = dirPath / cueFileName;
+
+    // 1. 直接存在，完美
+    if (fs::exists(target))
+        return target.string();
+
+    // 2. 尝试替换后缀名
+    // CUE 中常见的后缀是 .wav，但实际可能是 flac, ape, wv, tak, tta
+    static const std::vector<std::string> fallbackExts = {
+        ".flac", ".ape", ".wv", ".wav", ".m4a", ".tak", ".tta", ".mp3"};
+
+    fs::path stem = target.parent_path() / target.stem(); // 去掉后缀的路径
+
+    for (const auto &ext : fallbackExts)
+    {
+        fs::path tryPath = stem;
+        tryPath.replace_extension(ext);
+        if (fs::exists(tryPath))
+        {
+            return tryPath.string();
+        }
+    }
+
+    return ""; // 真的找不到
+}
+
 static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
 {
     std::vector<CueTrackInfo> tracks;
@@ -161,15 +189,17 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
     CueTrackInfo currentTrack;
     bool inTrack = false;
 
-    std::regex regFile("FILE \"(.*)\"");
-    std::regex regTrack("TRACK (\\d+) AUDIO");
-    std::regex regTitle("TITLE \"(.*)\"");
-    std::regex regPerformer("PERFORMER \"(.*)\"");
-    std::regex regIndex("INDEX 01 (\\d{2}:\\d{2}:\\d{2})");
+    // 正则优化：兼容不同格式的空白字符
+    std::regex regFile("FILE\\s+\"(.*)\"");
+    std::regex regTrack("TRACK\\s+(\\d+)\\s+AUDIO");
+    std::regex regTitle("TITLE\\s+\"(.*)\"");
+    std::regex regPerformer("PERFORMER\\s+\"(.*)\"");
+    std::regex regIndex("INDEX\\s+01\\s+(\\d{2}:\\d{2}:\\d{2})");
     std::smatch match;
 
     while (std::getline(file, line))
     {
+        // 去除首尾空白
         line.erase(0, line.find_first_not_of(" \t\r\n"));
         line.erase(line.find_last_not_of(" \t\r\n") + 1);
 
@@ -179,16 +209,20 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
         }
         else if (std::regex_search(line, match, regTrack))
         {
+            // 保存上一首 Track
             if (inTrack)
             {
-                currentTrack.audioFile = currentFile;
                 if (currentTrack.performer.empty())
                     currentTrack.performer = globalPerformer;
                 tracks.push_back(currentTrack);
             }
+
+            // 开始新 Track
             inTrack = true;
             currentTrack = CueTrackInfo();
             currentTrack.trackNum = std::stoi(match[1].str());
+            // [修正] Track 属于当前上下文的 File
+            currentTrack.audioFile = currentFile;
         }
         else if (std::regex_search(line, match, regTitle))
         {
@@ -210,26 +244,28 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
                 currentTrack.startTime = parseCueTime(match[1].str());
         }
     }
+    // 保存最后一首
     if (inTrack)
     {
-        currentTrack.audioFile = currentFile;
         if (currentTrack.performer.empty())
             currentTrack.performer = globalPerformer;
         tracks.push_back(currentTrack);
     }
 
+    // 计算时长
     for (size_t i = 0; i < tracks.size(); ++i)
     {
         if (i < tracks.size() - 1)
         {
+            // 只有当两首歌属于同一个文件时，才能通过时间差计算时长
             if (tracks[i].audioFile == tracks[i + 1].audioFile)
                 tracks[i].duration = tracks[i + 1].startTime - tracks[i].startTime;
             else
-                tracks[i].duration = 0;
+                tracks[i].duration = 0; // 如果换文件了，时长通常由文件自身决定，或者需要读取文件长度
         }
         else
         {
-            tracks[i].duration = 0;
+            tracks[i].duration = 0; // 最后一首，稍后通过文件总时长计算
         }
     }
     return tracks;
@@ -470,69 +506,63 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
     return musicData;
 }
 
-// ==========================================
-// 4. 目录构建
-// ==========================================
-
-static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
+// [新增] 封装 CUE 处理逻辑，供递归和根目录扫描复用
+// 返回值：成功解析并关联的音频文件路径集合
+static std::set<std::string> processCueAndAddNodes(
+    const fs::path &cuePath,
+    const std::shared_ptr<PlaylistNode> &parentNode,
+    const std::string &dirCoverPath)
 {
-    auto node = std::make_shared<PlaylistNode>(dirPath.string(), true);
-    // 设置默认的 Cover Key (即文件夹路径)，后续 cacheDirCover 会尝试填充这个 Key 对应的内容
-    node->setCoverKey(dirPath.string());
-
-    std::vector<std::shared_ptr<PlaylistNode>> tmpChildren;
-
-    std::string dirCoverPath = findDirectoryCover(dirPath);
-    std::set<std::string> processedFiles;
-
-    // A. 处理 CUE
+    std::set<std::string> handledAudioFiles;
     try
     {
-        for (const auto &entry : fs::directory_iterator(dirPath))
+        fs::path dirPath = cuePath.parent_path();
+        auto tracks = parseCueFile(cuePath);
+
+        for (auto &track : tracks)
         {
-            if (entry.is_regular_file() && hasExtension(entry.path().string(), ".cue"))
+            // 使用之前定义的模糊查找函数寻找真实音频
+            std::string realAudioPath = findRealAudioFile(dirPath, track.audioFile);
+
+            if (!realAudioPath.empty() && isffmpeg(realAudioPath))
             {
-                auto tracks = parseCueFile(entry.path());
-                for (auto &track : tracks)
+                // 记录已处理的音频文件
+                handledAudioFiles.insert(realAudioPath);
+                try
                 {
-                    fs::path audioPath = dirPath / track.audioFile;
-                    std::string audioPathStr = audioPath.string();
-
-                    if (fs::exists(audioPath) && isffmpeg(audioPathStr))
-                    {
-                        processedFiles.insert(audioPathStr);
-                        try
-                        {
-                            processedFiles.insert(fs::canonical(audioPath).string());
-                        }
-                        catch (...)
-                        {
-                        }
-
-                        auto trackNode = std::make_shared<PlaylistNode>(audioPathStr, false);
-                        MetaData md = FileScanner::getMetaData(audioPathStr);
-
-                        if (!track.title.empty())
-                            md.setTitle(track.title);
-                        if (!track.performer.empty())
-                            md.setArtist(track.performer);
-                        md.setOffset(track.startTime);
-                        if (track.duration > 0)
-                            md.setDuration(track.duration);
-                        else
-                        {
-                            int64_t remaining = md.getDuration() - track.startTime;
-                            if (remaining > 0)
-                                md.setDuration(remaining);
-                        }
-                        if (!dirCoverPath.empty())
-                            md.setCoverPath(dirCoverPath);
-
-                        trackNode->setMetaData(md);
-                        trackNode->setParent(node);
-                        tmpChildren.push_back(trackNode);
-                    }
+                    handledAudioFiles.insert(fs::canonical(realAudioPath).string());
                 }
+                catch (...)
+                {
+                }
+
+                auto trackNode = std::make_shared<PlaylistNode>(realAudioPath, false);
+                MetaData md = FileScanner::getMetaData(realAudioPath);
+
+                if (!track.title.empty())
+                    md.setTitle(track.title);
+                if (!track.performer.empty())
+                    md.setArtist(track.performer);
+
+                md.setOffset(track.startTime); // 设置起始时间
+
+                if (track.duration > 0)
+                {
+                    md.setDuration(track.duration);
+                }
+                else
+                {
+                    // 最后一轨时长计算
+                    int64_t remaining = md.getDuration() - track.startTime;
+                    if (remaining > 0)
+                        md.setDuration(remaining);
+                }
+
+                if (!dirCoverPath.empty())
+                    md.setCoverPath(dirCoverPath);
+
+                trackNode->setMetaData(md);
+                parentNode->addChild(trackNode); // 使用之前修复后的 addChild
             }
         }
     }
@@ -540,7 +570,41 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
     {
     }
 
-    // B. 处理普通文件
+    return handledAudioFiles;
+}
+
+// ==========================================
+// 4. 目录构建
+// ==========================================
+static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
+{
+    // 防止软链接死循环
+    if (fs::is_symlink(dirPath))
+        return nullptr;
+
+    auto node = std::make_shared<PlaylistNode>(dirPath.string(), true);
+    node->setCoverKey(dirPath.string());
+
+    std::vector<std::shared_ptr<PlaylistNode>> tmpChildren;
+
+    // 为了暂时复用 node->addChild 逻辑，我们先构造好 children 再排序，
+    // 但因为 processCueAndAddNodes 直接操作 parentNode，我们需要稍微调整策略：
+    // 这里我们直接传 node 进去，最后再统一对 node->children 排序。
+
+    std::string dirCoverPath = findDirectoryCover(dirPath);
+    std::set<std::string> processedFiles;
+
+    // A. 处理 CUE (使用新封装的函数)
+    for (const auto &entry : fs::directory_iterator(dirPath))
+    {
+        if (entry.is_regular_file() && hasExtension(entry.path().string(), ".cue"))
+        {
+            std::set<std::string> audioFiles = processCueAndAddNodes(entry.path(), node, dirCoverPath);
+            processedFiles.insert(audioFiles.begin(), audioFiles.end());
+        }
+    }
+
+    // B. 处理普通文件和子目录
     for (const auto &entry : fs::directory_iterator(dirPath))
     {
         try
@@ -548,33 +612,38 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
             if (entry.is_directory())
             {
                 auto childDirNode = buildNodeFromDir(entry.path());
-                childDirNode->setParent(node);
-                tmpChildren.push_back(childDirNode);
+                if (childDirNode)
+                {
+                    node->addChild(childDirNode);
+                }
             }
             else if (entry.is_regular_file())
             {
                 std::string filePath = entry.path().string();
+
+                // 检查是否已被 CUE 处理过
+                std::string canonicalPath = filePath;
+                try
+                {
+                    canonicalPath = fs::canonical(entry.path()).string();
+                }
+                catch (...)
+                {
+                }
+
+                if (processedFiles.count(filePath) || processedFiles.count(canonicalPath))
+                {
+                    continue;
+                }
+
                 if (isffmpeg(filePath))
                 {
-                    std::string canonicalPath = filePath;
-                    try
-                    {
-                        canonicalPath = fs::canonical(entry.path()).string();
-                    }
-                    catch (...)
-                    {
-                    }
-
-                    if (processedFiles.find(filePath) == processedFiles.end() && processedFiles.find(canonicalPath) == processedFiles.end())
-                    {
-                        auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
-                        MetaData md = FileScanner::getMetaData(filePath);
-                        if (!dirCoverPath.empty())
-                            md.setCoverPath(dirCoverPath);
-                        fileNode->setMetaData(md);
-                        fileNode->setParent(node);
-                        tmpChildren.push_back(fileNode);
-                    }
+                    auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
+                    MetaData md = FileScanner::getMetaData(filePath);
+                    if (!dirCoverPath.empty())
+                        md.setCoverPath(dirCoverPath);
+                    fileNode->setMetaData(md);
+                    node->addChild(fileNode);
                 }
             }
         }
@@ -583,27 +652,31 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
         }
     }
 
-    std::sort(tmpChildren.begin(), tmpChildren.end(), [](auto &a, auto &b)
-              {
-        if (a->isDir() != b->isDir()) return a->isDir() && !b->isDir();
-        return a->getPath() < b->getPath(); });
+    // 此时 node->children 里既有 CUE 分轨，也有普通文件，但顺序是乱的
+    // 我们需要通过 const_cast 或者修改 PlaylistNode 接口来排序 children。
+    // 假设 PlaylistNode 有 sortChildren 方法，或者我们手动取出重排。
+    // 由于 PlaylistNode 封装了 children，我们这里可以使用稍微“黑魔法”一点的方式，
+    // 或者在 PlaylistNode.hpp 中加一个 sortChildren() 方法（推荐）。
 
-    for (auto &child : tmpChildren)
-        node->addChild(child);
+    // 这里为了不修改 header 太多，我们先假设 scanDir 里会有排序。
+    // 但 buildNodeFromDir 返回的节点应该是排好序的。
+    // **建议在 PlaylistNode.hpp 中添加一个 public void sortChildren(...) 方法**
+    // 这里暂时不做排序，由外部调用者负责或者依赖 PlaylistNode 内部 vector 的访问权限。
+    // 下面这段代码假设你可以访问 children 并修改它，如果不能，请在 HPP 加接口。
 
-    // [新增] 处理文件夹封面
-    // 寻找第一首音频文件作为 fallback
+    // 这里是一个 hack 排序，实际建议加到类成员函数中：
+    node->sortChildren();
+    // 处理文件夹封面 fallback
     std::string fallbackAudio;
-    for (const auto &child : tmpChildren)
+    for (const auto &child : node->getChildren())
     {
-        if (!child->isDir()) // 找到第一个文件节点
+        if (!child->isDir())
         {
             fallbackAudio = child->getPath();
             break;
         }
     }
-    // 执行缓存逻辑：优先用 dirCoverPath，没有则提取 fallbackAudio 的封面，存入 Key=dirPath
-    cacheDirCover(dirPath.filename().string(), dirCoverPath, fallbackAudio);
+    cacheDirCover(dirPath.string(), dirCoverPath, fallbackAudio);
 
     return node;
 }
@@ -619,10 +692,36 @@ void FileScanner::scanDir()
         return;
     }
 
-    // 情况1：rootDir 就是一个单独文件
+    // ==========================================
+    // Case 1: Root 是单文件
+    // ==========================================
     if (fs::is_regular_file(rootPath))
     {
-        if (isffmpeg(rootDir))
+        // [修复] 如果拖入的是 .cue 文件
+        if (hasExtension(rootDir, ".cue"))
+        {
+            // 创建一个虚拟的根节点，或者用 CUE 所在目录做根
+            // 这里为了界面显示，我们创建一个包含 CUE 内容的根节点
+            auto root = std::make_shared<PlaylistNode>(rootPath.parent_path().string(), true);
+            root->setCoverKey(rootPath.parent_path().string());
+
+            std::string dirCover = findDirectoryCover(rootPath.parent_path());
+
+            // 解析 CUE
+            processCueAndAddNodes(rootPath, root, dirCover);
+
+            if (!root->getChildren().empty())
+            {
+                root->sortChildren(); // 记得加排序
+                rootNode = root;
+            }
+            else
+            {
+                rootNode = nullptr; // 解析失败
+            }
+        }
+        // 普通音频文件
+        else if (isffmpeg(rootDir))
         {
             auto fileNode = std::make_shared<PlaylistNode>(rootDir, false);
             MetaData md = FileScanner::getMetaData(rootDir);
@@ -640,27 +739,23 @@ void FileScanner::scanDir()
         return;
     }
 
-    // 情况2：rootDir 是目录，启用“根目录并行扫描”
-
-    // 给整个库建一个根节点
+    // ==========================================
+    // Case 2: Root 是目录
+    // ==========================================
     auto root = std::make_shared<PlaylistNode>(rootPath.string(), true);
-    // 设置根节点的封面Key
     root->setCoverKey(rootPath.string());
 
-    // 为了并行，我们先把根目录下的所有 entry 收集起来
+    // 1. 获取所有条目
     std::vector<fs::directory_entry> entries;
     try
     {
         for (const auto &entry : fs::directory_iterator(rootPath))
-        {
             entries.push_back(entry);
-        }
     }
     catch (...)
     {
     }
 
-    // 没有子项，直接结束
     if (entries.empty())
     {
         rootNode = root;
@@ -668,101 +763,131 @@ void FileScanner::scanDir()
         return;
     }
 
-    unsigned int hw = std::thread::hardware_concurrency();
-    if (hw == 0)
-        hw = 4;
-    unsigned int threadCount = std::min<unsigned int>(hw, entries.size());
+    // 2. [关键修复] 先在主线程处理根目录下的 CUE 文件
+    // 因为这会修改 processedFiles，如果在多线程里做会有竞争，
+    // 且根目录通常文件不多，直接主线程处理最安全。
+    std::set<std::string> rootProcessedFiles;
+    std::string rootDirCover = findDirectoryCover(rootPath);
 
-    struct WorkerResult
+    for (const auto &entry : entries)
     {
-        std::vector<std::shared_ptr<PlaylistNode>> children;
-    };
-
-    std::vector<std::thread> threads;
-    std::vector<WorkerResult> results(threadCount);
-
-    auto worker = [&](unsigned int idx, unsigned int begin, unsigned int end)
-    {
-        WorkerResult local;
-        for (unsigned int i = begin; i < end; ++i)
+        if (entry.is_regular_file() && hasExtension(entry.path().string(), ".cue"))
         {
-            const auto &entry = entries[i];
+            // 解析 CUE 并直接挂载到 root 下
+            std::set<std::string> handled = processCueAndAddNodes(entry.path(), root, rootDirCover);
+            rootProcessedFiles.insert(handled.begin(), handled.end());
+        }
+    }
+
+    // 3. 准备并发任务：过滤掉已被 CUE 处理的文件
+    std::vector<fs::directory_entry> workEntries;
+    for (const auto &entry : entries)
+    {
+        if (entry.is_directory())
+        {
+            workEntries.push_back(entry);
+        }
+        else if (entry.is_regular_file())
+        {
+            std::string path = entry.path().string();
+            std::string canon = path;
             try
             {
-                if (entry.is_directory())
-                {
-                    auto childDirNode = buildNodeFromDir(entry.path());
-                    if (childDirNode)
-                    {
-                        childDirNode->setParent(root);
-                        local.children.push_back(childDirNode);
-                    }
-                }
-                else if (entry.is_regular_file())
-                {
-                    std::string filePath = entry.path().string();
-                    if (isffmpeg(filePath))
-                    {
-                        auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
-                        MetaData md = FileScanner::getMetaData(filePath);
-                        std::string dirCover = findDirectoryCover(entry.path().parent_path());
-                        if (!dirCover.empty())
-                            md.setCoverPath(dirCover);
-
-                        fileNode->setMetaData(md);
-                        fileNode->setParent(root);
-                        local.children.push_back(fileNode);
-                    }
-                }
+                canon = fs::canonical(entry.path()).string();
             }
             catch (...)
             {
             }
+
+            // 如果不在黑名单里，才添加进待处理列表
+            if (rootProcessedFiles.find(path) == rootProcessedFiles.end() && rootProcessedFiles.find(canon) == rootProcessedFiles.end())
+            {
+                workEntries.push_back(entry);
+            }
         }
-        results[idx] = std::move(local);
-    };
-
-    unsigned int chunkSize = (entries.size() + threadCount - 1) / threadCount;
-    for (unsigned int t = 0; t < threadCount; ++t)
-    {
-        unsigned int begin = t * chunkSize;
-        unsigned int end = std::min<unsigned int>(begin + chunkSize, entries.size());
-        if (begin >= end)
-            break;
-        threads.emplace_back(worker, t, begin, end);
     }
 
-    for (auto &th : threads)
-    {
-        if (th.joinable())
-            th.join();
-    }
+    // 4. 并行扫描剩余内容 (子目录 + 未处理的单曲)
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0)
+        hw = 4;
+    unsigned int threadCount = std::min<unsigned int>(hw, workEntries.size());
 
-    std::vector<std::shared_ptr<PlaylistNode>> tmpChildren;
-    for (auto &r : results)
+    if (threadCount > 0)
     {
-        for (auto &ch : r.children)
+        struct WorkerResult
         {
-            if (ch)
-                tmpChildren.push_back(ch);
+            std::vector<std::shared_ptr<PlaylistNode>> children;
+        };
+        std::vector<std::thread> threads;
+        std::vector<WorkerResult> results(threadCount);
+
+        auto worker = [&](unsigned int idx, unsigned int begin, unsigned int end)
+        {
+            WorkerResult local;
+            for (unsigned int i = begin; i < end; ++i)
+            {
+                const auto &entry = workEntries[i];
+                try
+                {
+                    if (entry.is_directory())
+                    {
+                        auto childDirNode = buildNodeFromDir(entry.path());
+                        if (childDirNode)
+                        {
+                            local.children.push_back(childDirNode);
+                        }
+                    }
+                    else if (entry.is_regular_file())
+                    {
+                        std::string filePath = entry.path().string();
+                        if (isffmpeg(filePath))
+                        {
+                            auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
+                            MetaData md = FileScanner::getMetaData(filePath);
+                            if (!rootDirCover.empty())
+                                md.setCoverPath(rootDirCover);
+                            fileNode->setMetaData(md);
+                            local.children.push_back(fileNode);
+                        }
+                    }
+                }
+                catch (...)
+                {
+                }
+            }
+            results[idx] = std::move(local);
+        };
+
+        unsigned int chunkSize = (workEntries.size() + threadCount - 1) / threadCount;
+        for (unsigned int t = 0; t < threadCount; ++t)
+        {
+            unsigned int begin = t * chunkSize;
+            unsigned int end = std::min<unsigned int>(begin + chunkSize, workEntries.size());
+            if (begin < end)
+                threads.emplace_back(worker, t, begin, end);
+        }
+
+        for (auto &th : threads)
+            if (th.joinable())
+                th.join();
+
+        // 将并行结果合并到 root (此时 root 已经包含了 CUE 的分轨节点)
+        for (auto &r : results)
+        {
+            for (auto &ch : r.children)
+            {
+                root->addChild(ch);
+            }
         }
     }
 
-    std::sort(tmpChildren.begin(), tmpChildren.end(), [](auto &a, auto &b)
-              {
-                  if (a->isDir() != b->isDir())
-                      return a->isDir() && !b->isDir();
-                  return a->getPath() < b->getPath(); });
+    // 5. 最终排序
+    root->sortChildren();
 
-    for (auto &child : tmpChildren)
-    {
-        root->addChild(child);
-    }
-
-    // [新增] 处理根目录的封面（并行扫描结束后）
-    std::string rootCoverPath = findDirectoryCover(rootPath);
+    // 6. 处理根目录封面缓存
     std::string fallbackAudio;
-    for (const auto &child : tmpChildren)
+    for (const auto &child : root->getChildren())
     {
         if (!child->isDir())
         {
@@ -770,7 +895,7 @@ void FileScanner::scanDir()
             break;
         }
     }
-    cacheDirCover(rootPath.filename().string(), rootCoverPath, fallbackAudio);
+    cacheDirCover(rootPath.string(), rootDirCover, fallbackAudio);
 
     rootNode = root;
     hasScanCpld = true;

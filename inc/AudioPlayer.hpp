@@ -57,6 +57,7 @@ private:
     std::atomic<outputMod> outputMode{OUTPUT_MIXING};
     // playingState 由 stateMutex 保护
     PlayerState playingState{PlayerState::STOPPED};
+    PlayerState oldPlayingState{PlayerState::STOPPED};
     std::atomic<int64_t> seekTarget{0};
     bool isFirstPlay = true;
     std::atomic<bool> hasPreloaded{false};
