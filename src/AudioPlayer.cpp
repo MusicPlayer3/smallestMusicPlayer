@@ -265,6 +265,26 @@ bool AudioPlayer::setPath(const std::string &path)
 
     {
         std::lock_guard<std::mutex> lock(stateMutex);
+
+        // --- 修改开始: 保存当前状态 ---
+        if (playingState == PlayerState::SEEKING)
+        {
+            // 如果当前正在 Seeking，oldPlayingState 已经保存了 Seeking 之前的状态（播放或暂停）
+            // 所以这里不需要做任何操作，保持原有的 oldPlayingState 即可
+        }
+        else if (playingState != PlayerState::STOPPED)
+        {
+            // 如果当前是播放或暂停，保存这个状态
+            oldPlayingState = playingState;
+        }
+        else
+        {
+            // 如果当前是 STOPPED（极少情况，或者是刚启动但还没进 play），默认切歌后尝试播放
+            // 但具体的行为还会被 decodeThread 中的 isFirstPlay 逻辑覆盖
+            oldPlayingState = PlayerState::PLAYING;
+        }
+        // --- 修改结束 ---
+
         playingState = PlayerState::STOPPED;
     }
 
@@ -486,11 +506,31 @@ void AudioPlayer::mainDecodeThread()
                 std::lock_guard<std::mutex> lock(stateMutex);
                 if (playingState == PlayerState::STOPPED)
                 {
-                    playingState = isFirstPlay ? PlayerState::PAUSED : PlayerState::PLAYING;
+                    // --- 修改开始: 恢复之前的状态 ---
+                    if (isFirstPlay)
+                    {
+                        // 第一次启动软件加载文件，默认暂停
+                        playingState = PlayerState::PAUSED;
+                    }
+                    else
+                    {
+                        // 切歌时，恢复 setPath 中保存的状态
+                        playingState = oldPlayingState;
+                    }
+                    // --- 修改结束 ---
                 }
-                if (playingState == PlayerState::PLAYING && m_audioDeviceID != 0)
+
+                // 根据最终决定的状态设置 SDL 设备
+                if (m_audioDeviceID != 0)
                 {
-                    SDL_PauseAudioDevice(m_audioDeviceID, 0);
+                    if (playingState == PlayerState::PLAYING)
+                    {
+                        SDL_PauseAudioDevice(m_audioDeviceID, 0); // 0 = Unpause (Play)
+                    }
+                    else
+                    {
+                        SDL_PauseAudioDevice(m_audioDeviceID, 1); // 1 = Pause
+                    }
                 }
             }
 

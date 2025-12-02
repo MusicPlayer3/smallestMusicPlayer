@@ -1,10 +1,8 @@
 #include "MediaController.hpp"
-#include "mpris_server.hpp"
-#include "SysMediaService.hpp"
+#include "SysMediaService.hpp" // 确保包含此头文件
 #include <random>
 
 // --- 静态辅助函数：递归查找第一个有效音频 ---
-// 解决根目录下只有文件夹（如 Disc 01/02）导致无法播放的问题
 static PlaylistNode *findFirstValidAudio(PlaylistNode *node)
 {
     if (!node)
@@ -15,14 +13,12 @@ static PlaylistNode *findFirstValidAudio(PlaylistNode *node)
     {
         if (child->isDir())
         {
-            // 如果是目录，递归查找
             PlaylistNode *found = findFirstValidAudio(child.get());
             if (found)
                 return found;
         }
         else
         {
-            // 如果是文件，检查是否为有效音频
             if (AudioPlayer::isValidAudio(child->getPath()))
             {
                 return child.get();
@@ -38,10 +34,12 @@ MediaController::MediaController()
 {
     player = std::make_shared<AudioPlayer>();
     scanner = std::make_unique<FileScanner>();
-    // SysMediaService 需要引用 *this
 
     monitorRunning = true;
     monitorThread = std::thread(&MediaController::monitorLoop, this);
+
+    // [修改] 保持原有逻辑，Windows下不实例化真正的 Service，
+    // 但下面的所有调用都需要判空。
 #ifndef __WIN32__
     mediaService = std::make_shared<SysMediaService>(*this);
 #endif
@@ -56,7 +54,7 @@ MediaController::~MediaController()
     }
 }
 
-// --- 监控线程 (核心：处理自动切歌与状态同步) ---
+// --- 监控线程 ---
 
 void MediaController::monitorLoop()
 {
@@ -64,29 +62,24 @@ void MediaController::monitorLoop()
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-        // 获取播放器当前的状态
         std::string realCurrentPath = player->getCurrentPath();
         int64_t currentAbsMicroseconds = player->getCurrentPositionMicroseconds();
 
         bool justSwitched = false;
 
         // ---------------------------------------------------------
-        // 情况 A: 物理文件发生了切换 (例如从 CD1.flac 切到了 CD2.flac)
+        // 情况 A: 物理文件发生了切换
         // ---------------------------------------------------------
         if (!realCurrentPath.empty() && realCurrentPath != lastDetectedPath)
         {
             std::lock_guard<std::recursive_mutex> lock(controllerMutex);
 
-            // 尝试在播放列表中找到对应的节点
             PlaylistNode *newNode = nullptr;
-
-            // 1. 优先检查当前节点的下一个 (最常见情况)
             PlaylistNode *potentialNext = calculateNextNode(currentPlayingSongs);
             if (potentialNext && potentialNext->getPath() == realCurrentPath)
             {
                 newNode = potentialNext;
             }
-            // 2. 如果不是下一首，尝试在当前目录找
             else if (currentPlayingSongs && currentPlayingSongs->getParent())
             {
                 for (auto &child : currentPlayingSongs->getParent()->getChildren())
@@ -101,23 +94,25 @@ void MediaController::monitorLoop()
 
             if (newNode)
             {
-                // 执行切换逻辑
                 playHistory.push_back(currentPlayingSongs);
                 if (playHistory.size() > MAX_HISTORY_SIZE)
                     playHistory.pop_front();
 
                 currentPlayingSongs = newNode;
                 updateMetaData(currentPlayingSongs);
-                mediaService->triggerSeeked(std::chrono::microseconds(0));
+
+                // [修改] 判空保护
+                if (mediaService)
+                    mediaService->triggerSeeked(std::chrono::microseconds(0));
 
                 justSwitched = true;
-                preloadNextSong(); // 预加载再下一首
+                preloadNextSong();
             }
 
             lastDetectedPath = realCurrentPath;
         }
         // ---------------------------------------------------------
-        // 情况 B: 同一文件内的 CUE 分轨切换 (核心修复)
+        // 情况 B: 同一文件内的 CUE 分轨切换
         // ---------------------------------------------------------
         else if (isPlaying.load() && !realCurrentPath.empty() && realCurrentPath == lastDetectedPath)
         {
@@ -125,52 +120,30 @@ void MediaController::monitorLoop()
 
             if (currentPlayingSongs)
             {
-                // 获取当前逻辑轨道的边界信息
                 int64_t startOffset = currentPlayingSongs->getMetaData().getOffset();
                 int64_t duration = currentPlayingSongs->getMetaData().getDuration();
 
-                // 只有当 duration 有效 (>0) 时才进行判断
-                // 如果 duration 为 0，说明它是单文件且不是 CUE 分轨，或者无法计算时长
                 if (duration > 0)
                 {
-                    // 计算预期的结束时间点 (绝对时间)
-                    // 给 500ms 的容错缓冲，避免因定时器抖动导致跳过太快
                     int64_t expectedEndTime = startOffset + duration;
-
-                    // 检测：当前物理播放位置 是否已经超过了 当前轨道的结束时间
                     if (currentAbsMicroseconds >= expectedEndTime)
                     {
-                        // 看起来这首歌放完了，看看有没有下一首
                         PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
-
-                        // 关键判断：下一首是否属于同一个物理文件？
-                        // 如果是，说明这是 CUE 的自然过渡，底层播放器不会停，我们需要手动更新 UI 状态
                         if (nextNode && nextNode->getPath() == currentPlayingSongs->getPath())
                         {
-                            // --- 执行逻辑切歌 ---
-
-                            // 1. 记录历史
                             playHistory.push_back(currentPlayingSongs);
                             if (playHistory.size() > MAX_HISTORY_SIZE)
                                 playHistory.pop_front();
 
-                            // 2. 更新当前指针
                             currentPlayingSongs = nextNode;
-
-                            // 3. 更新系统元数据 (切歌了)
                             updateMetaData(currentPlayingSongs);
 
-                            // 4. 重置 UI 进度条
-                            // 因为底层音频流没断，UI 必须知道现在是新的一首歌，进度归零
-                            mediaService->triggerSeeked(std::chrono::microseconds(0));
+                            // [修改] 判空保护
+                            if (mediaService)
+                                mediaService->triggerSeeked(std::chrono::microseconds(0));
 
-                            // 5. 预加载再下一首
                             preloadNextSong();
-
                             justSwitched = true;
-
-                            // Log (可选)
-                            // SDL_Log("Auto-switched CUE track to: %s", currentPlayingSongs->getMetaData().getTitle().c_str());
                         }
                     }
                 }
@@ -184,7 +157,9 @@ void MediaController::monitorLoop()
             if (!player->isPlaying())
             {
                 isPlaying = false;
-                mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+                // [修改] 判空保护
+                if (mediaService)
+                    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
             }
         }
 
@@ -193,13 +168,15 @@ void MediaController::monitorLoop()
         {
             if (!justSwitched)
             {
-                mediaService->setPosition(std::chrono::microseconds(getCurrentPosMicroseconds()));
+                // [修改] 判空保护
+                if (mediaService)
+                    mediaService->setPosition(std::chrono::microseconds(getCurrentPosMicroseconds()));
             }
         }
     }
 }
 
-// --- 核心逻辑：计算与预加载 ---
+// --- 核心逻辑 ---
 
 PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current)
 {
@@ -207,16 +184,13 @@ PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current)
         return nullptr;
     auto parent = current->getParent();
     if (!parent)
-        return nullptr; // 根节点下通常没有直接歌曲，或者没有父节点
+        return nullptr;
 
-    // 如果是乱序模式
     if (isShuffle.load())
     {
-        // 在当前目录下随机找一首
         return pickRandomSong(parent.get());
     }
 
-    // 顺序模式
     const auto &siblings = parent->getChildren();
     auto it = std::find_if(siblings.begin(), siblings.end(),
                            [current](const std::shared_ptr<PlaylistNode> &node)
@@ -227,7 +201,6 @@ PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current)
     if (it == siblings.end())
         return nullptr;
 
-    // 往后找
     auto nextIt = it;
     while (++nextIt != siblings.end())
     {
@@ -235,7 +208,6 @@ PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current)
             return (*nextIt).get();
     }
 
-    // 如果到了末尾，循环回到头部 (可选，这里实现循环列表)
     for (auto loopIt = siblings.begin(); loopIt != it; ++loopIt)
     {
         if (!(*loopIt)->isDir())
@@ -247,20 +219,13 @@ PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current)
 
 void MediaController::preloadNextSong()
 {
-    // 这个函数必须在持有锁的情况下调用，或者确保 currentPlayingSongs 安全
     PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
-
     if (nextNode)
     {
-        // 调用 AudioPlayer 的预加载接口
-        // 注意：预加载暂不支持 seek 到 offset，这里只支持普通文件的预加载
-        // 如果 nextNode 是 CUE 的一部分，可能需要底层支持带 offset 的预加载
-        // 暂维持原样，对于单文件CUE，path 是一样的，AudioPlayer 可能不会重新打开，而是继续播放
         player->setPreloadPath(nextNode->getPath());
     }
     else
     {
-        // 没有下一首了，清除预加载
         player->setPreloadPath("");
     }
 }
@@ -279,17 +244,15 @@ PlaylistNode *MediaController::pickRandomSong(PlaylistNode *scope)
     if (candidates.empty())
         return nullptr;
     if (candidates.size() == 1)
-        return candidates[0]; // 只有一首
+        return candidates[0];
 
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, candidates.size() - 1);
 
-    // 简单随机，可能重复上一首，稍微优化可以排除当前 currentPlayingSongs
     PlaylistNode *picked = candidates[dis(gen)];
     if (picked == currentPlayingSongs && candidates.size() > 1)
     {
-        // 简单的重试一次避免连续重复
         picked = candidates[dis(gen)];
     }
     return picked;
@@ -310,32 +273,38 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
             playHistory.pop_front();
     }
 
-    // 在更新 currentPlayingSongs 之前，先获取当前播放器的实际路径
     std::string oldPath = player->getCurrentPath();
     std::string newPath = node->getPath();
 
+    // [修改] 确定预期状态：
+    // 使用 isPlaying.load() 来判断。
+    // 如果当前是播放中 (isPlaying==true)，切歌后 shouldPlay=true (继续播放)。
+    // 如果当前是暂停中 (isPlaying==false)，切歌后 shouldPlay=false (保持暂停)。
+    // SysMediaService 没有 getPlaybackStatus()，所以我们必须信任 MediaController 自己的状态。
+    bool shouldPlay = isPlaying.load();
+
+    // 特殊处理：如果是用户手动切歌（!isAutoSwitch）且当前是停止状态，
+    // 通常用户期望点击即播放，这里可以根据需求调整。
+    // 但为了严格遵守"保持状态"的逻辑，我们这里完全遵从 isPlaying。
+    // 注意：如果是首次播放，isPlaying 默认为 false，可能导致点击第一首歌不播放的问题。
+    // 为了解决这个问题，如果 oldPath 为空（第一次播放），我们强制播放。
+    if (oldPath.empty())
+    {
+        shouldPlay = true;
+    }
+
     currentPlayingSongs = node;
 
-    // 2. 核心播放控制逻辑 (修复点)
+    // 2. 核心播放控制逻辑
     if (oldPath != newPath)
     {
-        // === 情况 A: 切换到了不同的音频文件 (普通切歌) ===
-
-        // 先暂停，让解码线程停止对旧文件的占用
-        player->pause();
-
-        // 设置新路径
+        // === 情况 A: 切换到了不同的音频文件 ===
+        // AudioPlayer::setPath 内部会处理解码器的状态保存和恢复
         player->setPath(newPath);
 
-        // // [关键修复] 给底层一点时间关闭旧文件并打开新文件
-        // 50ms 是一个安全值，既不影响体验，又能保证文件句柄切换完成
+        // 给一点时间让解码线程启动
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-        // 开始播放新文件 (默认从头开始)
-        player->play();
-
-        // 如果新文件也有 Offset (极少见的情况，或者是带有 Offset 的普通文件播放请求)，则 Seek
-        // 但通常普通文件播放 Offset 为 0，这里不需要额外操作
         int64_t offset = node->getMetaData().getOffset();
         if (offset > 0)
         {
@@ -347,37 +316,43 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     {
         // === 情况 B: 文件路径相同 (CUE 分轨切换 / 单曲循环重播) ===
 
-        // 确保处于播放状态
-        player->play();
+        // 如果我们期望播放，且当前实际上没在播放（例如处于 Stopped 状态），则强制 Play。
+        // 如果 shouldPlay 为 false (暂停)，我们不需要调用 play()，seek 后会保持暂停。
+        if (shouldPlay && !player->isPlaying())
+        {
+            player->play();
+        }
 
         int64_t offset = node->getMetaData().getOffset();
-
-        // CUE 切歌需要 Seek；如果是单曲循环(Offset=0)也需要 Seek 到 0
         if (offset > 0)
         {
-            // 给解码器一点时间缓冲
             std::this_thread::sleep_for(std::chrono::milliseconds(15));
             player->seek(offset);
         }
         else
         {
-            // 如果是同一个文件切回来，且 Offset 为 0 (比如重头播放)，直接 Seek 0
-            // 这里不需要 sleep，因为已经在播放中
             player->seek(0);
         }
     }
 
     // 3. 更新状态
-    isPlaying = true;
-    lastDetectedPath = newPath; // 更新 path 防止 monitor 误判
+    isPlaying = shouldPlay;
+    lastDetectedPath = newPath;
 
     // 4. 更新元数据
     updateMetaData(node);
-    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
 
-    // 通知 MPRIS 进度归零
-    mediaService->setPosition(std::chrono::microseconds(0));
-    mediaService->triggerSeeked(std::chrono::microseconds(0));
+    // [修改] 判空保护并设置 MPRIS 状态
+    if (mediaService)
+    {
+        if (shouldPlay)
+            mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
+        else
+            mediaService->setPlayBackStatus(mpris::PlaybackStatus::Paused);
+
+        mediaService->setPosition(std::chrono::microseconds(0));
+        mediaService->triggerSeeked(std::chrono::microseconds(0));
+    }
 
     // 5. 设置下一首预加载
     preloadNextSong();
@@ -387,33 +362,40 @@ void MediaController::play()
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
 
-    // 如果指针为空（尚未播放过），尝试从当前目录或根目录查找第一首
     if (!currentPlayingSongs)
     {
-        // 确定搜索起点：优先 currentDir，若为空则用 rootNode
         PlaylistNode *searchStart = currentDir ? currentDir : rootNode.get();
-
-        // 使用递归查找，跳过非歌曲文件和空文件夹
         PlaylistNode *firstSong = findFirstValidAudio(searchStart);
 
         if (firstSong)
         {
             playNode(firstSong);
+            player->play();
         }
         return;
     }
 
-    // 正常恢复播放
+    // 用户明确点击播放，强制播放
     player->play();
     isPlaying = true;
-    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
+
+    // [修改] 判空保护
+    if (mediaService)
+    {
+        mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
+    }
 }
 
 void MediaController::pause()
 {
     player->pause();
     isPlaying = false;
-    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Paused);
+
+    // [修改] 判空保护
+    if (mediaService)
+    {
+        mediaService->setPlayBackStatus(mpris::PlaybackStatus::Paused);
+    }
 }
 
 void MediaController::playpluse()
@@ -429,23 +411,24 @@ void MediaController::stop()
     player->pause();
     seek(0);
     isPlaying = false;
-    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+
+    // [修改] 判空保护
+    if (mediaService)
+    {
+        mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+    }
 }
 
 void MediaController::next()
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-
-    // 计算下一首 (基于 Shuffle 或 顺序)
     PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
-
     if (nextNode)
     {
         playNode(nextNode);
     }
     else
     {
-        // 列表尽头，停止
         stop();
     }
 }
@@ -454,34 +437,31 @@ void MediaController::prev()
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
 
-    // 1. 如果当前播放时间长，则是重头放
     if (getCurrentPosMicroseconds() > 10000000) // 10秒
     {
         seek(0);
         return;
     }
 
-    // 2. 检查历史队列
     if (!playHistory.empty())
     {
         PlaylistNode *prevNode = playHistory.back();
-        playHistory.pop_back(); // 弹出最近的一首
+        playHistory.pop_back();
 
         std::string oldPath = player->getCurrentPath();
         std::string newPath = prevNode->getPath();
 
+        // [修改] 状态判断逻辑：同 playNode
+        bool shouldPlay = isPlaying.load();
+
         currentPlayingSongs = prevNode;
 
-        // === 核心修复逻辑 (同 playNode) ===
         if (oldPath != newPath)
         {
-            // 切换不同文件：Pause -> SetPath -> Wait -> Play
-            player->pause();
+            // 切换不同文件：让 AudioPlayer 处理状态保持
             player->setPath(newPath);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            player->play();
 
-            // 如果上一首是 CUE 的某一轨（跨文件CUE），也需要 Seek
             int64_t offset = prevNode->getMetaData().getOffset();
             if (offset > 0)
             {
@@ -491,27 +471,39 @@ void MediaController::prev()
         }
         else
         {
-            // 同文件回退：Play -> Seek
-            player->play();
+            // 同文件回退
+            if (shouldPlay && !player->isPlaying())
+            {
+                player->play();
+            }
+
             int64_t offset = prevNode->getMetaData().getOffset();
             std::this_thread::sleep_for(std::chrono::milliseconds(15));
-            player->seek(offset); // Offset 为 0 时也会 Seek 到 0
+            player->seek(offset);
         }
 
-        isPlaying = true;
+        isPlaying = shouldPlay;
         lastDetectedPath = newPath;
         updateMetaData(prevNode);
-        mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
 
-        // 通知 UI 进度归零
-        mediaService->triggerSeeked(std::chrono::microseconds(0));
+        // [修改] 判空保护
+        if (mediaService)
+        {
+            if (shouldPlay)
+            {
+                mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
+            }
+            else
+            {
+                mediaService->setPlayBackStatus(mpris::PlaybackStatus::Paused);
+            }
 
-        // 重新预加载
+            mediaService->triggerSeeked(std::chrono::microseconds(0));
+        }
         preloadNextSong();
     }
     else
     {
-        // 没有历史，尝试按顺序上一首
         seek(0);
     }
 }
@@ -519,7 +511,15 @@ void MediaController::prev()
 void MediaController::setNowPlayingSong(PlaylistNode *node)
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+    // 这里调用 playNode。根据上面 playNode 的逻辑，它会保持当前状态。
+    // 如果想要"点击歌单中的歌强制播放"，可以在这里判断：
     playNode(node);
+    if (!isPlaying)
+    {
+        play();
+    }
+    // 但根据需求"保持状态"，直接调用即可。
+    // playNode(node);
 }
 
 // --- 模式设置 ---
@@ -531,7 +531,6 @@ void MediaController::setShuffle(bool shuffle)
 
     if (changed)
     {
-        // 模式改变了，下一首（预加载）的目标也变了
         std::lock_guard<std::recursive_mutex> lock(controllerMutex);
         preloadNextSong();
     }
@@ -598,17 +597,19 @@ void MediaController::updateMetaData(PlaylistNode *node)
     {
         FileScanner::extractCoverToTempFile(data.getFilePath(), data);
     }
-    mediaService->setMetaData(data);
+
+    // [修改] 判空保护
+    if (mediaService)
+    {
+        mediaService->setMetaData(data);
+    }
 }
 
-// [修改] 获取当前相对播放进度 (减去 Offset)
 int64_t MediaController::getCurrentPosMicroseconds()
 {
     int64_t absPos = player->getCurrentPositionMicroseconds();
     int64_t offset = 0;
 
-    // 加锁太慢，这里 currentPlayingSongs 指针本身是原子的（但在多线程下读取对象内容有风险）
-    // 建议使用锁，或者确保 metadata 是不可变的
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
     if (currentPlayingSongs)
     {
@@ -621,7 +622,6 @@ int64_t MediaController::getCurrentPosMicroseconds()
 
 int64_t MediaController::getDurationMicroseconds()
 {
-    // 如果是 CUE 分轨，应该返回 Metadata 里的 Duration，而不是物理文件的总长度
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
     if (currentPlayingSongs)
     {
@@ -630,7 +630,6 @@ int64_t MediaController::getDurationMicroseconds()
     return player->getDurationMicroseconds();
 }
 
-// [修改] Seek (输入的是相对位置，需要加上 Offset 转换为绝对位置)
 void MediaController::seek(int64_t pos_microsec)
 {
     int64_t offset = 0;
@@ -641,12 +640,13 @@ void MediaController::seek(int64_t pos_microsec)
             offset = currentPlayingSongs->getMetaData().getOffset();
         }
     }
-
-    // 物理 Seek = 轨道偏移量 + 请求的相对进度
     player->seek(offset + pos_microsec);
 
-    // UI 反馈的是相对进度
-    mediaService->setPosition(std::chrono::microseconds(pos_microsec));
+    // [修改] 判空保护
+    if (mediaService)
+    {
+        mediaService->setPosition(std::chrono::microseconds(pos_microsec));
+    }
 }
 
 // --- 初始化与扫描 ---
