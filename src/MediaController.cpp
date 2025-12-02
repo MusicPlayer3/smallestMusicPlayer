@@ -528,6 +528,12 @@ void MediaController::setShuffle(bool shuffle)
 {
     bool changed = (isShuffle.load() != shuffle);
     isShuffle.store(shuffle);
+#ifdef __linux__
+    if (mediaService)
+    {
+        mediaService->setShuffle(shuffle);
+    }
+#endif
 
     if (changed)
     {
