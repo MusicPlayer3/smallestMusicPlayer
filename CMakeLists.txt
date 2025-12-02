@@ -11,7 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ------------------------------
 # QML 项目需要 Quick，保留 Multimedia 和 LinguistTools (用于翻译)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Multimedia LinguistTools QuickControls2)
+find_package(Qt6 REQUIRED COMPONENTS Quick Multimedia LinguistTools QuickControls2 Widgets)
 qt_standard_project_setup(REQUIRES 6.8)
 qt_policy(SET QTP0004 NEW) # 优化 QML 模块的隐式导入行为
 
@@ -156,7 +156,7 @@ else()
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
         MACOSX_BUNDLE TRUE
-        WIN32_EXECUTABLE TRUE
+        # WIN32_EXECUTABLE TRUE
         # 开启 IPO/LTO (链接时优化) - 这一步对 C++23 音视频项目很重要
         INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
     )
@@ -202,6 +202,7 @@ target_link_libraries(appMusicPlayer
     PRIVATE
         Qt6::Quick
         Qt6::QuickControls2
+        Qt6::Widgets
         ${FFMPEG_LIBRARIES}
         ${SDL2_LIBRARIES}
         ${TAGLIB_LIBRARIES}
