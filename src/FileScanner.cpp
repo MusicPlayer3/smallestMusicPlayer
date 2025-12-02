@@ -23,6 +23,8 @@
 // DSF (DSD) - 需要 TagLib 1.9+
 #include <taglib/dsffile.h>
 
+// 确保包含 filesystem
+#include <filesystem>
 namespace fs = std::filesystem;
 
 // ==========================================
@@ -181,6 +183,8 @@ static std::string findRealAudioFile(const fs::path &dirPath, const std::string 
 static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
 {
     std::vector<CueTrackInfo> tracks;
+    // C++17 filesystem::path 支持直接用于 ifstream 构造
+    // 在 Windows 上它会自动处理宽字符路径
     std::ifstream file(cuePath);
     if (!file.is_open())
         return tracks;
@@ -295,12 +299,18 @@ static TagLib::ByteVector extractID3v2Cover(TagLib::ID3v2::Tag *tag)
 static TagLib::ByteVector extractCoverData(const std::string &musicPath)
 {
     TagLib::ByteVector data;
-    std::string ext = getLowerExtension(musicPath); // 使用之前定义的 helper
+    std::string ext = getLowerExtension(musicPath);
+
+    // [关键修改] 使用 fs::path 并转为 c_str()
+    // 在 Windows 下 c_str() 返回 const wchar_t*，在 POSIX 下返回 const char*
+    // TagLib 提供了宽字符的构造函数重载，能正确打开包含 Unicode 的路径
+    fs::path p(musicPath);
+    p.make_preferred(); // 确保分隔符正确
 
     // 1. MP3 / MP2 / MP1 (ID3v2)
     if (ext == ".mp3" || ext == ".mp2" || ext == ".mp1")
     {
-        TagLib::MPEG::File file(musicPath.c_str(), false); // false = 不读音频属性，只读 Tag
+        TagLib::MPEG::File file(p.c_str(), false); // false = 不读音频属性，只读 Tag
         if (file.isValid() && file.ID3v2Tag())
         {
             data = extractID3v2Cover(file.ID3v2Tag());
@@ -309,7 +319,7 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     // 2. FLAC (FLAC Picture Block)
     else if (ext == ".flac")
     {
-        TagLib::FLAC::File file(musicPath.c_str(), false);
+        TagLib::FLAC::File file(p.c_str(), false);
         if (file.isValid())
         {
             const auto &pictures = file.pictureList();
@@ -322,7 +332,7 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     // 3. MP4 / M4A / AAC / ALAC (MP4 Atoms)
     else if (ext == ".m4a" || ext == ".mp4" || ext == ".aac" || ext == ".alac" || ext == ".m4b")
     {
-        TagLib::MP4::File file(musicPath.c_str(), false);
+        TagLib::MP4::File file(p.c_str(), false);
         if (file.isValid() && file.tag())
         {
             TagLib::MP4::Tag *tag = file.tag();
@@ -341,7 +351,7 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     // 4. WMA / ASF (Windows Media Attributes)
     else if (ext == ".wma" || ext == ".asf")
     {
-        TagLib::ASF::File file(musicPath.c_str(), false);
+        TagLib::ASF::File file(p.c_str(), false);
         if (file.isValid() && file.tag())
         {
             // WMA 封面存储在 "WM/Picture" 属性中
@@ -362,7 +372,7 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     else if (ext == ".wav")
     {
         // TagLib 处理 WAV 时，readProperties=false 非常重要，否则会扫描整个大文件
-        TagLib::RIFF::WAV::File file(musicPath.c_str(), false);
+        TagLib::RIFF::WAV::File file(p.c_str(), false);
         if (file.isValid() && file.ID3v2Tag())
         {
             data = extractID3v2Cover(file.ID3v2Tag());
@@ -371,7 +381,7 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     // 6. AIFF / AIF (ID3v2 Chunk)
     else if (ext == ".aiff" || ext == ".aif")
     {
-        TagLib::RIFF::AIFF::File file(musicPath.c_str(), false);
+        TagLib::RIFF::AIFF::File file(p.c_str(), false);
         if (file.isValid() && file.tag())
         {
             // AIFF 可能有 ID3v2 标签
@@ -384,7 +394,7 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     // 7. DSF (DSD Stream File) - ID3v2
     // else if (ext == ".dsf")
     // {
-    //     TagLib::DSF::File file(musicPath.c_str(), false);
+    //     TagLib::DSF::File file(p.c_str(), false);
     //     if (file.isValid() && file.hasID3v2Tag())
     //     {
     //         data = extractID3v2Cover(file.tag());
@@ -432,10 +442,29 @@ static void cacheDirCover(const std::string &dirPath, const std::string &explici
     unsigned char *imgPixels = nullptr;
 
     // A. 尝试加载显式的封面文件 (如 cover.jpg)
-    if (!explicitCoverPath.empty() && fs::exists(explicitCoverPath))
+    // 注意：stbi_load 默认使用 const char*，在 Windows 处理中文路径可能需要 stbi_load_from_memory + ifstream(wide)
+    // 或者 stbi_load 内部如果有宽字符支持。
+    // 这里简单处理：如果 explicitCoverPath 存在，用 fs::path 转 wchar 读入内存再 load
+    if (!explicitCoverPath.empty())
     {
-        // 使用 stbi_load 加载文件
-        imgPixels = stbi_load(explicitCoverPath.c_str(), &width, &height, &channels, 4);
+        fs::path p(explicitCoverPath);
+        p.make_preferred();
+        if (fs::exists(p))
+        {
+            // stbi_load 在 Windows 上直接用 char* 路径可能有编码问题
+            // 为了保险，我们用 ifstream 读取文件流，再从内存加载
+            std::ifstream file(p, std::ios::binary | std::ios::ate);
+            if (file.good())
+            {
+                std::streamsize size = file.tellg();
+                file.seekg(0, std::ios::beg);
+                std::vector<char> buffer(size);
+                if (file.read(buffer.data(), size))
+                {
+                    imgPixels = stbi_load_from_memory(reinterpret_cast<const unsigned char *>(buffer.data()), size, &width, &height, &channels, 4);
+                }
+            }
+        }
     }
 
     // B. 如果没有显式封面，且有备选音频文件，尝试提取内嵌封面
@@ -460,20 +489,27 @@ static void cacheDirCover(const std::string &dirPath, const std::string &explici
 
 MetaData FileScanner::getMetaData(const std::string &musicPath)
 {
-    fs::path path(musicPath);
+    // [关键修改] 使用 fs::path 构造，自动处理分隔符
+    fs::path p(musicPath);
+    p.make_preferred();
+    static int cnt = 0;
+    cnt++;
     MetaData musicData;
 
     // isffmpeg 保证了后缀是音频且文件有效
-    if (fs::exists(path) && isffmpeg(musicPath))
+    if (fs::exists(p) && isffmpeg(musicPath))
     {
         // 1. 获取基本元数据
-        TagLib::FileRef f(musicPath.c_str());
+        // [关键修改] 使用 p.c_str() 传递宽字符路径给 TagLib
+        auto dir = p.c_str();
+        TagLib::FileRef f(dir);
 
         if (!f.isNull() && f.tag())
         {
             TagLib::Tag *tag = f.tag();
-            musicData.setFilePath(musicPath);
-            musicData.setParentDir(path.parent_path().string());
+            // 注意：musicPath 依然保存为 string 用于 QML 显示，但读取过程用宽字符
+            musicData.setFilePath(p.string());
+            musicData.setParentDir(p.parent_path().string());
             musicData.setTitle(tag->title().toCString(true));
             musicData.setArtist(tag->artist().toCString(true));
             musicData.setAlbum(tag->album().toCString(true));
@@ -501,6 +537,14 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
                     stbi_image_free(imgPixels);
                 }
             }
+            // SDL_Log("[getMetaData] %s", musicData.getFilePath().c_str());
+            // SDL_Log("title: %s", musicData.getTitle().c_str());
+            // SDL_Log("artist: %s", musicData.getArtist().c_str());
+            // SDL_Log("album: %s", musicData.getAlbum().c_str());
+            // SDL_Log("year: %s", musicData.getYear().c_str());
+            // SDL_Log("duration: %d", musicData.getDuration());
+            // SDL_Log("offset: %d", musicData.getOffset());
+            // SDL_Log("now cnt:%d", cnt);
         }
     }
     return musicData;
@@ -530,14 +574,22 @@ static std::set<std::string> processCueAndAddNodes(
                 handledAudioFiles.insert(realAudioPath);
                 try
                 {
-                    handledAudioFiles.insert(fs::canonical(realAudioPath).string());
+                    // 统一使用 preferred 格式存入 set，避免重复
+                    fs::path p(realAudioPath);
+                    p.make_preferred();
+                    handledAudioFiles.insert(p.string());
+                    handledAudioFiles.insert(fs::canonical(p).string());
                 }
                 catch (...)
                 {
                 }
 
-                auto trackNode = std::make_shared<PlaylistNode>(realAudioPath, false);
-                MetaData md = FileScanner::getMetaData(realAudioPath);
+                // 构造节点时也确保路径格式正确
+                fs::path pAudio(realAudioPath);
+                pAudio.make_preferred();
+
+                auto trackNode = std::make_shared<PlaylistNode>(pAudio.string(), false);
+                MetaData md = FileScanner::getMetaData(pAudio.string());
 
                 if (!track.title.empty())
                     md.setTitle(track.title);
@@ -582,8 +634,13 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
     if (fs::is_symlink(dirPath))
         return nullptr;
 
-    auto node = std::make_shared<PlaylistNode>(dirPath.string(), true);
-    node->setCoverKey(dirPath.string());
+    // [关键修改] 创建副本并转换为系统首选格式 (Windows下转为反斜杠)
+    fs::path preferredPath = dirPath;
+    preferredPath.make_preferred();
+    std::string dirPathStr = preferredPath.string();
+
+    auto node = std::make_shared<PlaylistNode>(dirPathStr, true);
+    node->setCoverKey(dirPathStr);
 
     std::vector<std::shared_ptr<PlaylistNode>> tmpChildren;
 
@@ -591,11 +648,11 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
     // 但因为 processCueAndAddNodes 直接操作 parentNode，我们需要稍微调整策略：
     // 这里我们直接传 node 进去，最后再统一对 node->children 排序。
 
-    std::string dirCoverPath = findDirectoryCover(dirPath);
+    std::string dirCoverPath = findDirectoryCover(preferredPath);
     std::set<std::string> processedFiles;
 
     // A. 处理 CUE (使用新封装的函数)
-    for (const auto &entry : fs::directory_iterator(dirPath))
+    for (const auto &entry : fs::directory_iterator(preferredPath))
     {
         if (entry.is_regular_file() && hasExtension(entry.path().string(), ".cue"))
         {
@@ -605,12 +662,13 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
     }
 
     // B. 处理普通文件和子目录
-    for (const auto &entry : fs::directory_iterator(dirPath))
+    for (const auto &entry : fs::directory_iterator(preferredPath))
     {
         try
         {
             if (entry.is_directory())
             {
+                // 递归调用
                 auto childDirNode = buildNodeFromDir(entry.path());
                 if (childDirNode)
                 {
@@ -619,13 +677,16 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
             }
             else if (entry.is_regular_file())
             {
-                std::string filePath = entry.path().string();
+                // [关键修改] 对子文件也进行路径格式化
+                fs::path childPath = entry.path();
+                childPath.make_preferred();
+                std::string filePath = childPath.string();
 
                 // 检查是否已被 CUE 处理过
                 std::string canonicalPath = filePath;
                 try
                 {
-                    canonicalPath = fs::canonical(entry.path()).string();
+                    canonicalPath = fs::canonical(childPath).string();
                 }
                 catch (...)
                 {
@@ -652,19 +713,6 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
         }
     }
 
-    // 此时 node->children 里既有 CUE 分轨，也有普通文件，但顺序是乱的
-    // 我们需要通过 const_cast 或者修改 PlaylistNode 接口来排序 children。
-    // 假设 PlaylistNode 有 sortChildren 方法，或者我们手动取出重排。
-    // 由于 PlaylistNode 封装了 children，我们这里可以使用稍微“黑魔法”一点的方式，
-    // 或者在 PlaylistNode.hpp 中加一个 sortChildren() 方法（推荐）。
-
-    // 这里为了不修改 header 太多，我们先假设 scanDir 里会有排序。
-    // 但 buildNodeFromDir 返回的节点应该是排好序的。
-    // **建议在 PlaylistNode.hpp 中添加一个 public void sortChildren(...) 方法**
-    // 这里暂时不做排序，由外部调用者负责或者依赖 PlaylistNode 内部 vector 的访问权限。
-    // 下面这段代码假设你可以访问 children 并修改它，如果不能，请在 HPP 加接口。
-
-    // 这里是一个 hack 排序，实际建议加到类成员函数中：
     node->sortChildren();
     // 处理文件夹封面 fallback
     std::string fallbackAudio;
@@ -676,7 +724,7 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
             break;
         }
     }
-    cacheDirCover(dirPath.string(), dirCoverPath, fallbackAudio);
+    cacheDirCover(preferredPath.string(), dirCoverPath, fallbackAudio);
 
     return node;
 }
@@ -684,7 +732,10 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 void FileScanner::scanDir()
 {
     FileScanner::initSupportedExtensions();
+
+    // [关键修改] 入口处统一 RootPath 格式，后续所有子路径都会继承这个格式
     fs::path rootPath(rootDir);
+    rootPath.make_preferred();
 
     if (!fs::exists(rootPath))
     {
@@ -723,8 +774,8 @@ void FileScanner::scanDir()
         // 普通音频文件
         else if (isffmpeg(rootDir))
         {
-            auto fileNode = std::make_shared<PlaylistNode>(rootDir, false);
-            MetaData md = FileScanner::getMetaData(rootDir);
+            auto fileNode = std::make_shared<PlaylistNode>(rootPath.string(), false);
+            MetaData md = FileScanner::getMetaData(rootPath.string());
             std::string dirCover = findDirectoryCover(rootPath.parent_path());
             if (!dirCover.empty())
                 md.setCoverPath(dirCover);
@@ -749,6 +800,7 @@ void FileScanner::scanDir()
     std::vector<fs::directory_entry> entries;
     try
     {
+        // rootPath 已经是 preferred (Windows下全是反斜杠)，遍历出来的 entry 也会是统一的
         for (const auto &entry : fs::directory_iterator(rootPath))
             entries.push_back(entry);
     }
@@ -764,8 +816,6 @@ void FileScanner::scanDir()
     }
 
     // 2. [关键修复] 先在主线程处理根目录下的 CUE 文件
-    // 因为这会修改 processedFiles，如果在多线程里做会有竞争，
-    // 且根目录通常文件不多，直接主线程处理最安全。
     std::set<std::string> rootProcessedFiles;
     std::string rootDirCover = findDirectoryCover(rootPath);
 
@@ -789,7 +839,11 @@ void FileScanner::scanDir()
         }
         else if (entry.is_regular_file())
         {
-            std::string path = entry.path().string();
+            // 在检查是否已处理时，统一格式，确保字符串匹配准确
+            fs::path p = entry.path();
+            p.make_preferred();
+            std::string path = p.string();
+
             std::string canon = path;
             try
             {
@@ -840,7 +894,11 @@ void FileScanner::scanDir()
                     }
                     else if (entry.is_regular_file())
                     {
-                        std::string filePath = entry.path().string();
+                        // 统一格式
+                        fs::path p = entry.path();
+                        p.make_preferred();
+                        std::string filePath = p.string();
+
                         if (isffmpeg(filePath))
                         {
                             auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
@@ -1011,6 +1069,7 @@ void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData 
         }
     }
 
+    // 使用 fs::path 构造 ofstream，Windows 下自动处理宽字符路径
     std::ofstream outFile(targetPath, std::ios::out | std::ios::binary | std::ios::trunc);
     if (outFile.is_open())
     {

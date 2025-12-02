@@ -3,6 +3,7 @@ import QtQuick.Controls
 import Qt5Compat.GraphicalEffects
 import QtQuick.Effects
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 import "./"
 
@@ -50,6 +51,46 @@ ApplicationWindow {
             let delta = Qt.point(mouse.x - clickPos.x ,mouse.y - clickPos.y)
             window.x += delta.x
             window.y += delta.y
+        }
+    }
+
+    // 这个让我的文件选择窗口自动在一开始就打开
+    Component.onCompleted: {
+        console.log("Application loaded. Automatically opening folder dialog.")
+        // 1. 自动打开对话框
+        folderDialog.open()
+    }
+
+    // 文件选择窗口
+    FolderDialog {
+        id: folderDialog
+        title: "选择音乐文件夹"
+
+        // 绑定 C++ 提供的默认路径 (CONSTANT 属性)
+        //folder: playerController.defaultMusicPath
+
+        // 当用户点击“确定”选择文件夹后触发
+        onAccepted: {
+            console.log("folderDialog.folder 的原始值:", folderDialog.selectedFolder);
+
+            // 将获取到的文件路径转成合适的url
+            var urlObject = new URL(folderDialog.selectedFolder);
+            var folderPath = urlObject.pathname;
+
+            if (Qt.platform.os === "windows" && folderPath.startsWith("/")) {
+                folderPath = folderPath.substring(1);
+            }
+
+            // 调用 C++ 方法开始扫描
+            if(folderPath === null){
+                console.log("You not select a folder")
+            }
+            else{
+                playerController.startMediaScan(folderPath)
+            }
+        }
+        onRejected: {
+            console.log("Folder selection cancelled.")
         }
     }
 

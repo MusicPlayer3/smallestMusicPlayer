@@ -36,7 +36,7 @@ if(WIN32)
     set(SDL2_LIBRARY_DIRS ${SDL2_ROOT}/lib)
     set(SDL2_LIBRARIES SDL2)
 
-    set(TAGLIB_ROOT "C:/Program Files (x86)/taglib" CACHE PATH "Path to TagLib install directory on Windows.")
+    set(TAGLIB_ROOT "C:/msys64/mingw64" CACHE PATH "Path to TagLib install directory on Windows.")
     set(TAGLIB_INCLUDE_DIRS ${TAGLIB_ROOT}/include)
     set(TAGLIB_LIBRARY_DIRS ${TAGLIB_ROOT}/lib)
     set(TAGLIB_LIBRARIES tag)
@@ -95,6 +95,7 @@ qt_add_executable(appMusicPlayer
     inc/AudioPlayer.hpp
     inc/CoverCache.hpp
     inc/CoverImage.hpp
+    inc/CoverImageProvider.hpp
     inc/FileScanner.hpp
     inc/MediaController.hpp
     inc/MetaData.hpp
@@ -105,15 +106,18 @@ qt_add_executable(appMusicPlayer
     inc/stb_image_write.h
     inc/stb_image.h
     inc/SysMediaService.hpp
+    inc/uicontroller.h
 
     src/AudioPlayer.cpp
     src/CoverCache.cpp
+    src/CoverImageProvider.cpp
     src/FileScanner.cpp
     src/main.cpp
     src/MediaController.cpp
     src/musiclistmodel.cpp
     src/StbImpl.cpp
     src/SysMediaService.cpp
+    src/UIController.cpp
 
 )
 
@@ -131,6 +135,10 @@ qt_add_qml_module(appMusicPlayer
         qml/MusicListHeader.qml
         qml/MusicListItemDelegate.qml
         qml/MusicListView.qml
+        SOURCES inc/CoverImageProvider.hpp
+        SOURCES src/CoverImageProvider.cpp
+        SOURCES inc/uicontroller.h
+        SOURCES src/UIController.cpp
 )
 
 # ------------------------------
