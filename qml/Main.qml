@@ -283,8 +283,8 @@ ApplicationWindow {
         // ==========================================
         Item {
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: 260
-            Layout.preferredHeight: 260
+            Layout.preferredWidth: 256
+            Layout.preferredHeight: 256
 
             //阴影源
             RectangularGlow {
@@ -308,7 +308,8 @@ ApplicationWindow {
                 Image {
                     id: bigPNG
                     anchors.fill: parent
-                    source: "qrc:/cover4.png" // TODO:替换为后端提供的封面 URL, 记得到时候把下面的false给取消了, 还有下面那个Text
+                    // 后端来了，采用的是当 C++ 检测到指针变化并 emit 信号时，这里会自动刷新
+                    source: playerController.coverArtSource // TODO:替换为后端提供的封面 URL, 记得到时候把下面的false给取消了, 还有下面那个Text
                     fillMode: Image.PreserveAspectCrop
 
                     layer.enabled: true
@@ -336,8 +337,7 @@ ApplicationWindow {
             spacing: 15
 
             Text {
-                // TODO：[修改]: 绑定当前播放时间
-                text: "2:24" // 绑定后端 current_time--------------
+                text: playerController.currentPosText
                 color: "white"
                 font.pixelSize: 12
             }
@@ -376,8 +376,7 @@ ApplicationWindow {
             }
 
             Text {
-                // TODO：[修改]: 显示剩余时长
-                text: "-1:37" // 绑定后端 total_time----------------
+                text: playerController.remainingTimeText
                 color: "white"
                 font.pixelSize: 12
             }
@@ -394,7 +393,7 @@ ApplicationWindow {
             spacing: 5 // 相邻紧凑一点
 
             Text {
-                text: "EXEC_LINCA/." // TODO:绑定后端 title----------
+                text: playerController.songTitle
                 color: "white"
                 font.pixelSize: 22
                 font.bold: true
@@ -402,14 +401,14 @@ ApplicationWindow {
             }
 
             Text {
-                text: "霜月はるか" // TODO:绑定后端 artist------------
+                text: playerController.artistName
                 color: "#DDDDDD"
                 font.pixelSize: 16
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
             Text {
-                text: "月奏~ツキカナデ -Ar tonelico..." // TODO:绑定后端 album-------------
+                text: playerController.albumName
                 color: "#AAAAAA"
                 font.pixelSize: 14
                 anchors.horizontalCenter: parent.horizontalCenter
