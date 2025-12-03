@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 #include <cstring>
+#include <unordered_set>
 
 #include <taglib/attachedpictureframe.h>
 #include <taglib/fileref.h>
