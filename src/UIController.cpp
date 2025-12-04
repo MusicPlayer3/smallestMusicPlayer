@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QUrl>
 #include <algorithm>
+#include <cmath> // 引入 abs
 #include <qdebug.h>
 #include <qtypes.h>
 #include <string>
@@ -31,9 +32,9 @@ UIController::UIController(QObject *parent) :
 #endif
 
     // 初始化轮询定时器
-    m_stateTimer.setInterval(200);
-    connect(&m_stateTimer, &QTimer::timeout, this, &UIController::updateStateFromController);
-    m_stateTimer.start();
+    // m_stateTimer.setInterval(200);
+    // connect(&m_stateTimer, &QTimer::timeout, this, &UIController::updateStateFromController);
+    // m_stateTimer.start();
 
     // --- 2. 高频轮询超级机器! 请有需求的Connect一下喵 ---
     m_stateTimer.setInterval(100); // 100ms 检测一次，保证切歌封面更新及时
@@ -115,6 +116,21 @@ void UIController::updateGradientColors(const QString &imagePath)
     }
 }
 
+void UIController::setIsSeeking(bool newIsSeeking)
+{
+    if (m_isSeeking != newIsSeeking)
+    {
+        m_isSeeking = newIsSeeking;
+        emit isSeekingChanged();
+        qDebug() << "UI Seeking state set to:" << newIsSeeking;
+
+        // 关键逻辑修改：
+        // 原有代码在这里强制调用 checkAndUpdateTimeState()。
+        // 但在暂停状态下，后端处理 seek 需要时间，强制同步会读取到旧时间，导致进度条回弹。
+        // 所以这里移除强制同步，让定时器在稍后自然轮询，或者依赖 seek() 中的乐观更新。
+    }
+}
+
 void UIController::playpluse()
 {
     // 调用 MediaController 的播放/暂停切换
@@ -135,8 +151,37 @@ void UIController::prev()
 
 void UIController::seek(qint64 pos_microsec)
 {
-    // 调用 MediaController 的 Seek 方法
+    // 1. 记录当前时间戳 (毫秒)
+    // 这是“短期自旋锁”的开始
+    m_lastSeekRequestTime = QDateTime::currentMSecsSinceEpoch();
+
+    // 2. 发送指令给后端
     m_mediaController.seek(pos_microsec);
+
+    // 3. 乐观更新 (Optimistic Update)
+    // 立即让 UI 响应，提升跟手度
+    if (m_currentPosMicrosec != pos_microsec)
+    {
+        m_currentPosMicrosec = pos_microsec;
+        emit currentPosMicrosecChanged();
+
+        // 立即更新显示文本
+        QString newCurrentPosText = formatTime(m_currentPosMicrosec);
+        if (m_currentPosText != newCurrentPosText)
+        {
+            m_currentPosText = newCurrentPosText;
+            emit currentPosTextChanged();
+        }
+
+        // 立即更新剩余时间
+        qint64 remainingMicrosecs = std::max((qint64)0, m_totalDurationMicrosec - m_currentPosMicrosec);
+        QString newRemainingTimeText = formatTime(remainingMicrosecs);
+        if (m_remainingTimeText != newRemainingTimeText)
+        {
+            m_remainingTimeText = newRemainingTimeText;
+            emit remainingTimeTextChanged();
+        }
+    }
 }
 
 // 这里是getter们
@@ -343,17 +388,35 @@ void UIController::checkAndUpdateScanState() // 这里是一个测试函数,用�
     }
 }
 
-void UIController::checkAndUpdateTimeState() // 这里是轮询我的剩余时间
+void UIController::checkAndUpdateTimeState()
 {
+    // 如果用户正在拖动，绝对不要更新，否则会跟用户的手打架
+    if (m_isSeeking)
+    {
+        return;
+    }
+
+    // [新增逻辑] Seek 稳定期保护 (Grace Period)
+    // 如果距离上一次 UI 主动 Seek 操作不到 300ms（根据音频引擎延迟调整，通常 200-400ms 足够），
+    // 我们假设后端音频引擎还在处理 Seek 指令，尚未更新时间戳。
+    // 此时直接跳过从后端读取数据，维持 seek() 中设置的乐观值，防止进度条“回弹”。
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastSeekRequestTime < 300)
+    {
+        return;
+    }
+
+    // --- 以下恢复正常的同步逻辑 ---
+
     // 1. 获取后端原始数据 (微秒)
-    qint64 currentPos = m_mediaController.getCurrentPosMicroseconds();
+    qint64 activePos = m_mediaController.getCurrentPosMicroseconds();
     qint64 totalDuration = m_mediaController.getDurationMicroseconds();
 
     // 2. 计算剩余时间
-    qint64 remainingMicrosecs = std::max((qint64)0, totalDuration - currentPos);
+    qint64 remainingMicrosecs = std::max((qint64)0, totalDuration - activePos);
 
     // 3. 格式化为 UI 文本
-    QString newCurrentPosText = formatTime(currentPos);
+    QString newCurrentPosText = formatTime(activePos);
     QString newRemainingTimeText = formatTime(remainingMicrosecs);
 
     // 4. 更新当前位置文本并通知 QML
@@ -370,11 +433,10 @@ void UIController::checkAndUpdateTimeState() // 这里是轮询我的剩余时�
         emit remainingTimeTextChanged();
     }
 
-    // --- 这里是进度条的做法
-
-    if (m_currentPosMicrosec != currentPos)
+    // 6. 更新数值属性
+    if (m_currentPosMicrosec != activePos)
     {
-        m_currentPosMicrosec = currentPos;
+        m_currentPosMicrosec = activePos;
         emit currentPosMicrosecChanged();
     }
 }
@@ -411,7 +473,7 @@ void UIController::checkAndUpdateShuffleState()
     // 1. 获取后端 MediaController 的最新乱序状态
     bool currentShuffle = m_mediaController.getShuffle();
 
-           // 2. 状态发生变化时，更新缓存并发出信号
+    // 2. 状态发生变化时，更新缓存并发出信号
     if (m_isShuffle != currentShuffle)
     {
         m_isShuffle = currentShuffle;
@@ -422,27 +484,41 @@ void UIController::checkAndUpdateShuffleState()
 // 高频轮询槽实现 (核心状态同步)
 void UIController::updateStateFromController()
 {
-    // 1. 扫描状态检测 (新增加的检测)
     checkAndUpdateScanState();
 
-    // ** 切歌检测与封面更新逻辑 **
-    // 1. 获取当前后端正在播放的节点指针
     PlaylistNode *currentNode = m_mediaController.getCurrentPlayingNode();
 
-    // 2. 比对指针地址：如果地址变了，说明切歌了（或者从空变成了有歌）
-    // 同时初始化操作也是在这一边
+    // 增加局部变量标记是否切歌
+    bool isSongChanged = false;
+
     if (currentNode != m_lastPlayingNode)
     {
-        // 更新缓存指针
         m_lastPlayingNode = currentNode;
+        isSongChanged = true; // 标记发生了切歌
+
+        // 【关键修复】立即重置 UI 状态，不等待后端
+        m_currentPosMicrosec = 0;
+        emit currentPosMicrosecChanged(); // 通知 UI 归零
+
+        // 立即重置时间文本，防止显示上一首歌的结束时间
+        QString zeroTime = "00:00";
+        if (m_currentPosText != zeroTime)
+        {
+            m_currentPosText = zeroTime;
+            emit currentPosTextChanged();
+        }
+
         checkAndUpdateCoverArt(currentNode);
     }
 
-    // 3. 时间状态检测 (100ms 频率执行)
-    checkAndUpdateTimeState();
-
-    // 4. 播放状态检测 (100ms 频率执行)
     checkAndUpdatePlayState();
+
+    // 【关键修复】如果刚刚切歌，跳过本次时间同步
+    // 给后端 100ms 的时间去完成重置，防止读取到上一首歌的残留时间戳
+    if (!isSongChanged)
+    {
+        checkAndUpdateTimeState();
+    }
 }
 
 // 低频轮询槽实现

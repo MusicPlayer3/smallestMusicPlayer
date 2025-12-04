@@ -7,13 +7,14 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     std::string albumName = id.toStdString();
     std::shared_ptr<CoverImage> imgPtr = CoverCache::instance().get(albumName);
 
-           // 2. 检查图片是否有效
-    if (!imgPtr || !imgPtr->isValid()) {
+    // 2. 检查图片是否有效
+    if (!imgPtr || !imgPtr->isValid())
+    {
         qWarning() << "CoverCache: Could not find valid image for album:" << id;
         return QImage(); // 返回空图片
     }
 
-           // 3. 确定 QImage 格式 (根据 CoverImage 的 channels 通道数)
+    // 3. 确定 QImage 格式 (根据 CoverImage 的 channels 通道数)
     QImage::Format format = QImage::Format_Invalid;
     int channels = imgPtr->channels(); //
 
@@ -34,23 +35,23 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         return QImage();
     }
 
-           // 4. 创建 QImage
-           // 注意：QImage(data, ...) 构造函数默认不复制数据，且不接管内存所有权。
-           // 为了安全，我们必须确保返回的 QImage 拥有自己的数据副本。
+    // 4. 创建 QImage
+    // 注意：QImage(data, ...) 构造函数默认不复制数据，且不接管内存所有权。
+    // 为了安全，我们必须确保返回的 QImage 拥有自己的数据副本。
 
-           // 使用 QImage::QImage(const uchar *data, ...) 临时构造一个 QImage
+    // 使用 QImage::QImage(const uchar *data, ...) 临时构造一个 QImage
     QImage tempCover(
-        imgPtr->data(), // 像素数据指针
-        imgPtr->width(), // 宽度
+        imgPtr->data(),   // 像素数据指针
+        imgPtr->width(),  // 宽度
         imgPtr->height(), // 高度
-        format
-        );
+        format);
 
-           // 5. 告知 QML 图片尺寸
-    if (size) {
+    // 5. 告知 QML 图片尺寸
+    if (size)
+    {
         *size = QSize(imgPtr->width(), imgPtr->height());
     }
 
-           // 6. 返回一个深拷贝的 QImage，确保缓存中的 CoverImage 被销毁后，图片仍能正常渲染
-    return tempCover.copy();
+    // 6. 返回一个 QImage，使用的是内存里面的Image，与内存内的同生命周期
+    return tempCover;
 }

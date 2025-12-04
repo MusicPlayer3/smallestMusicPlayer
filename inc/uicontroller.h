@@ -9,6 +9,7 @@
 #include <QStandardPaths>   // 用于获取跨平台默认目录
 #include <qcontainerfwd.h>
 #include <qtypes.h>
+#include <QDateTime>
 
 // 引入 MediaController 的头文件，以便访问其单例
 #include "MediaController.hpp"
@@ -38,6 +39,7 @@ class UIController : public QObject
     // 5.进度条相关的信息
     Q_PROPERTY(qint64 totalDurationMicrosec READ totalDurationMicrosec NOTIFY totalDurationMicrosecChanged FINAL);
     Q_PROPERTY(qint64 currentPosMicrosec READ currentPosMicrosec NOTIFY currentPosMicrosecChanged FINAL);
+    Q_PROPERTY(bool isSeeking READ isSeeking WRITE setIsSeeking NOTIFY isSeekingChanged FINAL); // 标记用户是否正在拖动进度条
 
     // 6.我的背景渐变颜色
     Q_PROPERTY(QString gradientColor1 READ gradientColor1 NOTIFY gradientColorsChanged FINAL);
@@ -79,7 +81,12 @@ public:
     QString gradientColor3() const;
     bool getIsPlaying() const;
     double getVolume() const;
-    bool isShuffle() const { return m_isShuffle; }
+    bool isShuffle() const
+    {
+        return m_isShuffle;
+    }
+    bool isSeeking() const { return m_isSeeking; }
+    void setIsSeeking(bool newIsSeeking); // QML 调用的 Setter
 
 signals:
     // ----1. 扫描音乐文件----
@@ -116,6 +123,8 @@ signals:
 
     // 乱序播放状态改变信号
     void isShuffleChanged();
+
+    void isSeekingChanged();
 
 public slots:
     // 核心：轮询槽，用于在不修改 MediaController 的前提下，获取后端状态
@@ -185,6 +194,11 @@ private:
 
      // 乱序播放状态缓存
     bool m_isShuffle = false;
+
+    // 正在拖动
+    bool m_isSeeking = false;
+
+    qint64 m_lastSeekRequestTime = 0; // 记录上一次 UI 主动请求 Seek 的时间戳
 };
 
 #endif // UICONTROLLER_H

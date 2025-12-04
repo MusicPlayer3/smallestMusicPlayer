@@ -347,9 +347,8 @@ ApplicationWindow {
                 Layout.rightMargin: 2
                 from: 0
                 to: playerController.totalDurationMicrosec 
-                //value: playerController.currentPosMicrosec
 
-                // 正式修复滑动条人机打架的问题
+                //正式修复滑动条人机打架的问题
                 Binding {
                     target: progressSlider
                     property: "value"
@@ -362,14 +361,14 @@ ApplicationWindow {
 
                         // 2. 只有松手后，才提交 Seek 命令
                         playerController.seek(value);
-
-                        // 额外提醒：此时 Slider 也会恢复到 C++ 的绑定更新。
+                        // 同时释放锁
+                        playerController.setIsSeeking(false)
                     }
-                }
-                Behavior on value {
-                    enabled: !progressSlider.pressed // 当 pressed 为 true 时，禁用 C++ 对 value 的更新
-                    NumberAnimation { duration: 100 } // 可选：添加平滑过渡
-                }
+                    else{// 3. 你没松手,一直按,前端获取前端控制权
+                        playerController.setIsSeeking(true)
+                    }
+                }                
+
 
                 background: Rectangle {
                     x: progressSlider.leftPadding

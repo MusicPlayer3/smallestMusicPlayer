@@ -589,6 +589,7 @@ void AudioPlayer::mainDecodeThread()
                             SDL_PauseAudioDevice(m_audioDeviceID, 0);
                         }
                     }
+                    nowPlayingTime.store(seekTarget.load());
                     continue; // Loop back to decode immediately
                 }
 
