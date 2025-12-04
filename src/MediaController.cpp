@@ -691,6 +691,7 @@ bool MediaController::isScanCplt()
     if (cplt && rootNode == nullptr)
     {
         rootNode = scanner->getPlaylistTree();
+        currentDir = rootNode.get();
     }
     return cplt;
 }
