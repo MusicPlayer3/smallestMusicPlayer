@@ -10,6 +10,13 @@ namespace fs = std::filesystem;
 
 class SysMediaService;
 
+enum class RepeatMode : std::uint8_t
+{
+    None,     // 不启用重复 (播放完列表最后一首停止)
+    Playlist, // 启用播放列表重复 (播放完最后一首回到第一首)
+    Single    // 启用单曲重复 (单曲循环)
+};
+
 class MediaController
 {
 private:
@@ -41,6 +48,8 @@ private:
     std::atomic<bool> isShuffle{false};
     std::atomic<bool> isPlaying{false}; // 逻辑播放状态
 
+    std::atomic<RepeatMode> repeatMode{RepeatMode::None}; // 当前重复模式
+
     // --- 监控与自动化 ---
     std::thread monitorThread;
     std::atomic<bool> monitorRunning{true};
@@ -55,7 +64,7 @@ private:
     void preloadNextSong();
 
     // 根据当前模式查找下一首节点 (不修改状态，只返回结果)
-    PlaylistNode *calculateNextNode(PlaylistNode *current);
+    PlaylistNode *calculateNextNode(PlaylistNode *current, bool ignoreSingleRepeat = false);
 
     // 在当前目录下随机选取一首
     PlaylistNode *pickRandomSong(PlaylistNode *scope);
@@ -66,8 +75,11 @@ private:
     // 更新系统元数据
     void updateMetaData(PlaylistNode *node);
 
-    // 辅助：检查路径归属
+    // 检查路径归属
     bool isPathUnderRoot(const fs::path &nodePath) const;
+
+    // 递归搜索辅助函数
+    void searchRecursive(PlaylistNode *scope, const std::string &query, std::vector<PlaylistNode *> &results);
 
 public:
     static MediaController &getInstance()
@@ -97,6 +109,9 @@ public:
     {
         return isPlaying.load();
     }
+    // 重复模式设置
+    void setRepeatMode(RepeatMode mode);
+    RepeatMode getRepeatMode();
 
     // --- 列表与导航交互 ---
 
@@ -120,6 +135,9 @@ public:
     void startScan();
     bool isScanCplt();
     std::shared_ptr<PlaylistNode> getRootNode();
+
+    // 输入字符串，返回匹配的歌曲节点列表
+    std::vector<PlaylistNode *> searchSongs(const std::string &query);
 };
 
 #endif

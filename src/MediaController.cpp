@@ -178,14 +178,22 @@ void MediaController::monitorLoop()
 
 // --- 核心逻辑 ---
 
-PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current)
+PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current, bool ignoreSingleRepeat)
 {
     if (!current)
+    {
         return nullptr;
+    }
     auto parent = current->getParent();
     if (!parent)
+    {
         return nullptr;
+    }
 
+    if (repeatMode.load() == RepeatMode::Single && !ignoreSingleRepeat)
+    {
+        return current;
+    }
     if (isShuffle.load())
     {
         return pickRandomSong(parent.get());
@@ -199,19 +207,28 @@ PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current)
                            });
 
     if (it == siblings.end())
+    {
         return nullptr;
+    }
 
     auto nextIt = it;
     while (++nextIt != siblings.end())
     {
         if (!(*nextIt)->isDir())
+        {
             return (*nextIt).get();
+        }
     }
 
-    for (auto loopIt = siblings.begin(); loopIt != it; ++loopIt)
+    if (repeatMode.load() == RepeatMode::Playlist)
     {
-        if (!(*loopIt)->isDir())
-            return (*loopIt).get();
+        for (auto loopIt = siblings.begin(); loopIt != siblings.end(); ++loopIt)
+        {
+            if (!(*loopIt)->isDir())
+            {
+                return (*loopIt).get();
+            }
+        }
     }
 
     return nullptr;
@@ -422,7 +439,7 @@ void MediaController::stop()
 void MediaController::next()
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-    PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
+    PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs, true);
     if (nextNode)
     {
         playNode(nextNode);
@@ -691,4 +708,102 @@ bool MediaController::isPathUnderRoot(const fs::path &nodePath) const
         return false;
     fs::path relativePath = canonicalNode.lexically_relative(canonicalRoot);
     return !relativePath.empty() && relativePath.string().find("..") != 0;
+}
+
+void MediaController::setRepeatMode(RepeatMode mode)
+{
+    bool changed = (repeatMode.load() != mode);
+    repeatMode.store(mode);
+
+    // 模式改变可能会改变“下一首”的预测，更新预加载
+    if (changed)
+    {
+        std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+        preloadNextSong();
+    }
+}
+
+RepeatMode MediaController::getRepeatMode()
+{
+    return repeatMode.load();
+}
+
+std::vector<PlaylistNode *> MediaController::searchSongs(const std::string &query)
+{
+    std::vector<PlaylistNode *> results;
+    if (query.empty())
+    {
+        return results;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+
+    // 确定搜索范围：
+    // 题目定义“当前播放列表...包含子文件夹”。
+    // 这里定义为：如果正在播放，搜索该歌曲所在文件夹(及其子目录)；
+    // 如果没在播放，搜索当前浏览目录(currentDir)；如果都没，搜索根目录。
+    PlaylistNode *searchRoot = nullptr;
+
+    if (currentPlayingSongs && currentPlayingSongs->getParent())
+    {
+        searchRoot = currentPlayingSongs->getParent().get();
+    }
+    else if (currentDir)
+    {
+        searchRoot = currentDir;
+    }
+    else
+    {
+        searchRoot = rootNode.get();
+    }
+
+    if (!searchRoot)
+        return results;
+
+    // 预处理 query 为小写，方便模糊匹配
+    std::string queryLower = query;
+    std::transform(queryLower.begin(), queryLower.end(), queryLower.begin(),
+                   [](unsigned char c)
+                   { return std::tolower(c); });
+
+    searchRecursive(searchRoot, queryLower, results);
+    return results;
+}
+
+void MediaController::searchRecursive(PlaylistNode *scope, const std::string &queryLower, std::vector<PlaylistNode *> &results)
+{
+    if (!scope)
+        return;
+
+    const auto &children = scope->getChildren();
+    for (const auto &child : children)
+    {
+        if (child->isDir())
+        {
+            // 递归进入子文件夹
+            searchRecursive(child.get(), queryLower, results);
+        }
+        else
+        {
+            // 检查歌曲名
+            std::string title = child->getMetaData().getTitle();
+            // 如果 MetaData 为空，可能回退到检查文件名
+            if (title.empty())
+            {
+                title = fs::path(child->getPath()).filename().string();
+            }
+
+            // 转小写
+            std::string titleLower = title;
+            std::transform(titleLower.begin(), titleLower.end(), titleLower.begin(),
+                           [](unsigned char c)
+                           { return std::tolower(c); });
+
+            // 模糊匹配：子串查找
+            if (titleLower.find(queryLower) != std::string::npos)
+            {
+                results.push_back(child.get());
+            }
+        }
+    }
 }
