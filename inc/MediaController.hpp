@@ -79,8 +79,6 @@ public:
     MediaController(const MediaController &) = delete;
     MediaController &operator=(const MediaController &) = delete;
 
-    
-
     // --- 播放控制 ---
     void play(); // 恢复播放 或 播放当前选定
     void pause();
@@ -95,6 +93,10 @@ public:
     bool getShuffle();
     void setVolume(double volume);
     double getVolume();
+    bool getIsPlaying()
+    {
+        return isPlaying.load();
+    }
 
     // --- 列表与导航交互 ---
 

@@ -310,7 +310,7 @@ ApplicationWindow {
                     id: bigPNG
                     anchors.fill: parent
                     // 后端来了，采用的是当 C++ 检测到指针变化并 emit 信号时，这里会自动刷新
-                    source: playerController.coverArtSource // TODO:替换为后端提供的封面 URL, 记得到时候把下面的false给取消了, 还有下面那个Text
+                    source: playerController.coverArtSource 
                     fillMode: Image.PreserveAspectCrop
 
                     layer.enabled: true
@@ -349,14 +349,24 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 from: 0
                 to: playerController.totalDurationMicrosec 
-                value: playerController.currentPosMicrosec
-                // TODO: 绑定后端 progress 可能后面改成柱状的进度条, 这里指的是到终点的大小------------
+                //value: playerController.currentPosMicrosec
 
+                // 正式修复滑动条人机打架的问题
+                Binding {
+                    target: progressSlider
+                    property: "value"
+                    value: playerController.currentPosMicrosec
+                    when: !progressSlider.pressed
+                }
+                onPressedChanged: {
+                    // 1. 检查：是否刚刚松手 (pressed 变为 false)
+                    if (!pressed) {
 
-                live: false
-                
-                onPressedChanged:{
-                    playerController.seek(progressSlider.value)
+                        // 2. 只有松手后，才提交 Seek 命令
+                        playerController.seek(value);
+
+                        // 额外提醒：此时 Slider 也会恢复到 C++ 的绑定更新。
+                    }
                 }
                 Behavior on value {
                     enabled: !progressSlider.pressed // 当 pressed 为 true 时，禁用 C++ 对 value 的更新
@@ -444,16 +454,14 @@ ApplicationWindow {
                 iconFontFamily: materialFont.name
                 textSize: 30
                 textColor: "white"
-                onClicked: console.log("Prev Clicked") // TODO: 上一首，后端来了
+                onClicked: playerController.prev()
             }
 
-            // 播放/暂停 (稍大) 这里有一个问题，就是你点击之后需要转换一下你的播放状态，
-            // 这个的话我建议，这里先用着自己管理的bool，后面的话，外部改变播放状态的时候要改回去
+            // 播放/暂停 (稍大) 
             StyleButton {
-                property bool isPlaying : false
                 Layout.preferredWidth: 60
                 Layout.preferredHeight: 60
-                buttonText: isPlaying ?"play_arrow" : "pause" // TODO: 播放暂停
+                buttonText: playerController.isPlaying ? "pause" : "play_arrow" 
 
                 // 设置更高的透明度作为基础颜色，使其更亮
                 baseColor: "#40FFFFFF"
@@ -465,8 +473,7 @@ ApplicationWindow {
                 textSize: 40
                 textColor: "white"
                 onClicked: {
-                    console.log("Play/Pause Clicked");
-                    isPlaying = !isPlaying
+                    playerController.playpluse()
                 }
             }
 
@@ -478,7 +485,7 @@ ApplicationWindow {
                 iconFontFamily: materialFont.name
                 textSize: 30
                 textColor: "white"
-                onClicked: console.log("Next Clicked") // TODO: 下一首
+                onClicked: playerController.next()
             }
         }
 
@@ -502,7 +509,7 @@ ApplicationWindow {
                 Layout.maximumWidth: 200 // 限制一下最大宽度，不要太长
                 from: 0
                 to: 100
-                value: 60 // TODO: 绑定后端 volume
+                value: 60 
                 // TODO:[修改]: 拖动改变音量
                 // onMoved: {
                 //     playerController.setVolume(value)

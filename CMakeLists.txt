@@ -220,9 +220,9 @@ endif()
 # 翻译文件 (移植自原项目)
 # ------------------------------
 # 确保你的 .ts 文件名正确
-qt_add_translations(appMusicPlayer
-    TS_FILES smallestMusicPlayer_zh_CN.ts
-)
+# qt_add_translations(appMusicPlayer
+#     TS_FILES smallestMusicPlayer_zh_CN.ts
+# )
 
 # ------------------------------
 # 安装与部署

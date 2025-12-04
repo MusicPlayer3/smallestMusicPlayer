@@ -108,6 +108,31 @@ void UIController::updateGradientColors(const QString &imagePath)
         }
     }
 }
+
+void UIController::playpluse()
+{
+    // 调用 MediaController 的播放/暂停切换
+    m_mediaController.playpluse();
+}
+
+void UIController::next()
+{
+    // 调用 MediaController 的下一首
+    m_mediaController.next();
+}
+
+void UIController::prev()
+{
+    // 调用 MediaController 的上一首
+    m_mediaController.prev();
+}
+
+void UIController::seek(qint64 pos_microsec)
+{
+    // 调用 MediaController 的 Seek 方法
+    m_mediaController.seek(pos_microsec);
+}
+
 // 这里是getter们
 QString UIController::defaultMusicPath() const
 {
@@ -172,6 +197,11 @@ QString UIController::gradientColor3() const
     return m_gradientColor3;
 }
 
+bool UIController::getIsPlaying() const
+{
+    return m_isPlaying;
+}
+
 // ---这里是我的轮询里面执行的一些方法集合
 void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
 {
@@ -198,6 +228,15 @@ void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
         newTitle = QString::fromStdString(metaData.getTitle());
         newArtist = QString::fromStdString(metaData.getArtist());
         newAlbum = QString::fromStdString(metaData.getAlbum());
+
+        // --- 这里是进度条的做法
+        qint64 newDuration = 0; // 新增变量
+        newDuration = m_mediaController.getDurationMicroseconds();
+        if (m_totalDurationMicrosec != newDuration)
+        {
+            m_totalDurationMicrosec = newDuration;
+            emit totalDurationMicrosecChanged();
+        }
     }
     // 5. 更新属性并通知 QML,这个优化很关键的哟
     // 只有当路径真的跟上次不一样时才发信号（虽然指针变了路径通常也会变）
@@ -292,16 +331,24 @@ void UIController::checkAndUpdateTimeState() // 这里是轮询我的剩余时�
 
     // --- 这里是进度条的做法
 
-    if (m_totalDurationMicrosec != totalDuration)
-    {
-        m_totalDurationMicrosec = totalDuration;
-        emit totalDurationMicrosecChanged();
-    }
-
     if (m_currentPosMicrosec != currentPos)
     {
         m_currentPosMicrosec = currentPos;
         emit currentPosMicrosecChanged();
+    }
+}
+
+void UIController::checkAndUpdatePlayState() // 这里是检测播放状态
+{
+    // 1. 获取后端 MediaController 的最新状态
+    bool currentIsPlaying = m_mediaController.getIsPlaying();
+
+    // 2. 状态发生变化时，更新缓存并发出信号
+    if (m_isPlaying != currentIsPlaying)
+    {
+        m_isPlaying = currentIsPlaying;
+        emit isPlayingChanged();
+        qDebug() << "Playback state changed to:" << (m_isPlaying ? "Playing" : "Paused/Stopped");
     }
 }
 
@@ -326,4 +373,7 @@ void UIController::updateStateFromController()
 
     // 3. 时间状态检测 (100ms 频率执行)
     checkAndUpdateTimeState();
+
+    // 4. 播放状态检测 (100ms 频率执行)
+    checkAndUpdatePlayState();
 }
