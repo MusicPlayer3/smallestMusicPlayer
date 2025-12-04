@@ -6,7 +6,7 @@ RoundButton {
     id: control
 
     // ------------------------------------------------
-    // ✅ 修正后的属性定义，作为组件的外部接口
+    //  修正后的属性定义，作为组件的外部接口
     // ------------------------------------------------
     property color baseColor: "#20FFFFFF" // 默认颜色（低透明度白）
     property color hoverColor: "#30FFFFFF" // 悬停时的颜色
@@ -16,7 +16,9 @@ RoundButton {
     property alias buttonWidth: control.width
     property alias buttonHeight: control.height
 
-    // 新增属性：用于接收字体家族名称
+    property color checkedColor: "#60FFFFFF" // 选中(常亮)时的颜色
+
+    // 用于接收字体家族名称
     property string iconFontFamily: ""
 
     // 允许外部定义按钮的文本（或图标）
@@ -25,9 +27,11 @@ RoundButton {
     // 允许外部设置圆角半径 (使用 Math.min 确保是圆形)
     property int buttonRadius: Math.min(control.width, control.height) / 2
 
-    // ✅ 暴露 Text 的属性，这样外部就可以直接修改，而不需要覆盖 contentItem
+    // 暴露 Text 的属性，这样外部就可以直接修改，而不需要覆盖 contentItem
     property alias textColor: contentText.color
     property alias textSize: contentText.font.pixelSize
+
+    checkable: false // 使按钮在按下后保持在 "checked" 状态，直到再次按下, 如果你想用这个功能就true
 
     // ------------------------------------------------
     // 按钮的背景和高亮逻辑
@@ -50,13 +54,21 @@ RoundButton {
         // 根据状态更新颜色
         states: [
             State {
+                name: "checkedState"
+                when: control.checked // 按钮处于“选中”状态时
+                PropertyChanges {
+                    target: bgRect;
+                    color: control.checkedColor // 使用常亮色
+                }
+            },
+            State {
                 name: "hovered"
-                when: control.hovered && !control.pressed
+                when: control.hovered && !control.pressed && !control.checked
                 PropertyChanges { target: bgRect; color: control.hoverColor }
             },
             State {
                 name: "pressed"
-                when: control.pressed
+                when: control.pressed && !control.checked
                 PropertyChanges { target: bgRect; color: control.pressedColor }
             }
         ]

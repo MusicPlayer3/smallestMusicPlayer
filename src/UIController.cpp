@@ -39,6 +39,11 @@ UIController::UIController(QObject *parent) :
     connect(&m_stateTimer, &QTimer::timeout, this, &UIController::updateStateFromController);
     m_stateTimer.start();
 
+    // --- 3. 低频轮询超级机器! 请有需求的Connect一下喵 ---
+    m_volumeTimer.setInterval(500);
+    connect(&m_volumeTimer, &QTimer::timeout, this, &UIController::updateVolumeState);
+    m_volumeTimer.start(); // 启动 500ms 定时器
+
     // 初始化封面为空或默认图
     m_coverArtSource = "";
 }
@@ -202,6 +207,34 @@ bool UIController::getIsPlaying() const
     return m_isPlaying;
 }
 
+double UIController::getVolume() const
+{
+    return m_volume;
+}
+
+void UIController::setVolume(double volume)
+{
+    // 1. 调用 MediaController 的设置音量
+    m_mediaController.setVolume(volume);
+
+    // 2. 更新本地缓存
+    m_volume = volume;
+}
+
+void UIController::setShuffle(bool newShuffle)
+{
+    // 1. 调用后端 MediaController 的 setShuffle 接口
+    m_mediaController.setShuffle(newShuffle);
+
+    // 2. 立即更新缓存状态并通知前端
+    if (m_isShuffle != newShuffle)
+    {
+        m_isShuffle = newShuffle;
+        emit isShuffleChanged();
+    }
+    // 注意：即使这里立即更新了，轮询机制也会在外部操作时保证最终一致性。
+}
+
 // ---这里是我的轮询里面执行的一些方法集合
 void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
 {
@@ -352,6 +385,32 @@ void UIController::checkAndUpdatePlayState() // 这里是检测播放状态
     }
 }
 
+void UIController::checkAndUpdateVolumeState() // 这里是检测音量
+{
+    // 1. 获取后端 MediaController 的最新音量状态
+    double currentVolume = m_mediaController.getVolume();
+
+    // 2. 状态发生变化时，更新缓存并发出信号
+    if (std::abs(m_volume - currentVolume) > 0.001)
+    { // 使用浮点数安全比较
+        m_volume = currentVolume;
+        emit volumeChanged();
+    }
+}
+
+void UIController::checkAndUpdateShuffleState()
+{
+    // 1. 获取后端 MediaController 的最新乱序状态
+    bool currentShuffle = m_mediaController.getShuffle();
+
+           // 2. 状态发生变化时，更新缓存并发出信号
+    if (m_isShuffle != currentShuffle)
+    {
+        m_isShuffle = currentShuffle;
+        emit isShuffleChanged();
+    }
+}
+
 // 高频轮询槽实现 (核心状态同步)
 void UIController::updateStateFromController()
 {
@@ -376,4 +435,14 @@ void UIController::updateStateFromController()
 
     // 4. 播放状态检测 (100ms 频率执行)
     checkAndUpdatePlayState();
+}
+
+// 低频轮询槽实现
+void UIController::updateVolumeState()
+{
+    // 1. 获取后端 MediaController 的最新音量状态
+    // (注意：这里我们仍然需要调用 MediaController::getVolume()，因为它可能被系统混音器或其它外部因素改变)
+    checkAndUpdateVolumeState();
+
+    checkAndUpdateShuffleState();
 }

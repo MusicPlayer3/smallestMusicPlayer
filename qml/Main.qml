@@ -333,20 +333,18 @@ ApplicationWindow {
         // ==========================================
         // 3. 进度条区域 (时间 - 进度条 - 时间)
         // ==========================================
-        RowLayout {
+        
+
+        ColumnLayout{
             Layout.fillWidth: true
-            spacing: 15
-
-            Text {
-                text: playerController.currentPosText
-                color: "white"
-                font.pixelSize: 12
-            }
-
-            // 自定义样式的进度条
+            Layout.leftMargin: 18  
+            Layout.rightMargin: 18
+            spacing: 10
             Slider {
                 id: progressSlider
                 Layout.fillWidth: true
+                Layout.leftMargin: 2  
+                Layout.rightMargin: 2
                 from: 0
                 to: playerController.totalDurationMicrosec 
                 //value: playerController.currentPosMicrosec
@@ -392,10 +390,21 @@ ApplicationWindow {
                 handle: Item {}
             }
 
-            Text {
-                text: playerController.remainingTimeText
+            RowLayout{
+                Layout.fillWidth: true // 确保文本容器占满宽度
+                Text {
+                text: playerController.currentPosText
                 color: "white"
                 font.pixelSize: 12
+                }
+                Item { Layout.fillWidth: true }
+
+                Text {
+                    id: remainingDurationText
+                    text: playerController.remainingTimeText 
+                    color: "white"
+                    font.pixelSize: 12 // 推荐字体略小
+                }
             }
         }
 
@@ -507,13 +516,17 @@ ApplicationWindow {
                 id: volumeSlider
                 Layout.fillWidth: true
                 Layout.maximumWidth: 200 // 限制一下最大宽度，不要太长
-                from: 0
-                to: 100
-                value: 60 
-                // TODO:[修改]: 拖动改变音量
-                // onMoved: {
-                //     playerController.setVolume(value)
-                // }
+                from: 0.0
+                to: 1.0
+
+                value: playerController.volume
+    
+                // 【绑定 2：控制】当用户拖动滑块时，立即调用 C++ 方法设置音量
+                onValueChanged: {
+                    // 如果音量值改变，立即设置后端音量
+                    // 确保 value 在 0.0 到 1.0 之间
+                    playerController.setVolume(value)
+                }
 
                 background: Rectangle {
                     x: volumeSlider.leftPadding
@@ -571,7 +584,14 @@ ApplicationWindow {
                     iconFontFamily: materialFont.name
                     textSize: 18
                     textColor: "white"
-                    onClicked: console.log("Shuffle Clicked") // TODO: 这个是乱序按钮
+
+                    onClicked: {
+                        // 切换逻辑：调用 C++ Setter 来改变后端状态
+                        // 注意：我们传入 checked 的相反值，以切换后端状态。
+                        playerController.setShuffle(!playerController.isShuffle)
+                    }
+                    checkable: true
+                    checked: playerController.isShuffle
                 }
             }
 
@@ -583,7 +603,7 @@ ApplicationWindow {
                 spacing: 15
                 StyleButton {
                     id: stylePlayBtn
-                    property int playMode : 1 // 0 是列表顺序播放，1 是单曲循环，2 是乱序播放
+                    property int playMode : 1 // 0 是列表顺序播放，1 是单曲循环
                     buttonText: "repeat" // 初始设置为 "repeat
                     width: 40
                     height: 40
@@ -601,11 +621,7 @@ ApplicationWindow {
                            case 2:
                                // 单曲循环
                                stylePlayBtn.buttonText = "repeat_one"
-                               break;
-                           case 3:
-                               // 乱序播放
                                playMode = 0;
-                               stylePlayBtn.buttonText = "import_export"
                                break;
                        }
                    }
