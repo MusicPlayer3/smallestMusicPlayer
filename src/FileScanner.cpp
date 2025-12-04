@@ -4,7 +4,6 @@
 #include "AudioPlayer.hpp"
 #include "Precompiled.h"
 
-
 // ================= TagLib Headers =================
 #include <taglib/fileref.h>
 #include <taglib/tag.h>
@@ -864,7 +863,7 @@ static std::string detectImageExtension(const TagLib::ByteVector &data)
     return ".jpg";
 }
 
-void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData &data)
+std::string FileScanner::extractCoverToTempFile(const std::string &musicPath, const std::string &coverName)
 {
     fs::path tmpDir = fs::temp_directory_path() / "SmallestMusicPlayer";
     try
@@ -874,27 +873,27 @@ void FileScanner::extractCoverToTempFile(const std::string &musicPath, MetaData 
     }
     catch (...)
     {
-        return;
+        return "";
     }
 
     TagLib::ByteVector coverData = extractCoverData(musicPath);
     if (coverData.isEmpty())
-        return;
+        return "";
 
-    std::string safeName = sanitizeFilename(data.getAlbum());
+    std::string safeName = sanitizeFilename(coverName);
     std::string ext = detectImageExtension(coverData);
     fs::path targetPath = tmpDir / (safeName + ext);
 
     if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
     {
-        data.setCoverPath(fs::absolute(targetPath).string());
-        return;
+        return fs::absolute(targetPath).string();
     }
 
     std::ofstream outFile(targetPath, std::ios::binary | std::ios::trunc);
     if (outFile)
     {
         outFile.write(coverData.data(), coverData.size());
-        data.setCoverPath(fs::absolute(targetPath).string());
+        return fs::absolute(targetPath).string();
     }
+    return "";
 }

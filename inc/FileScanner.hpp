@@ -30,7 +30,7 @@ public:
     }
 
     static MetaData getMetaData(const std::string &musicPath);
-    static void extractCoverToTempFile(const std::string &musicPath, MetaData &data);
+    static std::string extractCoverToTempFile(const std::string &musicPath, const std::string &coverName);
 
     void startScan()
     {

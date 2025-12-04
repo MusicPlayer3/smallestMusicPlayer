@@ -618,7 +618,7 @@ void MediaController::updateMetaData(PlaylistNode *node)
     auto data = node->getMetaData();
     if (node->getMetaData().getCoverPath() == "")
     {
-        FileScanner::extractCoverToTempFile(data.getFilePath(), data);
+        data.setCoverPath(FileScanner::extractCoverToTempFile(data.getFilePath(), data.getAlbum()));
     }
 
     // [修改] 判空保护

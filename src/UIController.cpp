@@ -1,4 +1,5 @@
 #include "uicontroller.h"
+#include "FileScanner.hpp"
 #include "MediaController.hpp" // 假设 MediaController.h 存在并定义了核心逻辑
 #include <QDebug>
 #include <QUrl>
@@ -246,7 +247,14 @@ void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
     // 安全检查：节点是否有效
     if (currentNode != nullptr)
     {
-        std::string pathStr = currentNode->getMetaData().getCoverPath();
+        auto metadata = currentNode->getMetaData();
+        std::string pathStr = metadata.getCoverPath();
+        if (pathStr == "")
+        {
+            pathStr = FileScanner::extractCoverToTempFile(metadata.getFilePath(), metadata.getAlbum());
+            metadata.setCoverPath(pathStr);
+            currentNode->setMetaData(metadata);
+        }
 
         QString rawPath = QString::fromStdString(pathStr);
 
