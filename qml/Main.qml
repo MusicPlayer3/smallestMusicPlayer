@@ -42,17 +42,23 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.right: parent.right
 
-        height: 30
+        height: 80
 
         property point clickPos: "0,0"
-        onPressed: function(mouse){
-            clickPos = Qt.point(mouse.x,mouse.y)
+        onPressed: {
+            window.startSystemMove()
         }
-        onPositionChanged: function(mouse){
-            let delta = Qt.point(mouse.x - clickPos.x ,mouse.y - clickPos.y)
-            window.x += delta.x
-            window.y += delta.y
-        }
+        // onPressed: function(mouse){
+        //     clickPos = Qt.point(mouse.x,mouse.y)
+        //     console.log("clickPos:",clickPos)
+        // }
+        // onPositionChanged: function(mouse){
+        //     let delta = Qt.point(mouse.x - clickPos.x ,mouse.y - clickPos.y)
+        //     console.log("delta:",delta)
+        //     window.x += delta.x
+        //     window.y += delta.y
+        //     console.log("window.x:\twindow.y",window.x,window.y)
+        // }
     }
 
     // 这个让我的文件选择窗口自动在一开始就打开
