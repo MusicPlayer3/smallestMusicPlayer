@@ -3,6 +3,7 @@
 #include <QDebug>
 #include <QUrl>
 #include <algorithm>
+#include <qtypes.h>
 #include "PlaylistNode.hpp"
 
 UIController::UIController(QObject *parent) :
@@ -121,6 +122,16 @@ QString UIController::remainingTimeText() const
     return m_remainingTimeText;
 }
 
+qint64 UIController::totalDurationMicrosec() const
+{
+    return m_totalDurationMicrosec;
+}
+
+qint64 UIController::currentPosMicrosec() const
+{
+    return m_currentPosMicrosec;
+}
+
 // ---这里是我的轮询里面执行的一些方法集合
 void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
 {
@@ -231,7 +242,23 @@ void UIController::checkAndUpdateTimeState() //这里是轮询我的剩余时间
         m_remainingTimeText = newRemainingTimeText;
         emit remainingTimeTextChanged();
     }
+
+    // --- 这里是进度条的做法
+
+    if (m_totalDurationMicrosec != totalDuration)
+    {
+        m_totalDurationMicrosec = totalDuration;
+        emit totalDurationMicrosecChanged();
+    }
+
+    if (m_currentPosMicrosec != currentPos)
+    {
+        m_currentPosMicrosec = currentPos;
+        emit currentPosMicrosecChanged();
+    }
+
 }
+
 
 // 高频轮询槽实现 (核心状态同步)
 void UIController::updateStateFromController()
@@ -244,6 +271,7 @@ void UIController::updateStateFromController()
     PlaylistNode *currentNode = m_mediaController.getCurrentPlayingNode();
 
     // 2. 比对指针地址：如果地址变了，说明切歌了（或者从空变成了有歌）
+    // 同时初始化操作也是在这一边
     if (currentNode != m_lastPlayingNode)
     {
         // 更新缓存指针

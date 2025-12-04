@@ -7,6 +7,8 @@
 #include <QDir>             // 用于路径操作
 #include <QCoreApplication> // 用于获取程序路径
 #include <QStandardPaths>   // 用于获取跨平台默认目录
+#include <qcontainerfwd.h>
+#include <qtypes.h>
 
 // 引入 MediaController 的头文件，以便访问其单例
 #include "MediaController.hpp"
@@ -33,6 +35,11 @@ class UIController : public QObject
                     Q_PROPERTY(QString currentPosText READ currentPosText NOTIFY currentPosTextChanged FINAL)
                         Q_PROPERTY(QString remainingTimeText READ remainingTimeText NOTIFY remainingTimeTextChanged FINAL)
 
+        // 5.进度条相关的信息
+        Q_PROPERTY(qint64 totalDurationMicrosec READ totalDurationMicrosec NOTIFY totalDurationMicrosecChanged FINAL)
+            Q_PROPERTY(qint64 currentPosMicrosec READ currentPosMicrosec NOTIFY currentPosMicrosecChanged FINAL)
+
+
 public :
     // 构造函数：初始化时获取 MediaController 单例
     explicit UIController(QObject *parent = nullptr);
@@ -52,6 +59,8 @@ public :
     QString albumName() const;
     QString currentPosText() const;
     QString remainingTimeText() const;
+    qint64 totalDurationMicrosec() const;
+    qint64 currentPosMicrosec() const;
 
 signals:
     // ----1. 扫描音乐文件----
@@ -72,6 +81,9 @@ signals:
     // 更改音乐时间的型号
     void currentPosTextChanged();
     void remainingTimeTextChanged();
+
+    void totalDurationMicrosecChanged();
+    void currentPosMicrosecChanged();
 
 private slots:
     // 核心：轮询槽，用于在不修改 MediaController 的前提下，获取后端状态
@@ -103,6 +115,10 @@ private:
     // 音乐时间
     QString m_currentPosText = "00:00";
     QString m_remainingTimeText = "00:00";
+
+    // 音乐进度条
+    qint64 m_totalDurationMicrosec = 0;
+    qint64 m_currentPosMicrosec = 0;
 };
 
 #endif // UICONTROLLER_H

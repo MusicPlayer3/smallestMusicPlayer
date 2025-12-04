@@ -347,14 +347,20 @@ ApplicationWindow {
                 id: progressSlider
                 Layout.fillWidth: true
                 from: 0
-                to: 100 // TODO：[修改]: 绑定总时长
-                value: 40 // TODO：[修改]: 绑定当前市场
+                to: playerController.totalDurationMicrosec 
+                value: playerController.currentPosMicrosec
                 // TODO: 绑定后端 progress 可能后面改成柱状的进度条, 这里指的是到终点的大小------------
 
-                // TODO：这里是当我们前端的进度条发生拖动的时候，通知后端
-                // onMoved: {
-                //     playerController.seek(value) // value 是毫秒
-                // }
+
+                live: false
+                
+                onPressedChanged:{
+                    playerController.seek(progressSlider.value)
+                }
+                Behavior on value {
+                    enabled: !progressSlider.pressed // 当 pressed 为 true 时，禁用 C++ 对 value 的更新
+                    NumberAnimation { duration: 100 } // 可选：添加平滑过渡
+                }
 
                 background: Rectangle {
                     x: progressSlider.leftPadding
