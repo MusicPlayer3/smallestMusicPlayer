@@ -28,8 +28,9 @@ ApplicationWindow {
         id: background
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "#7d5a5a" } // 上部深色
-            GradientStop { position: 1.0; color: "#5a3c3c" } // 下部更深
+            GradientStop { position: 0.0; color: playerController.gradientColor1 } // 上部浅色深色
+            GradientStop { position: 0.5; color: playerController.gradientColor2 } // 中部更浅
+            GradientStop { position: 1.0; color: playerController.gradientColor3 } // 下部更深
         }
         radius: 10 // 窗口圆角
     }

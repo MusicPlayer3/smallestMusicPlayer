@@ -15,6 +15,8 @@
 #include "CoverImageProvider.hpp"
 // 引入后端逻辑控制器
 #include "MediaController.hpp"
+#include "ColorExtractor.hpp"
+#include "CoverCache.hpp"
 
 // --- Linux Terminal Control Section ---
 #if defined(Q_OS_LINUX)
@@ -98,6 +100,9 @@ int getch()
     }
 }
 
+void runColorExtractorTest();
+void run_cover_test();
+
 // 终端控制模式的主逻辑
 void runTerminalMode(QCoreApplication &app, const QString &rootDir)
 {
@@ -122,6 +127,8 @@ void runTerminalMode(QCoreApplication &app, const QString &rootDir)
         }
         std::cout << "Scan completed. Trying to auto-play...\n";
         mediaController.play();
+        run_cover_test();
+        runColorExtractorTest();
     }
     else
     {

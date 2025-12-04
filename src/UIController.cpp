@@ -3,8 +3,11 @@
 #include <QDebug>
 #include <QUrl>
 #include <algorithm>
+#include <qdebug.h>
 #include <qtypes.h>
+#include <string>
 #include "PlaylistNode.hpp"
+#include "ColorExtractor.hpp"
 
 UIController::UIController(QObject *parent) :
     QObject(parent), m_mediaController(MediaController::getInstance())
@@ -70,17 +73,41 @@ QString formatTime(qint64 microsecs)
     if (microsecs < 0)
         microsecs = 0;
 
-           // 转换为秒
+    // 转换为秒
     qint64 secs = microsecs / 1000000;
     qint64 minutes = secs / 60;
     qint64 seconds = secs % 60;
 
-           // 使用 QChar('0') 填充到两位 (例如 05:30)
+    // 使用 QChar('0') 填充到两位 (例如 05:30)
     return QString("%1:%2")
         .arg(minutes, 2, 10, QChar('0'))
         .arg(seconds, 2, 10, QChar('0'));
 }
 
+void UIController::updateGradientColors(const QString &imagePath)
+{
+    // 调用 ColorExtractor 的静态方法，传入封面路径
+    QList<QColor> colors = ColorExtractor::getAdaptiveGradientColors(imagePath);
+
+    // 确保结果有效且至少包含3个颜色
+    if (colors.size() >= 3)
+    {
+        // QColor::name() 返回 #RRGGBB 格式的字符串
+        QString newColor1 = colors[0].name();
+        QString newColor2 = colors[1].name();
+        QString newColor3 = colors[2].name();
+
+        // 只有颜色发生变化时才更新属性并发送信号
+        if (m_gradientColor1 != newColor1 || m_gradientColor2 != newColor2 || m_gradientColor3 != newColor3)
+        {
+            m_gradientColor1 = newColor1;
+            m_gradientColor2 = newColor2;
+            m_gradientColor3 = newColor3;
+
+            emit gradientColorsChanged(); // 通知 QML 更新界面
+        }
+    }
+}
 // 这里是getter们
 QString UIController::defaultMusicPath() const
 {
@@ -132,6 +159,19 @@ qint64 UIController::currentPosMicrosec() const
     return m_currentPosMicrosec;
 }
 
+QString UIController::gradientColor1() const
+{
+    return m_gradientColor1;
+}
+QString UIController::gradientColor2() const
+{
+    return m_gradientColor2;
+}
+QString UIController::gradientColor3() const
+{
+    return m_gradientColor3;
+}
+
 // ---这里是我的轮询里面执行的一些方法集合
 void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
 {
@@ -144,6 +184,7 @@ void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
     if (currentNode != nullptr)
     {
         std::string pathStr = currentNode->getMetaData().getCoverPath();
+
         QString rawPath = QString::fromStdString(pathStr);
 
         // 路径处理：绝对路径转 QML URL
@@ -164,6 +205,10 @@ void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
     {
         m_coverArtSource = newCoverPath;
         emit coverArtSourceChanged();
+
+        std::string pathStr = currentNode->getMetaData().getCoverPath();
+        QString rawPath = QString::fromStdString(pathStr);
+        updateGradientColors(rawPath);
     }
 
     // 4. 更新歌曲标题属性并发出信号
@@ -218,27 +263,29 @@ void UIController::checkAndUpdateScanState() // 这里是一个测试函数,用�
     }
 }
 
-void UIController::checkAndUpdateTimeState() //这里是轮询我的剩余时间
+void UIController::checkAndUpdateTimeState() // 这里是轮询我的剩余时间
 {
     // 1. 获取后端原始数据 (微秒)
     qint64 currentPos = m_mediaController.getCurrentPosMicroseconds();
     qint64 totalDuration = m_mediaController.getDurationMicroseconds();
 
-           // 2. 计算剩余时间
+    // 2. 计算剩余时间
     qint64 remainingMicrosecs = std::max((qint64)0, totalDuration - currentPos);
 
-           // 3. 格式化为 UI 文本
+    // 3. 格式化为 UI 文本
     QString newCurrentPosText = formatTime(currentPos);
     QString newRemainingTimeText = formatTime(remainingMicrosecs);
 
-           // 4. 更新当前位置文本并通知 QML
-    if (m_currentPosText != newCurrentPosText) {
+    // 4. 更新当前位置文本并通知 QML
+    if (m_currentPosText != newCurrentPosText)
+    {
         m_currentPosText = newCurrentPosText;
         emit currentPosTextChanged();
     }
 
-           // 5. 更新剩余时间文本并通知 QML
-    if (m_remainingTimeText != newRemainingTimeText) {
+    // 5. 更新剩余时间文本并通知 QML
+    if (m_remainingTimeText != newRemainingTimeText)
+    {
         m_remainingTimeText = newRemainingTimeText;
         emit remainingTimeTextChanged();
     }
@@ -256,9 +303,7 @@ void UIController::checkAndUpdateTimeState() //这里是轮询我的剩余时间
         m_currentPosMicrosec = currentPos;
         emit currentPosMicrosecChanged();
     }
-
 }
-
 
 // 高频轮询槽实现 (核心状态同步)
 void UIController::updateStateFromController()
@@ -282,4 +327,3 @@ void UIController::updateStateFromController()
     // 3. 时间状态检测 (100ms 频率执行)
     checkAndUpdateTimeState();
 }
-

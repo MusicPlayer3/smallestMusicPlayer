@@ -15,32 +15,36 @@
 
 class UIController : public QObject
 {
-    Q_OBJECT // 核心宏：启用元对象系统，允许 QML 交互
+Q_OBJECT // 核心宏：启用元对象系统，允许 QML 交互
 
-    // 可爱的QT属性
-    // ----1. 扫描音乐文件----
-    // 1. 默认路径 (READ ONLY)
-    Q_PROPERTY(QString defaultMusicPath READ defaultMusicPath CONSTANT)
+// 可爱的QT属性
+// ----1. 扫描音乐文件----
+// 1. 默认路径 (READ ONLY)
+Q_PROPERTY(QString defaultMusicPath READ defaultMusicPath CONSTANT)
 
-        // 2. 扫描状态 (READ + NOTIFY)
-        Q_PROPERTY(bool isScanning READ isScanning NOTIFY isScanningChanged FINAL)
+    // 2. 扫描状态 (READ + NOTIFY)
+    Q_PROPERTY(bool isScanning READ isScanning NOTIFY isScanningChanged FINAL)
 
-        // 3. 专辑的封面Source 绝对路径版本
-        Q_PROPERTY(QString coverArtSource READ coverArtSource NOTIFY coverArtSourceChanged FINAL)
+    // 3. 专辑的封面Source 绝对路径版本
+    Q_PROPERTY(QString coverArtSource READ coverArtSource NOTIFY coverArtSourceChanged FINAL)
 
-        // 4. 歌曲详细信息
-        Q_PROPERTY(QString songTitle READ songTitle NOTIFY songTitleChanged FINAL)
-            Q_PROPERTY(QString artistName READ artistName NOTIFY artistNameChanged FINAL)
-                Q_PROPERTY(QString albumName READ albumName NOTIFY albumNameChanged FINAL)
-                    Q_PROPERTY(QString currentPosText READ currentPosText NOTIFY currentPosTextChanged FINAL)
-                        Q_PROPERTY(QString remainingTimeText READ remainingTimeText NOTIFY remainingTimeTextChanged FINAL)
+    // 4. 歌曲详细信息
+    Q_PROPERTY(QString songTitle READ songTitle NOTIFY songTitleChanged FINAL)
+        Q_PROPERTY(QString artistName READ artistName NOTIFY artistNameChanged FINAL)
+            Q_PROPERTY(QString albumName READ albumName NOTIFY albumNameChanged FINAL)
+                Q_PROPERTY(QString currentPosText READ currentPosText NOTIFY currentPosTextChanged FINAL)
+                    Q_PROPERTY(QString remainingTimeText READ remainingTimeText NOTIFY remainingTimeTextChanged FINAL)
 
-        // 5.进度条相关的信息
-        Q_PROPERTY(qint64 totalDurationMicrosec READ totalDurationMicrosec NOTIFY totalDurationMicrosecChanged FINAL)
-            Q_PROPERTY(qint64 currentPosMicrosec READ currentPosMicrosec NOTIFY currentPosMicrosecChanged FINAL)
+    // 5.进度条相关的信息
+    Q_PROPERTY(qint64 totalDurationMicrosec READ totalDurationMicrosec NOTIFY totalDurationMicrosecChanged FINAL)
+        Q_PROPERTY(qint64 currentPosMicrosec READ currentPosMicrosec NOTIFY currentPosMicrosecChanged FINAL)
 
+    // 6.我的背景渐变颜色
+    Q_PROPERTY(QString gradientColor1 READ gradientColor1 NOTIFY gradientColorsChanged FINAL)
+        Q_PROPERTY(QString gradientColor2 READ gradientColor2 NOTIFY gradientColorsChanged FINAL)
+            Q_PROPERTY(QString gradientColor3 READ gradientColor3 NOTIFY gradientColorsChanged FINAL)
 
-public :
+                public :
     // 构造函数：初始化时获取 MediaController 单例
     explicit UIController(QObject *parent = nullptr);
 
@@ -61,6 +65,9 @@ public :
     QString remainingTimeText() const;
     qint64 totalDurationMicrosec() const;
     qint64 currentPosMicrosec() const;
+    QString gradientColor1() const;
+    QString gradientColor2() const;
+    QString gradientColor3() const;
 
 signals:
     // ----1. 扫描音乐文件----
@@ -82,8 +89,12 @@ signals:
     void currentPosTextChanged();
     void remainingTimeTextChanged();
 
+    // 进度条
     void totalDurationMicrosecChanged();
     void currentPosMicrosecChanged();
+
+    // 统一用一个信号通知所有颜色更新
+    void gradientColorsChanged();
 
 private slots:
     // 核心：轮询槽，用于在不修改 MediaController 的前提下，获取后端状态
@@ -102,6 +113,7 @@ private:
     void checkAndUpdateCoverArt(PlaylistNode *currentNode); // 检测我们的歌曲是否变化,然后会做出更新图像的操作哦
     void checkAndUpdateScanState();                         // 新增：用于轮询 isScanCplt()
     void checkAndUpdateTimeState();                         // 新增：用于轮询 currentPos 和 remainingTime
+    void updateGradientColors(const QString &imagePath);    // 新增：颜色提取逻辑
 
     // 专辑封面图
     QString m_coverArtSource;                  // 存储处理后的图片路径 (file://...)
@@ -119,6 +131,11 @@ private:
     // 音乐进度条
     qint64 m_totalDurationMicrosec = 0;
     qint64 m_currentPosMicrosec = 0;
+
+    // 背景渐变颜色
+    QString m_gradientColor1 = "#7d5a5a";
+    QString m_gradientColor2 = "#6b4a4a";
+    QString m_gradientColor3 = "#5a3c3c";
 };
 
 #endif // UICONTROLLER_H

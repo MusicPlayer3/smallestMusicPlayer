@@ -79,6 +79,8 @@ public:
     MediaController(const MediaController &) = delete;
     MediaController &operator=(const MediaController &) = delete;
 
+    
+
     // --- 播放控制 ---
     void play(); // 恢复播放 或 播放当前选定
     void pause();
