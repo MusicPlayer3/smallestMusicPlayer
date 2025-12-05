@@ -2,6 +2,10 @@
 #define COVER_HPP
 #include "Precompiled.h"
 #include "CoverImage.hpp"
+#include <mutex>
+#include <unordered_map>
+#include <memory>
+#include <string>
 
 class CoverCache
 {
@@ -27,6 +31,8 @@ private:
     CoverCache() = default;
 
     std::unordered_map<std::string, std::shared_ptr<CoverImage>> covercache; // 专辑名 -> 缩略图
-    friend void run_cover_test();                                            // 测试用
+    std::mutex m_mutex;                                                      // 线程锁
+
+    friend void run_cover_test(); // 测试用
 };
 #endif

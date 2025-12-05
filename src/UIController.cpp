@@ -361,6 +361,8 @@ void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
     }
 }
 
+bool m_hasLoadedInitialData = false;
+
 void UIController::checkAndUpdateScanState() // 这里是一个测试函数,用于将第一首歌放到我的播放器里面捏,后面可能可以给ListView
 {
     // 1. 只有在 UIController 认为当前正在扫描时，才轮询后端
@@ -372,9 +374,11 @@ void UIController::checkAndUpdateScanState() // 这里是一个测试函数,用�
     // 2. 调用 MediaController 后端方法轮询状态
     bool scanCplt = m_mediaController.isScanCplt();
 
-    if (scanCplt)
+    if (scanCplt && !m_hasLoadedInitialData)
     {
+        emit scanCompleted();
         // ** 扫描已完成！ **
+        m_hasLoadedInitialData = true;
 
         // 3. 更新 UIController 的缓存状态
         m_isScanning = false;

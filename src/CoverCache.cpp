@@ -1,8 +1,6 @@
 #include "CoverCache.hpp"
-
-// resize 库实现 (保持原样)
-
-// [新增] write 库实现，用于导出图片
+#include <QDebug>
+#include "CoverImage.hpp"
 
 namespace fs = std::filesystem;
 
@@ -10,8 +8,19 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
                                          const unsigned char *srcPixels,
                                          int srcW, int srcH, int channels)
 {
-    if (album.empty() || !srcPixels || srcW <= 0 || srcH <= 0 || channels <= 0)
+    // [修改] 严格检查通道数必须为 4
+    if (album.empty() || !srcPixels || srcW <= 0 || srcH <= 0 || channels != 4)
+    {
+        if (channels != 4 && channels > 0)
+        {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "CoverCache: Rejecting non-4-channel image for album %s (got %d)",
+                         album.c_str(), channels);
+        }
         return;
+    }
+
+    std::lock_guard<std::mutex> lock(m_mutex);
 
     if (covercache.find(album) != covercache.end())
         return;
@@ -19,15 +28,11 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
     const int targetW = 256;
     const int targetH = 256;
 
-    // ============================================================
-    // 修改点 1: 在创建 CoverImage 对象前，先分配好内存
-    // ============================================================
-    // 创建一个临时的 vector 来存储缩放后的数据
-    // 大小必须严格等于 宽 * 高 * 通道数
     std::vector<uint8_t> resizedPixels;
     try
     {
-        resizedPixels.resize(targetW * targetH * channels);
+        // 4 channels * 256 * 256
+        resizedPixels.resize(targetW * targetH * 4);
     }
     catch (const std::bad_alloc &)
     {
@@ -35,32 +40,16 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
         return;
     }
 
-    int srcStride = srcW * channels;
-    int dstStride = targetW * channels;
+    int srcStride = srcW * 4;
+    int dstStride = targetW * 4;
 
-    // 布局选择逻辑保持不变
-    stbir_pixel_layout layout;
-    switch (channels)
-    {
-    case 1: layout = STBIR_1CHANNEL; break;
-    case 2: layout = STBIR_2CHANNEL; break;
-    case 3: layout = STBIR_RGB; break;
-    case 4: layout = STBIR_RGBA; break;
-    default:
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Unsupported channel count: %d", channels);
-        return;
-    }
-
-    // ============================================================
-    // 修改点 2: 写入到临时的 resizedPixels 中
-    // ============================================================
+    // [修改] 强制使用 STBIR_RGBA，因为我们已经确保输入是 4 通道
     auto res = stbir_resize_uint8_srgb(
         srcPixels,
         srcW, srcH, srcStride,
         resizedPixels.data(),
         targetW, targetH, dstStride,
-        layout);
+        STBIR_RGBA);
 
     if (!res)
     {
@@ -70,38 +59,33 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
         return;
     }
 
-    // ============================================================
-    // 修改点 3: 构建 RAII 对象
-    // ============================================================
     try
     {
-        // 使用 std::move 将 resizedPixels 的所有权转移给 CoverImage
-        // 这样不会发生内存拷贝，效率极高
         auto img = std::make_shared<CoverImage>(
             targetW,
             targetH,
-            channels,
+            4, // 确认是4
             std::move(resizedPixels));
 
-        // 存入缓存
         covercache[album] = std::move(img);
     }
     catch (const std::exception &e)
     {
-        // 捕获构造函数中可能抛出的 std::invalid_argument 等异常
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "CoverCache: Failed to create CoverImage: %s", e.what());
     }
 }
 
-std::shared_ptr<CoverImage> CoverCache::get(const std::string &album) // 获取封面图
+std::shared_ptr<CoverImage> CoverCache::get(const std::string &album)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     auto it = covercache.find(album);
     return (it == covercache.end()) ? nullptr : it->second;
 }
 
 void CoverCache::clear()
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     covercache.clear();
 }
 
@@ -157,72 +141,40 @@ static std::string sanitizeFilename(const std::string &name)
 
 void run_cover_test()
 {
-    SDL_Log("=== Starting Cover Cache Export Test ===");
-
-    // 1. 创建 ./ttemp 目录
-    fs::path exportDir = "/tmp/ttemp";
-    try
-    {
-        if (!fs::exists(exportDir))
-        {
-            fs::create_directories(exportDir);
-        }
-    }
-    catch (const std::exception &e)
-    {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Test: Failed to create dir /tmp/ttemp: %s", e.what());
-        return;
-    }
-
-    // 2. 获取单例引用
     CoverCache &cache = CoverCache::instance();
+    std::lock_guard<std::mutex> lock(cache.m_mutex);
+    const auto &map = cache.covercache;
 
-    // 3. 遍历私有 map
-    if (cache.covercache.empty())
+    qDebug() << "========================================================";
+    qDebug() << "--- Start CoverCache Debug Output (Total Keys:" << map.size() << ") ---";
+    qDebug() << "========================================================";
+
+    if (map.empty())
     {
-        SDL_Log("Test: CoverCache is empty. Nothing to export.");
-        return;
+        qDebug() << "CoverCache is currently EMPTY. No keys found.";
+    }
+    else
+    {
+        int count = 0;
+        for (const auto &[key, imgPtr] : map)
+        {
+            QString status = "Invalid or Null";
+            if (imgPtr && imgPtr->isValid())
+            {
+                status = QString("%1x%2 (%3 channels)")
+                             .arg(imgPtr->width())
+                             .arg(imgPtr->height())
+                             .arg(imgPtr->channels());
+            }
+
+            qDebug() << QString("[%1] KEY: \"%2\" | SIZE: %3")
+                            .arg(++count, 2, 10, QChar('0'))
+                            .arg(QString::fromStdString(key))
+                            .arg(status);
+        }
     }
 
-    int count = 0;
-    for (const auto &[albumName, imgPtr] : cache.covercache)
-    {
-        if (!imgPtr || !imgPtr->isValid())
-        {
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Test: Invalid image for album: %s", albumName.c_str());
-            continue;
-        }
-
-        // 清洗文件名
-        std::string safeName = sanitizeFilename(albumName);
-        if (safeName.empty())
-            safeName = "Unknown_Album_" + std::to_string(count);
-
-        // 构造输出路径 (保存为 PNG)
-        fs::path outPath = exportDir / (safeName + ".png");
-
-        // 4. 写入文件
-        // stbi_write_png 参数: filename, w, h, comp(channels), data, stride_in_bytes
-        int stride = imgPtr->width() * imgPtr->channels();
-
-        int result = stbi_write_png(
-            outPath.string().c_str(),
-            imgPtr->width(),
-            imgPtr->height(),
-            imgPtr->channels(),
-            imgPtr->data(),
-            stride);
-
-        if (result)
-        {
-            // SDL_Log("Test: Exported [%s]", outPath.string().c_str());
-        }
-        else
-        {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Test: Failed to write [%s]", outPath.string().c_str());
-        }
-        count++;
-    }
-
-    SDL_Log("=== Cover Cache Export Finished. Total: %d files ===", count);
+    qDebug() << "========================================================";
+    qDebug() << "--- End CoverCache Debug Output ---";
+    qDebug() << "========================================================";
 }

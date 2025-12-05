@@ -26,6 +26,30 @@ Rectangle {
         anchors.rightMargin: 10
         spacing: 10
 
+        Button {
+            id: backButton
+            background: Rectangle { color: "transparent" }
+            // 模仿返回箭头图标
+            Text {
+                text: "undo" // Material Icon
+                font.pixelSize: 20
+                color: "#CCCCCC"
+                anchors.centerIn: parent
+                font.family: musicListHeader.iconFontFamily
+            }
+            
+            // 假设您有一个布尔属性来控制按钮的可见性，例如，在根目录时隐藏它
+            // visible: musicListModel.canGoBack // 假设在 Model 中添加了这个属性
+            
+            onClicked: {
+                musicListModel.goBack(); // 调用 C++ 中的函数
+                console.log("Back to parent");
+            }
+            
+            Layout.preferredWidth: 40
+            Layout.preferredHeight: 40
+        }
+
         // --- 1. 左侧按钮 (放大镜/搜索) ---
         Button {
             id: searchButton
@@ -67,7 +91,7 @@ Rectangle {
             // 时间信息 (模仿图中的样式)
             Text {
                 id: durationText
-                text: "剩余 101 小时 11 分钟 分钟" // 默认值
+                text: "" // TODO:这里就暂时先不设置剩余时间了,但是留个接口
                 font.pixelSize: 12
                 color: "#AAAAAA"
                 Layout.alignment: Qt.AlignHCenter

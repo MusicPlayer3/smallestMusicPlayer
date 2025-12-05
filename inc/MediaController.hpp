@@ -119,11 +119,11 @@ public:
     void setNowPlayingSong(PlaylistNode *node);
 
     // 目录导航：进入子目录
-    void enterDirectory(PlaylistNode *dirNode);
-    // 目录导航：返回上一级 (操作 currentDir)
-    void returnParentDirectory();
+    // void enterDirectory(PlaylistNode *dirNode);
+    // // 目录导航：返回上一级 (操作 currentDir)
+    // void returnParentDirectory();
 
-    PlaylistNode *getCurrentDirectory();
+    // PlaylistNode *getCurrentDirectory();
     PlaylistNode *getCurrentPlayingNode();
 
     // --- 状态获取 ---

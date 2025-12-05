@@ -17,6 +17,29 @@ ApplicationWindow {
     color: "transparent" // 为了圆角窗口或自定义背景
     flags: Qt.FramelessWindowHint | Qt.Window // 无边框窗口
 
+    Connections {
+        target: playerController
+        // 1. 监听扫描状态变化
+        // function onIsScanningChanged() {
+        //     if (!playerController.isScanning) {
+        //         console.log("扫描完成，开始加载列表...")
+        //         // [关键] 扫描结束后，通知 Model 加载根目录
+        //         musicListModel.loadRoot()
+        //     }
+        // }
+        function onScanCompleted() {
+            console.log("C++ Scan Completed, loading root data.");
+            // 当收到 C++ 的扫描完成信号后，调用 Model 的加载函数
+            musicListModel.loadRoot(); 
+        }
+
+        // 2. [可选] 监听歌曲切换，同步列表高亮
+        // 假设 playerController 发出了 songTitleChanged 或专门的信号
+        function onSongTitleChanged() {
+            musicListModel.refreshPlayingState()
+        }
+    }
+
     // 1. 加载字体
     FontLoader {
         id: materialFont
@@ -38,11 +61,11 @@ ApplicationWindow {
     // 这个是可拖动的窗口的区域
     MouseArea{
         // 锚定到父元素的顶部和左右两侧
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
+        // anchors.top: parent.top
+        // anchors.left: parent.left
+        // anchors.right: parent.right
 
-        height: 80
+        anchors.fill: parent
 
         property point clickPos: "0,0"
         onPressed: {
@@ -63,7 +86,6 @@ ApplicationWindow {
 
     // 这个让我的文件选择窗口自动在一开始就打开
     Component.onCompleted: {
-        console.log("Application loaded. Automatically opening folder dialog.")
         // 1. 自动打开对话框
         folderDialog.open()
     }
