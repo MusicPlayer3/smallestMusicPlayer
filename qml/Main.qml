@@ -12,9 +12,9 @@ ApplicationWindow {
     id: window
     visible: true
     width: 400
-    height: 700
+    height: 750
     minimumWidth: 400 
-    minimumHeight: 700 
+    minimumHeight: 750 
     title: "Music Player"
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.Window
@@ -32,15 +32,15 @@ ApplicationWindow {
     // 控制侧边栏是否展开
     property bool isSidebarOpen: false
 
-    // 监听分屏能力变化，实现“自动弹出”
+    // 监听分屏能力变化，实现“自动弹出”与“自动收起”
     onIsDockCapableChanged: {
-        // 当窗口拉大到足以分屏时，自动展开播放列表
         if (isDockCapable) {
+            // 窗口变宽，自动展开
             isSidebarOpen = true
+        } else {
+            // 窗口变窄无法容纳时，自动收起
+            isSidebarOpen = false
         }
-        // 当窗口缩小到不足以分屏时，您可以选择自动收起，或者保持原状（变成悬浮遮挡模式）
-        // 这里选择保持原状，由用户决定是否关闭，或者如下行代码自动关闭：
-        // else { isSidebarOpen = false } 
     }
 
     Connections {
@@ -60,15 +60,27 @@ ApplicationWindow {
     }
 
     // =========================================================================
-    // 1. 全局背景
+    // 1. 全局背景 (颜色平滑过渡)
     // =========================================================================
     Rectangle {
         id: background
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: playerController.gradientColor1 } 
-            GradientStop { position: 0.5; color: playerController.gradientColor2 } 
-            GradientStop { position: 1.0; color: playerController.gradientColor3 } 
+            GradientStop { 
+                position: 0.0; 
+                color: playerController.gradientColor1 
+                Behavior on color { ColorAnimation { duration: 1000; easing.type: Easing.Linear } }
+            } 
+            GradientStop { 
+                position: 0.5; 
+                color: playerController.gradientColor2 
+                Behavior on color { ColorAnimation { duration: 1000; easing.type: Easing.Linear } }
+            } 
+            GradientStop { 
+                position: 1.0; 
+                color: playerController.gradientColor3 
+                Behavior on color { ColorAnimation { duration: 1000; easing.type: Easing.Linear } }
+            } 
         }
         radius: isMaximized ? 0 : 10
         property bool isMaximized: window.visibility === Window.Maximized
@@ -84,7 +96,7 @@ ApplicationWindow {
     }
 
     // =========================================================================
-    // 2. 窗口调整大小手柄 (修复 Bug 1)
+    // 2. 窗口调整大小手柄
     // =========================================================================
     Item {
         anchors.fill: parent
@@ -115,7 +127,7 @@ ApplicationWindow {
         ResizeArea { anchors { top: parent.top; left: parent.left; right: parent.right; leftMargin: 10; rightMargin: 10 } height: 5; edgeFlag: Qt.TopEdge }
         ResizeArea { anchors { bottom: parent.bottom; left: parent.left; right: parent.right; leftMargin: 10; rightMargin: 10 } height: 5; edgeFlag: Qt.BottomEdge }
 
-        // 角落 (10x10) - 使用位运算组合 Edge
+        // 角落 (10x10)
         ResizeArea { anchors { top: parent.top; left: parent.left } width: 10; height: 10; edgeFlag: Qt.TopEdge | Qt.LeftEdge }
         ResizeArea { anchors { top: parent.top; right: parent.right } width: 10; height: 10; edgeFlag: Qt.TopEdge | Qt.RightEdge }
         ResizeArea { anchors { bottom: parent.bottom; left: parent.left } width: 10; height: 10; edgeFlag: Qt.BottomEdge | Qt.LeftEdge }
@@ -138,31 +150,28 @@ ApplicationWindow {
     }
 
     // =========================================================================
-    // 3. 侧边栏 (播放列表) - 修复 Bug 4 (层级) & Bug 5 (收起)
+    // 3. 侧边栏 (播放列表)
     // =========================================================================
     Item {
         id: sidebarContainer
         width: sidebarWidth
         height: window.height
         
-        // 修复 Bug 4: 设置 Z 轴为 500，确保高于窗口右上角的控制按钮 (Z=200)
-        // 这样当侧边栏弹出时，会盖住右上角的按钮，避免点击冲突
+        // Z=500 确保高于标题栏按钮
         z: 500 
         
-        // 位置逻辑：由 isSidebarOpen 唯一决定
         x: isSidebarOpen ? 0 : -width
 
         Behavior on x {
             NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
         }
 
-        // 侧边栏背景阴影 (仅在悬浮覆盖模式下显示，即开启但非分屏状态)
+        // 侧边栏背景阴影 (悬浮模式下)
         RectangularGlow {
             anchors.fill: contentRect
             glowRadius: 10
             spread: 0.2
             color: "#80000000"
-            // 当不是分屏模式(悬浮)且打开时显示阴影
             visible: !isDockCapable && isSidebarOpen
         }
 
@@ -184,8 +193,7 @@ ApplicationWindow {
     // 点击遮罩 (仅在悬浮模式有效)
     MouseArea {
         anchors.fill: parent
-        z: 499 // 比侧边栏低一点，但比播放器高
-        // 只有在悬浮模式(非 Dock 模式)且侧边栏打开时，才启用遮罩，点击空白处关闭
+        z: 499 
         visible: !isDockCapable && isSidebarOpen
         onClicked: window.isSidebarOpen = false
     }
@@ -197,29 +205,28 @@ ApplicationWindow {
         id: playerContainer
         height: window.height
         
-        // 只有当具备分屏能力 且 侧边栏打开时，才进行位置偏移
-        // 否则(即使侧边栏打开但窗口很小)，播放器保持全屏(被遮挡)，x=0
         property bool isDocked: isDockCapable && isSidebarOpen
 
         x: isDocked ? sidebarWidth : 0
+        
+        // 关键修改：移除 width 的 Behavior，实现实时响应
         width: isDocked ? (window.width - sidebarWidth) : window.width
 
+        // 保留 X 的 Behavior
         Behavior on x { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
-        Behavior on width { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
 
         ColumnLayout {
             id: mainColumnLayout
             
             width: Math.min(parent.width - 40, 400) 
-            height: parent.height - 40 // 留出上下边距
+            height: parent.height - 40 
             
             anchors.centerIn: parent 
-            spacing: 0 // 手动控制 spacing
+            spacing: 0 
 
-            // --- 顶部弹性填充 (修复 Bug 3: 确保垂直居中) ---
             Item { Layout.fillHeight: true }
 
-            // --- 2. 封面控件 ---
+            // --- 封面 ---
             Item {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.preferredWidth: Math.min(256, parent.width * 0.7)
@@ -265,13 +272,12 @@ ApplicationWindow {
                 }
             }
 
-            // --- 间隔 (修复 Bug 2: 增加封面与进度条距离) ---
             Item { 
                 Layout.fillWidth: true
-                Layout.preferredHeight: 40 // 强制留出 40px 的空间
+                Layout.preferredHeight: 40 
             } 
 
-            // --- 3. 进度条区域 ---
+            // --- 进度条 ---
             ColumnLayout{
                 Layout.fillWidth: true
                 Layout.leftMargin: 10
@@ -331,9 +337,9 @@ ApplicationWindow {
                 }
             }
 
-            Item { Layout.fillWidth: true; Layout.preferredHeight: 15 } // 间隔
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 15 }
 
-            // --- 4. 文本信息区域 ---
+            // --- 文本信息 ---
             Column {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignHCenter
@@ -368,9 +374,9 @@ ApplicationWindow {
                 }
             }
 
-            Item { Layout.fillWidth: true; Layout.preferredHeight: 25 } // 间隔
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 25 }
 
-            // --- 5. 播放控制 ---
+            // --- 播放控制 ---
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
                 spacing: 30
@@ -398,9 +404,9 @@ ApplicationWindow {
                 }
             }
 
-            Item { Layout.fillWidth: true; Layout.preferredHeight: 15 } // 间隔
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 15 }
 
-            // --- 6. 音量控制 ---
+            // --- 音量控制 ---
             RowLayout {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignHCenter
@@ -428,9 +434,9 @@ ApplicationWindow {
                 Text { text: "volume_up"; color: "#CCC"; font.pixelSize: 18 ; font.family: materialFont.name}
             }
 
-            Item { Layout.fillWidth: true; Layout.preferredHeight: 30 } // 间隔
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 30 }
 
-            // --- 7. 底部按钮组 ---
+            // --- 底部按钮 ---
             RowLayout {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignHCenter
@@ -443,9 +449,6 @@ ApplicationWindow {
                         buttonText: "view_sidebar"
                         iconFontFamily: materialFont.name
                         textSize: 18; textColor: "white"
-                        
-                        // 逻辑修改：纯粹作为一个 Toggle 开关
-                        // 无论是在 Dock 模式还是悬浮模式，都可以通过这个按钮收起/展开列表
                         checkable: true
                         checked: isSidebarOpen
                         onClicked: {
@@ -487,7 +490,6 @@ ApplicationWindow {
                 }
             }
             
-            // --- 底部弹性填充 (确保垂直居中) ---
             Item { Layout.fillHeight: true }
         }
     }
@@ -502,7 +504,6 @@ ApplicationWindow {
         anchors.topMargin: 10 
         anchors.rightMargin: 10 
         spacing: 8
-        // Z轴 200。侧边栏弹出时 Z=500 会覆盖此区域
         z: 200 
 
         Repeater {
