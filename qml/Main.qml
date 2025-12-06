@@ -445,13 +445,132 @@ ApplicationWindow {
             Layout.alignment: Qt.AlignHCenter
             spacing: 5 // 相邻紧凑一点
 
-            Text {
-                text: playerController.songTitle
-                color: "white"
-                font.pixelSize: 22
-                font.bold: true
+            // 1. 视口容器 (用于裁剪)
+            Item {
+                id: viewPort
+                width: parent.width * 0.9
+                //width:380
+                height: 30
+                // 将 viewPort 自身在 Column 中水平居中
                 anchors.horizontalCenter: parent.horizontalCenter
+                clip: true
+
+                // 2. 文本宽度测量器 (隐藏)
+                Text {
+                    id: contentChecker
+                    visible: false
+                    text: playerController.songTitle
+                    //text: "这是一段很长很长的文本.它将超出显示区域"
+                    font.pixelSize: 22
+                    font.bold: true
+                    wrapMode: Text.NoWrap
+                }
+
+                // 3. 实际滚动内容的容器
+                Row {
+                    id: scrollContent
+                    spacing: 50                    
+                    // --- 文本副本 1 和 2 保持不变 ---
+                    // Text 1
+                    Text {
+                        text: contentChecker.text
+                        color: "white"
+                        font.pixelSize: 22
+                        font.bold: true
+                        wrapMode: Text.NoWrap
+                        verticalAlignment: Text.AlignVCenter
+                        height: viewPort.height
+                    }
+
+                    // Text 2 (用于无缝衔接)
+                    Text {
+                        text: contentChecker.text
+                        color: "white"
+                        font.pixelSize: 22
+                        font.bold: true
+                        wrapMode: Text.NoWrap
+                        verticalAlignment: Text.AlignVCenter
+                        height: viewPort.height
+                        visible: contentChecker.implicitWidth > viewPort.width
+                    }
+                }
+
+                // 4. 动画和控制逻辑 (保持不变)
+                PropertyAnimation {
+                    id: marqueeAnimation
+                    target: scrollContent
+                    property: "x"
+                    // ... (from, to, duration, onRunningChanged 保持不变)
+                    duration: contentChecker.implicitWidth > 0 ? contentChecker.implicitWidth * 15 : 0
+                    easing.type: Easing.Linear
+
+                    onRunningChanged: {
+                        if (!running && to !== 0) {
+                            scrollContent.x = from;
+                            marqueeAnimation.start();
+                        }
+                    }
+                }
+
+                // 5. 滚动状态控制函数 (增加居中逻辑)
+                function updateMarqueeState() {
+                    marqueeAnimation.stop();
+                    scrollContent.x = 0; // 动画前重置
+
+                    // 计算文本未溢出时的居中 X 坐标 (CenterOffset)
+                    var centerOffset = (viewPort.width - contentChecker.implicitWidth) / 2;
+                    
+                    // 如果计算出的偏移量小于0，说明文本已经溢出了
+                    if (centerOffset < 0) {
+                        // *** 文本溢出：启动滚动 ***
+                        
+                        // 1. 设置动画起点：让文本从居中对齐的位置开始
+                        marqueeAnimation.from = 0; // 滚动起点从 viewPort 的左边缘开始
+                        // 我们在 Text.x 上应用 CenterOffset
+                        scrollContent.x = centerOffset;
+
+                        // 2. 设置动画终点：移动距离等于文本宽度 + 间距
+                        // 因为动画的 'from' 是 0，所以终点需要包含起始的偏移量
+                        // 终点是 (文本宽度 + 间距) 往左移动
+                        marqueeAnimation.to = -(contentChecker.implicitWidth + scrollContent.spacing);
+                        
+                        // 3. 调整 duration
+                        marqueeAnimation.duration = contentChecker.implicitWidth * 30;
+
+                        scrollContent.children[1].visible = true; // 显示第二个副本
+                        marqueeAnimation.start();
+                        
+                    } else {
+                        // *** 文本未溢出：停止滚动，完美居中 ***
+                        scrollContent.children[1].visible = false;
+                
+                        // ⚡ 关键调整：使用 anchors.horizontalCenter 属性来保证居中！
+                        // 这比手动计算 x 坐标更具 QML 规范性，能保证 Text 的中心点对齐 viewPort 的中心点
+                        scrollContent.anchors.horizontalCenter = viewPort.horizontalCenter;
+
+                        // 确保 x 属性不受动画残余影响，并禁用 x 的手动设置
+                        scrollContent.x = 0;
+                    }
+                }
+
+                // 绑定到文本变化或组件完成时检查滚动状态
+                Component.onCompleted: updateMarqueeState()
+                onWidthChanged: updateMarqueeState() // 应对 viewPort 宽度变化
+                Connections {
+                    target: playerController
+                    function onSongTitleChanged() {
+                        updateMarqueeState();
+                    }
+                }
             }
+
+            // Text {
+            //     text: playerController.songTitle
+            //     color: "white"
+            //     font.pixelSize: 22
+            //     font.bold: true
+            //     anchors.horizontalCenter: parent.horizontalCenter
+            // }
 
             Text {
                 text: playerController.artistName
@@ -630,31 +749,36 @@ ApplicationWindow {
                 spacing: 15
                 StyleButton {
                     id: stylePlayBtn
-                    property int playMode : 1 // 0 是列表顺序播放，1 是单曲循环
-                    buttonText: "repeat" // 初始设置为 "repeat
+                    //property int playMode : 1 // 1 是列表顺序播放，2 列表循环播放 3 是单曲循环
+                    //buttonText: "repeat" // 初始设置为 "repeat
+                    buttonText: playerController.repeatMode === 1 ? "repeat" : 
+                                playerController.repeatMode === 2 ? "repeat_one" : 
+                                "import_export" // 假设 None 模式使用 import_export (顺序播放)图标
                     width: 40
                     height: 40
                     iconFontFamily: materialFont.name
                     textSize: 18
                     textColor: "white"
                     onClicked:{
-                       console.log("Repeat Clicked") // TODO: 这里改变播放状态
-                       playMode ++;
-                       switch(playMode){
+                       //console.log("Repeat Clicked")
+                       playerController.toggleRepeatMode();
+                    //    playMode ++;
+                    //    switch(playMode){
 
-                           case 1:
-                               stylePlayBtn.buttonText = "arrow_right_alt";
-                               break;
-                           case 2:
-                               // 列表顺序播放
-                               stylePlayBtn.buttonText = "repeat";
-                               break;
-                           case 3:
-                               // 单曲循环
-                               stylePlayBtn.buttonText = "repeat_one";
-                               playMode = 0;
-                               break;
-                       }
+                    //        case 1:
+                    //            // 列表顺序播放
+                    //            stylePlayBtn.buttonText = "arrow_right_alt";
+                    //            break;
+                    //        case 2:
+                    //            // 列表循环播放
+                    //            stylePlayBtn.buttonText = "repeat";
+                    //            break;
+                    //        case 3:
+                    //            // 单曲循环
+                    //            stylePlayBtn.buttonText = "repeat_one";
+                    //            playMode = 0;
+                    //            break;
+                    //    }
                    }
                 }
 

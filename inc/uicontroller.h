@@ -52,8 +52,9 @@ class UIController : public QObject
     // 8.音量
     Q_PROPERTY(double volume READ getVolume NOTIFY volumeChanged FINAL);
 
-    // 9.乱序播放状态
+    // 9.乱序、播放模式等播放状态
     Q_PROPERTY(bool isShuffle READ isShuffle WRITE setShuffle NOTIFY isShuffleChanged FINAL);
+    Q_PROPERTY(int repeatMode READ getRepeatMode NOTIFY repeatModeChanged FINAL);
 
 public:
     // 构造函数：初始化时获取 MediaController 单例
@@ -85,8 +86,12 @@ public:
     {
         return m_isShuffle;
     }
-    bool isSeeking() const { return m_isSeeking; }
+    bool isSeeking() const
+    {
+        return m_isSeeking;
+    }
     void setIsSeeking(bool newIsSeeking); // QML 调用的 Setter
+    int getRepeatMode() const;
 
 signals:
     // ----1. 扫描音乐文件----
@@ -126,6 +131,8 @@ signals:
 
     void isSeekingChanged();
 
+    void repeatModeChanged();
+
 public slots:
     // 核心：轮询槽，用于在不修改 MediaController 的前提下，获取后端状态
     void updateStateFromController(); // 这个是100ms的
@@ -144,6 +151,8 @@ public slots:
 
     // 乱序播放状态 Setter（用于QML写入）
     void setShuffle(bool newShuffle);
+    // 播放状态切换
+    Q_INVOKABLE void toggleRepeatMode();
 
 private:
     // 核心：保存 MediaController 单例的引用
@@ -162,6 +171,7 @@ private:
     void checkAndUpdatePlayState();                         // 新增：播放状态
     void checkAndUpdateVolumeState();                       // 新增：音量
     void checkAndUpdateShuffleState();                      // 新增：用于轮询 getShuffle()
+    void checkAndUpdateRepeatModeState();                   // 新增：用于轮询 getRepeatMode()
 
     // 专辑封面图
     QString m_coverArtSource;                  // 存储处理后的图片路径 (file://...)
@@ -192,13 +202,15 @@ private:
     double m_volume = 1.0;
     QTimer m_volumeTimer;
 
-     // 乱序播放状态缓存
+    // 乱序播放状态缓存
     bool m_isShuffle = false;
 
     // 正在拖动
     bool m_isSeeking = false;
 
     qint64 m_lastSeekRequestTime = 0; // 记录上一次 UI 主动请求 Seek 的时间戳
+
+    int m_repeatMode = 0;
 };
 
 #endif // UICONTROLLER_H

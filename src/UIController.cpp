@@ -91,6 +91,7 @@ QString formatTime(qint64 microsecs)
         .arg(seconds, 2, 10, QChar('0'));
 }
 
+// 这里的话到时候倒是可以将这个
 void UIController::updateGradientColors(const QString &imagePath)
 {
     // 调用 ColorExtractor 的静态方法，传入封面路径
@@ -184,6 +185,40 @@ void UIController::seek(qint64 pos_microsec)
     }
 }
 
+void UIController::toggleRepeatMode() // 切换外部qml的播放模式
+{
+    // 1. 计算新的模式 (循环：0 -> 1 -> 2 -> 0)
+    int newMode = (m_repeatMode + 1) % 3; // 0, 1, 2 循环
+
+    // 2. 通知 MediaController 后端改变状态
+    // 将 int 转换为 RepeatMode 枚举
+    m_mediaController.setRepeatMode(static_cast<RepeatMode>(newMode));
+
+    // 3. 立即更新本地缓存并通知 QML
+    if (m_repeatMode != newMode)
+    {
+        m_repeatMode = newMode;
+        emit repeatModeChanged();
+    }
+    qDebug() << "Repeat Mode Toggled to:" << m_repeatMode;
+}
+
+void UIController::checkAndUpdateRepeatModeState() // qml监听外部的播放模式
+{
+    // 获取后端 RepeatMode 状态
+    RepeatMode currentModeEnum = m_mediaController.getRepeatMode();
+
+    // 转换为 int
+    int currentMode = static_cast<int>(currentModeEnum);
+
+    if (m_repeatMode != currentMode)
+    {
+        m_repeatMode = currentMode;
+        emit repeatModeChanged();
+        qDebug() << "Repeat Mode synchronized from backend:" << m_repeatMode;
+    }
+}
+
 // 这里是getter们
 QString UIController::defaultMusicPath() const
 {
@@ -256,6 +291,11 @@ bool UIController::getIsPlaying() const
 double UIController::getVolume() const
 {
     return m_volume;
+}
+
+int UIController::getRepeatMode() const
+{
+    return m_repeatMode;
 }
 
 void UIController::setVolume(double volume)
@@ -533,4 +573,6 @@ void UIController::updateVolumeState()
     checkAndUpdateVolumeState();
 
     checkAndUpdateShuffleState();
+
+    checkAndUpdateRepeatModeState();
 }
