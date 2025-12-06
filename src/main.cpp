@@ -232,7 +232,7 @@ int main(int argc, char *argv[])
     av_log_set_level(AV_LOG_ERROR);
 
 #endif
-    qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
+    // qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
 
     // 1. 预解析参数以决定是否启用 GUI (仅 Linux)
     bool useGui = true;
