@@ -501,13 +501,22 @@ ApplicationWindow {
                     target: scrollContent
                     property: "x"
                     // ... (from, to, duration, onRunningChanged 保持不变)
-                    duration: contentChecker.implicitWidth > 0 ? contentChecker.implicitWidth * 15 : 0
+                    
                     easing.type: Easing.Linear
 
+                    // onRunningChanged: {
+                    //     if (!running && to !== 0) {
+                    //         scrollContent.x = from;
+                    //         marqueeAnimation.start();
+                    //     }
+                    // }
                     onRunningChanged: {
-                        if (!running && to !== 0) {
-                            scrollContent.x = from;
-                            marqueeAnimation.start();
+                        if (!running && scrollContent.x !== 0 && to !== 0) {
+                            // 这里不需要做复杂判断，只要是应该滚动状态下停了，就重启
+                            if (contentChecker.implicitWidth > viewPort.width) {
+                                scrollContent.x = 0; 
+                                marqueeAnimation.start();
+                            }
                         }
                     }
                 }
@@ -515,41 +524,52 @@ ApplicationWindow {
                 // 5. 滚动状态控制函数 (增加居中逻辑)
                 function updateMarqueeState() {
                     marqueeAnimation.stop();
-                    scrollContent.x = 0; // 动画前重置
+                    //scrollContent.x = 0; // 动画前重置
+
+                    var textWidth = contentChecker.implicitWidth;
+                    var viewWidth = viewPort.width;
 
                     // 计算文本未溢出时的居中 X 坐标 (CenterOffset)
-                    var centerOffset = (viewPort.width - contentChecker.implicitWidth) / 2;
+                    ///var centerOffset = (viewPort.width - contentChecker.implicitWidth) / 2;
                     
                     // 如果计算出的偏移量小于0，说明文本已经溢出了
-                    if (centerOffset < 0) {
+                    if (textWidth > viewWidth) {
                         // *** 文本溢出：启动滚动 ***
                         
+                        // 1. 确定起点：从最左侧开始 (x=0)
+                        scrollContent.x = 0;
+
                         // 1. 设置动画起点：让文本从居中对齐的位置开始
                         marqueeAnimation.from = 0; // 滚动起点从 viewPort 的左边缘开始
                         // 我们在 Text.x 上应用 CenterOffset
-                        scrollContent.x = centerOffset;
+                        //scrollContent.x = centerOffset;
 
                         // 2. 设置动画终点：移动距离等于文本宽度 + 间距
                         // 因为动画的 'from' 是 0，所以终点需要包含起始的偏移量
                         // 终点是 (文本宽度 + 间距) 往左移动
-                        marqueeAnimation.to = -(contentChecker.implicitWidth + scrollContent.spacing);
+                        marqueeAnimation.to = -(textWidth + scrollContent.spacing);
                         
                         // 3. 调整 duration
-                        marqueeAnimation.duration = contentChecker.implicitWidth * 30;
+                        marqueeAnimation.duration = contentChecker.implicitWidth > 0 ? contentChecker.implicitWidth * 30 : 0;
 
-                        scrollContent.children[1].visible = true; // 显示第二个副本
+                        //scrollContent.children[1].visible = true; // 显示第二个副本
                         marqueeAnimation.start();
                         
                     } else {
                         // *** 文本未溢出：停止滚动，完美居中 ***
-                        scrollContent.children[1].visible = false;
+                        // scrollContent.children[1].visible = false;
                 
-                        // ⚡ 关键调整：使用 anchors.horizontalCenter 属性来保证居中！
-                        // 这比手动计算 x 坐标更具 QML 规范性，能保证 Text 的中心点对齐 viewPort 的中心点
-                        scrollContent.anchors.horizontalCenter = viewPort.horizontalCenter;
+                        // // ⚡ 关键调整：使用 anchors.horizontalCenter 属性来保证居中！
+                        // // 这比手动计算 x 坐标更具 QML 规范性，能保证 Text 的中心点对齐 viewPort 的中心点
+                        // scrollContent.anchors.horizontalCenter = viewPort.horizontalCenter;
 
-                        // 确保 x 属性不受动画残余影响，并禁用 x 的手动设置
-                        scrollContent.x = 0;
+                        // // 确保 x 属性不受动画残余影响，并禁用 x 的手动设置
+                        // scrollContent.x = 0;
+
+                        var centerX = (viewWidth - textWidth) / 2;
+                
+                        // 2. 直接赋值
+                        scrollContent.x = centerX;
                     }
                 }
 
@@ -559,7 +579,7 @@ ApplicationWindow {
                 Connections {
                     target: playerController
                     function onSongTitleChanged() {
-                        updateMarqueeState();
+                        viewPort.updateMarqueeState();
                     }
                 }
             }

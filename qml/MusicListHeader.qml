@@ -26,6 +26,10 @@ Rectangle {
         anchors.rightMargin: 10
         spacing: 10
 
+        property color baseColor: "#20FFFFFF" // 默认颜色（低透明度白）
+        property color hoverColor: "#30FFFFFF" // 悬停时的颜色
+        property color pressedColor: "#40FFFFFF" // 按下时的颜色
+
         Button {
             id: backButton
             background: Rectangle { color: "transparent" }
@@ -110,7 +114,7 @@ Rectangle {
             background: Rectangle { color: "transparent" }
             // 模仿打钩图标
             Text {
-                text: "done"
+                text: "close"
                 font.pixelSize: 20
                 color: "#CCCCCC"
                 anchors.centerIn: parent
