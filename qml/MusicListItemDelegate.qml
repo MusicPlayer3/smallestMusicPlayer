@@ -6,6 +6,7 @@ import Qt5Compat.GraphicalEffects
 Rectangle {
     width: ListView.view ? ListView.view.width : 400
     // 列表项背景色，默认透明
+    // TODO: 这里到时候也要弄一下我们的智能换颜色哦
     color: "transparent"
     // 高度，用于列表视图计算
     height: 60
@@ -19,6 +20,8 @@ Rectangle {
 
     property string iconFontFamily: ""
 
+    property bool isFolder: false
+
     // 鼠标区域用于处理点击事件和悬停效果
     MouseArea {
         anchors.fill: parent
@@ -26,7 +29,7 @@ Rectangle {
         onEntered: parent.color = "#40444A"
         onExited: parent.color = "transparent"
         onClicked: {
-            console.log("Clicked:", itemTitle)
+            musicListModel.handleClick(index)
             // 实际应用中：在这里调用 C++ 后端的方法来播放此歌曲
         }
     }
@@ -72,7 +75,7 @@ Rectangle {
             Layout.preferredWidth: 40
             Layout.preferredHeight: 40
 
-            radius: 10
+            radius: 4
             color: "#dddddd"
             clip: true
 
@@ -80,7 +83,7 @@ Rectangle {
             Image {
                 id: albumCover
                 anchors.fill: parent
-                source: itemImageSource // 替换为后端提供的封面 URL, 记得到时候把下面的false给取消了, 还有下面那个Text
+                source: itemImageSource 
                 fillMode: Image.PreserveAspectCrop
 
                 layer.enabled: true
@@ -89,7 +92,7 @@ Rectangle {
                     maskSource: Rectangle {
                         width: albumCover.width
                         height: albumCover.height
-                        radius: 10      // 使用同样的圆角
+                        radius: 4      // 使用同样的圆角
                         color: "white"  // white = 不透明区域
                     }
                 }
@@ -100,7 +103,7 @@ Rectangle {
         // --- 2. 中间标题和艺术家 (上下堆叠) ---
         ColumnLayout {
             Layout.fillWidth: true
-            Layout.preferredWidth: 0   // 关键：允许它压缩但也能被拉伸
+            Layout.preferredWidth: 0
             Layout.preferredHeight: parent.height
 
             // 垂直居中对齐
@@ -115,8 +118,8 @@ Rectangle {
                 elide: Text.ElideRight // 文本过长时显示省略号
                 maximumLineCount: 1
 
-                Layout.fillWidth: true       // ← 关键
-                horizontalAlignment: Text.AlignLeft   // ← 关键
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignLeft
             }
 
             // 艺术家/作者
@@ -126,9 +129,10 @@ Rectangle {
                 color: "#AAAAAA" // 浅灰色作者
                 elide: Text.ElideRight
                 maximumLineCount: 1
+                visible: !isFolder
 
-                Layout.fillWidth: true       // ← 关键
-                horizontalAlignment: Text.AlignLeft   // ← 关键
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignLeft
             }
         }
 

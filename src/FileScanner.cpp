@@ -20,13 +20,12 @@
 #include <taglib/asfpicture.h>
 #include <taglib/wavfile.h>
 #include <taglib/aifffile.h>
-#include <taglib/dsffile.h> // 根据实际环境开启
-// #include <regex> // 仅保留用于极少部分，主要解析逻辑已移除正则
+#include <taglib/dsffile.h>
 
 namespace fs = std::filesystem;
 
 // ==========================================
-// RAII Helpers (安全性优化)
+// RAII Helpers
 // ==========================================
 
 struct StbiDeleter
@@ -50,7 +49,7 @@ struct AVFormatContextDeleter
 using AVContextPtr = std::unique_ptr<AVFormatContext, AVFormatContextDeleter>;
 
 // ==========================================
-// 1. 后缀名支持 (性能优化: unordered_set O(1))
+// 1. 后缀名支持
 // ==========================================
 
 static std::unordered_set<std::string> g_supportedAudioExts;
@@ -68,7 +67,6 @@ void FileScanner::initSupportedExtensions()
 {
     std::call_once(g_initFlag, []()
                    {
-        // av_register_all(); // FFmpeg 4.0+ deprecated
         for (const auto &ext : kKnownAudioExtensions)
         {
             if (av_find_input_format(ext.c_str()))
@@ -93,14 +91,13 @@ inline bool isffmpeg(const std::string &route)
     std::string ext = getLowerExtension(route);
     if (g_supportedAudioExts.find(ext) == g_supportedAudioExts.end())
         return false;
-    return true; // 既然已经 check 了 extension map，通常无需再次 check isValidAudio
+    return true;
 }
 
 inline bool hasExtension(const std::string &filename, const std::string &ext)
 {
     if (filename.length() < ext.length())
         return false;
-    // 简单的后缀比较，忽略大小写
     auto itFn = filename.rbegin();
     auto itExt = ext.rbegin();
     while (itExt != ext.rend())
@@ -114,18 +111,17 @@ inline bool hasExtension(const std::string &filename, const std::string &ext)
 }
 
 // ==========================================
-// 2. CUE 解析 (性能优化: 移除 Regex)
+// 2. CUE 解析
 // ==========================================
 
 static int64_t parseCueTime(const std::string &timeStr)
 {
-    // 格式 mm:ss:ff
     int m = 0, s = 0, f = 0;
     char d;
     std::stringstream ss(timeStr);
     ss >> m >> d >> s >> d >> f;
     double totalSeconds = m * 60.0 + s + (f / 75.0);
-    return static_cast<int64_t>(totalSeconds * 1000000); // 微秒
+    return static_cast<int64_t>(totalSeconds * 1000000);
 }
 
 struct CueTrackInfo
@@ -138,7 +134,6 @@ struct CueTrackInfo
     std::string audioFile;
 };
 
-// 辅助：去除字符串首尾空格和引号
 static std::string cleanString(std::string str)
 {
     size_t first = str.find_first_not_of(" \t\r\n\"");
@@ -161,7 +156,6 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
 
     while (std::getline(file, line))
     {
-        // 简单关键字匹配，比 Regex 快很多
         std::string token;
         std::stringstream ss(line);
         ss >> token;
@@ -169,7 +163,6 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
 
         if (token == "FILE")
         {
-            // FILE "filename" WAVE
             size_t firstQuote = line.find('\"');
             size_t lastQuote = line.rfind('\"');
             if (firstQuote != std::string::npos && lastQuote > firstQuote)
@@ -178,9 +171,7 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
             }
             else
             {
-                // 尝试直接获取第二个参数
                 ss >> currentFile;
-                // 去除潜在引号
                 currentFile = cleanString(currentFile);
             }
         }
@@ -234,7 +225,6 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
         tracks.push_back(currentTrack);
     }
 
-    // 计算时长
     for (size_t i = 0; i < tracks.size(); ++i)
     {
         if (i < tracks.size() - 1 && tracks[i].audioFile == tracks[i + 1].audioFile)
@@ -266,22 +256,16 @@ static std::string findRealAudioFile(const fs::path &dirPath, const std::string 
 }
 
 // ==========================================
-// 3. 封面提取 (代码复用优化)
+// 3. 封面提取基础 (TagLib)
 // ==========================================
 
 static TagLib::ByteVector extractID3v2Cover(TagLib::ID3v2::Tag *tag)
 {
     if (!tag)
-    {
         return TagLib::ByteVector();
-    }
-
     auto frames = tag->frameList("APIC");
     if (frames.isEmpty())
-    {
         return TagLib::ByteVector();
-    }
-
     return static_cast<TagLib::ID3v2::AttachedPictureFrame *>(frames.front())->picture();
 }
 
@@ -291,23 +275,16 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     p.make_preferred();
     std::string ext = getLowerExtension(musicPath);
 
-    // 使用通用 FileRef 尝试（如果不需要特定格式的非标准标签读取）
-    // 但为了保持原有逻辑的健壮性（特定格式读取），使用简化后的逻辑
-
-    // 1. MP3 / WAV / AIFF (ID3v2 Based)
     if (ext == ".mp3" || ext == ".wav" || ext == ".aiff" || ext == ".aif")
     {
         TagLib::FileRef f(p.c_str(), false);
         if (!f.isNull() && f.file())
         {
-            // 尝试向下转换，TagLib 的类设计比较分散，这里尽量简化
-            // 若是 MP3
             if (auto mp3 = dynamic_cast<TagLib::MPEG::File *>(f.file()))
             {
                 if (mp3->ID3v2Tag())
                     return extractID3v2Cover(mp3->ID3v2Tag());
             }
-            // 若是 WAV
             else if (auto wav = dynamic_cast<TagLib::RIFF::WAV::File *>(f.file()))
             {
                 if (wav->ID3v2Tag())
@@ -315,14 +292,12 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
             }
         }
     }
-    // 2. FLAC
     else if (ext == ".flac")
     {
         TagLib::FLAC::File file(p.c_str(), false);
         if (file.isValid() && !file.pictureList().isEmpty())
             return file.pictureList()[0]->data();
     }
-    // 3. MP4
     else if (ext == ".m4a" || ext == ".mp4" || ext == ".aac")
     {
         TagLib::MP4::File file(p.c_str(), false);
@@ -333,7 +308,6 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
                 return list.front().data();
         }
     }
-    // 4. WMA
     else if (ext == ".wma" || ext == ".asf")
     {
         TagLib::ASF::File file(p.c_str(), false);
@@ -380,51 +354,113 @@ static std::string findDirectoryCover(const fs::path &dirPath)
     return "";
 }
 
-// 缓存封面逻辑
-static void cacheDirCover(const std::string &dirPath, const std::string &explicitCoverPath, const std::string &fallbackAudioPath)
-{
-    int width, height, channels;
-    StbiPtr imgPixels(nullptr); // RAII
+// ==========================================
+// 4. 图片加载与通道强制 (关键修改)
+// ==========================================
 
-    // A. 显式文件
-    if (!explicitCoverPath.empty())
+// 辅助：从内存加载，强制转换为4通道 (RGBA)
+static StbiPtr loadBufferAsRGBA(const unsigned char *data, int size, int &w, int &h)
+{
+    if (!data || size <= 0)
+        return nullptr;
+    int c = 0;
+    // req_comp = 4 强制加载为 RGBA
+    return StbiPtr(stbi_load_from_memory(data, size, &w, &h, &c, 4));
+}
+
+// 辅助：从文件加载，强制转换为4通道 (RGBA)
+static StbiPtr loadFileAsRGBA(const std::string &path, int &w, int &h)
+{
+    if (path.empty())
+        return nullptr;
+    fs::path p(path);
+    p.make_preferred();
+    std::ifstream file(p, std::ios::binary | std::ios::ate);
+    if (!file.good())
+        return nullptr;
+
+    auto size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    std::vector<unsigned char> buffer(size);
+    if (!file.read(reinterpret_cast<char *>(buffer.data()), size))
+        return nullptr;
+
+    return loadBufferAsRGBA(buffer.data(), (int)size, w, h);
+}
+
+// 核心逻辑：处理并缓存单曲封面
+// 1. 尝试内嵌 -> 强制4通道
+// 2. 失败则用 fallbackPixels (文件夹封面，已是4通道)
+// 3. 存入 Cache
+static void processAndCacheCover(const std::string &musicPath,
+                                 const std::string &albumKey,
+                                 const unsigned char *fallbackPixels, int fbW, int fbH)
+{
+    if (albumKey.empty())
+        return;
+
+    // 1. 提取内嵌
+    TagLib::ByteVector data = extractCoverData(musicPath);
+
+    // 2. 尝试解码内嵌为4通道
+    int w = 0, h = 0;
+    StbiPtr imgPixels(nullptr);
+
+    if (!data.isEmpty())
     {
-        fs::path p(explicitCoverPath);
-        p.make_preferred();
-        std::ifstream file(p, std::ios::binary | std::ios::ate);
-        if (file.good())
-        {
-            auto size = file.tellg();
-            file.seekg(0, std::ios::beg);
-            std::vector<unsigned char> buffer(size);
-            if (file.read(reinterpret_cast<char *>(buffer.data()), size))
-            {
-                imgPixels.reset(stbi_load_from_memory(buffer.data(), (int)size, &width, &height, &channels, 4));
-            }
-        }
+        imgPixels = loadBufferAsRGBA(reinterpret_cast<const unsigned char *>(data.data()),
+                                     data.size(), w, h);
     }
 
-    // B. 内嵌封面
+    // 3. 决策：如果有内嵌且解码成功，存入；否则如果有文件夹封面，存入
+    if (imgPixels)
+    {
+        // 内嵌优先
+        CoverCache::instance().putCompressedFromPixels(albumKey, imgPixels.get(), w, h, 4);
+    }
+    else if (fallbackPixels && fbW > 0 && fbH > 0)
+    {
+        // 使用文件夹封面
+        CoverCache::instance().putCompressedFromPixels(albumKey, fallbackPixels, fbW, fbH, 4);
+    }
+}
+
+// 缓存文件夹自身的封面 (Key = 文件夹名)
+static void cacheDirCover(const std::string &dirPath,
+                          const std::string &explicitCoverPath,
+                          const std::string &fallbackAudioPath)
+{
+    int w = 0, h = 0;
+    StbiPtr imgPixels(nullptr);
+
+    // A. 显式文件 (强制4通道)
+    if (!explicitCoverPath.empty())
+    {
+        imgPixels = loadFileAsRGBA(explicitCoverPath, w, h);
+    }
+
+    // B. 内嵌封面 (强制4通道)
     if (!imgPixels && !fallbackAudioPath.empty())
     {
         auto coverData = extractCoverData(fallbackAudioPath);
         if (!coverData.isEmpty())
         {
-            imgPixels.reset(stbi_load_from_memory(
-                reinterpret_cast<const unsigned char *>(coverData.data()),
-                coverData.size(), &width, &height, &channels, 4));
+            imgPixels = loadBufferAsRGBA(reinterpret_cast<const unsigned char *>(coverData.data()),
+                                         coverData.size(), w, h);
         }
     }
 
     // C. 存入缓存
     if (imgPixels)
     {
-        CoverCache::instance().putCompressedFromPixels(dirPath, imgPixels.get(), width, height, 4);
+        fs::path p(dirPath);
+        std::string key = p.filename().string();
+        CoverCache::instance().putCompressedFromPixels(key, imgPixels.get(), w, h, 4);
     }
 }
 
 // ==========================================
-// 4. 元数据获取 (安全性与FFmpeg时长优化)
+// 5. 元数据获取 (移除了缓存逻辑)
 // ==========================================
 
 static int64_t getFFmpegDuration(const std::string &filePath)
@@ -433,18 +469,12 @@ static int64_t getFFmpegDuration(const std::string &filePath)
     if (avformat_open_input(&ctxRaw, filePath.c_str(), nullptr, nullptr) != 0)
         return 0;
 
-    // 交给智能指针管理关闭
     AVContextPtr ctx(ctxRaw);
-
     if (avformat_find_stream_info(ctx.get(), nullptr) < 0)
         return 0;
-
     if (ctx->duration != AV_NOPTS_VALUE)
-    {
-        return ctx->duration; // AV_TIME_BASE (microsecond)
-    }
+        return ctx->duration;
 
-    // 遍历流查找
     for (unsigned int i = 0; i < ctx->nb_streams; i++)
     {
         if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
@@ -466,9 +496,8 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
     p.make_preferred();
     MetaData musicData;
 
-    if (fs::exists(p)) // isffmpeg check removed here to avoid double IO, assumed checked before call
+    if (fs::exists(p))
     {
-        // 1. TagLib 读取文本信息
         TagLib::FileRef f(p.c_str());
         if (!f.isNull() && f.tag())
         {
@@ -478,40 +507,24 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
             musicData.setAlbum(tag->album().toCString(true));
             musicData.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
         }
-
         musicData.setFilePath(p.string());
         musicData.setParentDir(p.parent_path().string());
-
-        // 2. FFmpeg 获取精准时长
         musicData.setDuration(getFFmpegDuration(p.string()));
 
-        // 3. 提取封面并缓存 (Album Key)
-        auto coverData = extractCoverData(musicPath);
-        if (!coverData.isEmpty())
-        {
-            int w, h, c;
-            StbiPtr img(stbi_load_from_memory(
-                reinterpret_cast<const unsigned char *>(coverData.data()),
-                coverData.size(), &w, &h, &c, STBI_rgb_alpha));
-
-            if (img)
-            {
-                std::string key = musicData.getAlbum().empty() ? "Unknown" : musicData.getAlbum();
-                CoverCache::instance().putCompressedFromPixels(key, img.get(), w, h, 4);
-            }
-        }
+        // [修改] 此处不再尝试缓存封面，将控制权交给调用者 (scanDir等)
     }
     return musicData;
 }
 
 // ==========================================
-// 5. 目录扫描与构建
+// 6. 目录扫描与构建
 // ==========================================
 
 static std::set<std::string> processCueAndAddNodes(
     const fs::path &cuePath,
     const std::shared_ptr<PlaylistNode> &parentNode,
-    const std::string &dirCoverPath)
+    const std::string &dirCoverPath,
+    const unsigned char *fallbackPixels, int fbW, int fbH) // 传入文件夹封面(4通道)
 {
     std::set<std::string> handledAudioFiles;
     try
@@ -526,7 +539,6 @@ static std::set<std::string> processCueAndAddNodes(
             {
                 fs::path pAudio(realAudioPath);
                 pAudio.make_preferred();
-
                 handledAudioFiles.insert(pAudio.string());
                 try
                 {
@@ -537,26 +549,29 @@ static std::set<std::string> processCueAndAddNodes(
                 }
 
                 auto trackNode = std::make_shared<PlaylistNode>(pAudio.string(), false);
-                MetaData md = FileScanner::getMetaData(pAudio.string());
+                MetaData md = FileScanner::getMetaData(pAudio.string()); // 仅获取文本
 
                 if (!track.title.empty())
                     md.setTitle(track.title);
                 if (!track.performer.empty())
                     md.setArtist(track.performer);
-
                 md.setOffset(track.startTime);
                 if (track.duration > 0)
                     md.setDuration(track.duration);
                 else
                 {
-                    // 简单计算剩余时长
                     int64_t rem = md.getDuration() - track.startTime;
                     if (rem > 0)
                         md.setDuration(rem);
                 }
-
                 if (!dirCoverPath.empty())
                     md.setCoverPath(dirCoverPath);
+
+                std::string albumKey = md.getAlbum().empty() ? "Unknown" : md.getAlbum();
+                trackNode->setCoverKey(albumKey);
+
+                // [修改] 调用统一逻辑：内嵌 -> 文件夹封面(fallbackPixels) -> 缓存
+                processAndCacheCover(pAudio.string(), albumKey, fallbackPixels, fbW, fbH);
 
                 trackNode->setMetaData(md);
                 parentNode->addChild(trackNode);
@@ -577,11 +592,17 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
     fs::path preferredPath = dirPath;
     preferredPath.make_preferred();
     std::string dirPathStr = preferredPath.string();
+    std::string folderName = preferredPath.filename().string();
 
     auto node = std::make_shared<PlaylistNode>(dirPathStr, true);
-    node->setCoverKey(dirPathStr);
+    node->setCoverKey(folderName);
 
     std::string dirCoverPath = findDirectoryCover(preferredPath);
+
+    // [修改] 预加载文件夹封面到内存 (强制4通道)
+    int dcW = 0, dcH = 0;
+    StbiPtr dcPixels = loadFileAsRGBA(dirCoverPath, dcW, dcH); // channels隐式为4
+
     std::set<std::string> processedFiles;
 
     // A. 处理 CUE
@@ -589,7 +610,7 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
     {
         if (entry.is_regular_file() && hasExtension(entry.path().string(), ".cue"))
         {
-            auto files = processCueAndAddNodes(entry.path(), node, dirCoverPath);
+            auto files = processCueAndAddNodes(entry.path(), node, dirCoverPath, dcPixels.get(), dcW, dcH);
             processedFiles.insert(files.begin(), files.end());
         }
     }
@@ -611,6 +632,7 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
                 childPath.make_preferred();
                 std::string filePath = childPath.string();
 
+                // 去重逻辑
                 std::string canon = filePath;
                 try
                 {
@@ -619,7 +641,6 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
                 catch (...)
                 {
                 }
-
                 if (processedFiles.count(filePath) || processedFiles.count(canon))
                     continue;
 
@@ -629,6 +650,13 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
                     MetaData md = FileScanner::getMetaData(filePath);
                     if (!dirCoverPath.empty())
                         md.setCoverPath(dirCoverPath);
+
+                    std::string albumKey = md.getAlbum().empty() ? "Unknown" : md.getAlbum();
+                    fileNode->setCoverKey(albumKey);
+
+                    // [修改] 处理单曲封面：内嵌 -> 文件夹封面(dcPixels) -> 缓存
+                    processAndCacheCover(filePath, albumKey, dcPixels.get(), dcW, dcH);
+
                     fileNode->setMetaData(md);
                     node->addChild(fileNode);
                 }
@@ -641,7 +669,7 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 
     node->sortChildren();
 
-    // 缓存文件夹封面
+    // 缓存文件夹封面 (Key = Folder Name)
     std::string fallbackAudio;
     for (const auto &child : node->getChildren())
     {
@@ -651,6 +679,7 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
             break;
         }
     }
+    // 注意：cacheDirCover内部也会强制转4通道
     cacheDirCover(preferredPath.string(), dirCoverPath, fallbackAudio);
 
     return node;
@@ -674,9 +703,13 @@ void FileScanner::scanDir()
         if (hasExtension(rootDir, ".cue"))
         {
             auto root = std::make_shared<PlaylistNode>(rootPath.parent_path().string(), true);
-            root->setCoverKey(rootPath.parent_path().string());
+            root->setCoverKey(rootPath.parent_path().filename().string());
+
             std::string dirCover = findDirectoryCover(rootPath.parent_path());
-            processCueAndAddNodes(rootPath, root, dirCover);
+            int dcW = 0, dcH = 0;
+            StbiPtr dcPixels = loadFileAsRGBA(dirCover, dcW, dcH);
+
+            processCueAndAddNodes(rootPath, root, dirCover, dcPixels.get(), dcW, dcH);
             if (!root->getChildren().empty())
             {
                 root->sortChildren();
@@ -686,7 +719,19 @@ void FileScanner::scanDir()
         else if (isffmpeg(rootDir))
         {
             auto fileNode = std::make_shared<PlaylistNode>(rootPath.string(), false);
-            fileNode->setMetaData(FileScanner::getMetaData(rootPath.string()));
+            MetaData md = FileScanner::getMetaData(rootPath.string());
+
+            std::string albumKey = md.getAlbum().empty() ? "Unknown" : md.getAlbum();
+            fileNode->setCoverKey(albumKey);
+
+            std::string dirCover = findDirectoryCover(rootPath.parent_path());
+            int dcW = 0, dcH = 0;
+            StbiPtr dcPixels = loadFileAsRGBA(dirCover, dcW, dcH);
+
+            // [修改] 统一逻辑
+            processAndCacheCover(rootPath.string(), albumKey, dcPixels.get(), dcW, dcH);
+
+            fileNode->setMetaData(md);
             rootNode = fileNode;
         }
         hasScanCpld = true;
@@ -695,7 +740,7 @@ void FileScanner::scanDir()
 
     // 目录处理
     auto root = std::make_shared<PlaylistNode>(rootPath.string(), true);
-    root->setCoverKey(rootPath.string());
+    root->setCoverKey(rootPath.filename().string());
 
     std::vector<fs::directory_entry> entries;
     try
@@ -717,11 +762,14 @@ void FileScanner::scanDir()
     // 预处理根目录 CUE
     std::set<std::string> processed;
     std::string rootCover = findDirectoryCover(rootPath);
+    int rcW = 0, rcH = 0;
+    StbiPtr rootPixels = loadFileAsRGBA(rootCover, rcW, rcH);
+
     for (const auto &entry : entries)
     {
         if (entry.is_regular_file() && hasExtension(entry.path().string(), ".cue"))
         {
-            auto h = processCueAndAddNodes(entry.path(), root, rootCover);
+            auto h = processCueAndAddNodes(entry.path(), root, rootCover, rootPixels.get(), rcW, rcH);
             processed.insert(h.begin(), h.end());
         }
     }
@@ -755,7 +803,6 @@ void FileScanner::scanDir()
         std::vector<std::thread> threads;
         std::vector<std::vector<std::shared_ptr<PlaylistNode>>> results(threadCount);
 
-        // 简单的块划分
         auto worker = [&](unsigned int idx, unsigned int begin, unsigned int end)
         {
             for (unsigned int i = begin; i < end; ++i)
@@ -771,11 +818,18 @@ void FileScanner::scanDir()
                     }
                     else
                     {
-                        // 单个文件
+                        // 根目录下的单个文件
                         fs::path p = entry.path();
                         p.make_preferred();
                         auto node = std::make_shared<PlaylistNode>(p.string(), false);
                         MetaData md = getMetaData(p.string());
+
+                        std::string albumKey = md.getAlbum().empty() ? "Unknown" : md.getAlbum();
+                        node->setCoverKey(albumKey);
+
+                        // [修改] 统一逻辑
+                        processAndCacheCover(p.string(), albumKey, rootPixels.get(), rcW, rcH);
+
                         if (!rootCover.empty())
                             md.setCoverPath(rootCover);
                         node->setMetaData(md);
@@ -807,7 +861,7 @@ void FileScanner::scanDir()
 
     root->sortChildren();
 
-    // 根目录封面缓存
+    // 根目录封面缓存 (Key = Folder Name)
     std::string fallbackAudio;
     for (const auto &child : root->getChildren())
     {
@@ -824,7 +878,7 @@ void FileScanner::scanDir()
 }
 
 // ==========================================
-// 6. 辅助工具 (Sanitize & Temp File)
+// 6. 辅助工具
 // ==========================================
 
 static bool isIllegalChar(char c)
@@ -843,14 +897,10 @@ static std::string sanitizeFilename(const std::string &name)
     safeName.reserve(name.size());
     for (char c : name)
         safeName.push_back(isIllegalChar(c) ? '_' : c);
-
-    // Trim
     auto notSpace = [](unsigned char c)
     { return !std::isspace(c); };
     if (std::none_of(safeName.begin(), safeName.end(), notSpace))
         return "Unknown_Album";
-
-    // 简单保留字检查略，实际影响较小
     return safeName;
 }
 
@@ -885,9 +935,7 @@ std::string FileScanner::extractCoverToTempFile(const std::string &musicPath, co
     fs::path targetPath = tmpDir / (safeName + ext);
 
     if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
-    {
         return fs::absolute(targetPath).string();
-    }
 
     std::ofstream outFile(targetPath, std::ios::binary | std::ios::trunc);
     if (outFile)

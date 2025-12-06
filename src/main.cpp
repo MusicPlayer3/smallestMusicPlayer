@@ -284,7 +284,7 @@ int main(int argc, char *argv[])
         // 如果在 GUI 模式下也想利用 rootDir，可以在这里添加逻辑
         // if (!rootDir.isEmpty()) { ... }
 
-        musicModel->loadInitialData();
+        // musicModel->loadInitialData();
         engine.rootContext()->setContextProperty("musicListModel", musicModel);
 
         QObject::connect(

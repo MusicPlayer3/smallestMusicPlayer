@@ -577,29 +577,29 @@ double MediaController::getVolume()
 
 // --- 目录导航 ---
 
-void MediaController::enterDirectory(PlaylistNode *dirNode)
-{
-    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-    if (dirNode && dirNode->isDir())
-    {
-        currentDir = dirNode;
-    }
-}
+// void MediaController::enterDirectory(PlaylistNode *dirNode)
+// {
+//     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+//     if (dirNode && dirNode->isDir())
+//     {
+//         currentDir = dirNode;
+//     }
+// }
 
-void MediaController::returnParentDirectory()
-{
-    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-    if (currentDir && currentDir->getParent())
-    {
-        currentDir = currentDir->getParent().get();
-    }
-}
+// void MediaController::returnParentDirectory()
+// {
+//     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+//     if (currentDir && currentDir->getParent())
+//     {
+//         currentDir = currentDir->getParent().get();
+//     }
+// }
 
-PlaylistNode *MediaController::getCurrentDirectory()
-{
-    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-    return currentDir;
-}
+// PlaylistNode *MediaController::getCurrentDirectory()
+// {
+//     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+//     return currentDir;
+// }
 
 PlaylistNode *MediaController::getCurrentPlayingNode()
 {

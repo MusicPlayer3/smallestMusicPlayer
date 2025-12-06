@@ -15,7 +15,8 @@ private:
     void scanDir();
 
 public:
-    FileScanner(std::string rootDir) : rootDir(rootDir)
+    FileScanner(std::string rootDir) :
+        rootDir(rootDir)
     {
     }
     FileScanner() = default;
