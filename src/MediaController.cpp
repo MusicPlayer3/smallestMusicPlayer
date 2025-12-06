@@ -729,6 +729,28 @@ RepeatMode MediaController::getRepeatMode()
     return repeatMode.load();
 }
 
+// 辅助：原地转小写，避免分配新内存
+static bool containsIgnoreCase(const std::string &haystack, const std::string &needleLower)
+{
+    if (needleLower.empty())
+        return true;
+
+    // 如果 haystack 比 needle 短，直接返回 false
+    if (haystack.size() < needleLower.size())
+        return false;
+
+    // 简单的搜索实现，避免构造完整的 haystackLower
+    auto it = std::search(
+        haystack.begin(), haystack.end(),
+        needleLower.begin(), needleLower.end(),
+        [](char h, char n)
+        {
+            return std::tolower(static_cast<unsigned char>(h)) == n;
+        });
+
+    return it != haystack.end();
+}
+
 std::vector<PlaylistNode *> MediaController::searchSongs(const std::string &query)
 {
     std::vector<PlaylistNode *> results;
@@ -781,27 +803,29 @@ void MediaController::searchRecursive(PlaylistNode *scope, const std::string &qu
     {
         if (child->isDir())
         {
-            // 递归进入子文件夹
             searchRecursive(child.get(), queryLower, results);
         }
         else
         {
-            // 检查歌曲名
-            std::string title = child->getMetaData().getTitle();
-            // 如果 MetaData 为空，可能回退到检查文件名
-            if (title.empty())
+            // 优先检查 Title
+            const std::string &title = child->getMetaData().getTitle();
+            bool match = false;
+
+            if (!title.empty())
             {
-                title = fs::path(child->getPath()).filename().string();
+                match = containsIgnoreCase(title, queryLower);
             }
 
-            // 转小写
-            std::string titleLower = title;
-            std::transform(titleLower.begin(), titleLower.end(), titleLower.begin(),
-                           [](unsigned char c)
-                           { return std::tolower(c); });
+            // 如果 Title 没匹配，检查文件名
+            if (!match)
+            {
+                // 注意：这里 path 获取 filename 还是会产生临时对象，
+                // 进一步优化可以在 PlaylistNode 缓存 filename
+                std::string filename = fs::path(child->getPath()).filename().string();
+                match = containsIgnoreCase(filename, queryLower);
+            }
 
-            // 模糊匹配：子串查找
-            if (titleLower.find(queryLower) != std::string::npos)
+            if (match)
             {
                 results.push_back(child.get());
             }
