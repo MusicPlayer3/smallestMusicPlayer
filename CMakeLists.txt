@@ -123,6 +123,12 @@ qt_add_executable(appMusicPlayer
 
 )
 
+target_compile_definitions(appMusicPlayer
+    PRIVATE
+        $<$<CONFIG:Debug>:DEBUG>
+        $<$<CONFIG:Release>:RELEASE>
+)
+
 # ------------------------------
 # 定义 QML 模块
 # ------------------------------

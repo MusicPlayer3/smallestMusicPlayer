@@ -37,7 +37,7 @@ public:
 
     // 静态工具方法
     static MetaData getMetaData(const std::string &musicPath);
-    static std::string extractCoverToTempFile(const std::string &musicPath, const std::string &coverName);
+    static std::string extractCoverToTempFile(MetaData &metadata);
 
     void startScan()
     {

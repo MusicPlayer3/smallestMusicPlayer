@@ -17,6 +17,7 @@
 #include "MediaController.hpp"
 #include "ColorExtractor.hpp"
 #include "CoverCache.hpp"
+#include <taglib.h>
 
 // --- Linux Terminal Control Section ---
 #if defined(Q_OS_LINUX)
@@ -224,6 +225,13 @@ Q_DECL_EXPORT int qMain(int argc, char *argv[])
 int main(int argc, char *argv[])
 #endif
 {
+#ifdef DEBUG
+    av_log_set_level(AV_LOG_INFO);
+#endif
+#ifdef RELEASE
+    av_log_set_level(AV_LOG_ERROR);
+
+#endif
     qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
 
     // 1. 预解析参数以决定是否启用 GUI (仅 Linux)

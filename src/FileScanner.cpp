@@ -539,7 +539,6 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
         }
         musicData.setFilePath(p.string());
         musicData.setParentDir(p.parent_path().string());
-        // [耗时操作]
         musicData.setDuration(getFFmpegDuration(p.string()));
     }
     return musicData;
@@ -936,10 +935,18 @@ static std::string detectImageExtension(const TagLib::ByteVector &data)
     return ".jpg";
 }
 
-std::string FileScanner::extractCoverToTempFile(const std::string &musicPath, const std::string &coverName)
+std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
 {
-    // ... (保持原样，省略以节省空间，因为这部分没变且不涉及扫描核心循环) ...
-    // 如果需要完整代码请保留原文件的实现
+    // 1. 检查 metadata 中是否已有封面路径
+    if (!metadata.getCoverPath().empty())
+    {
+        return metadata.getCoverPath();
+    }
+
+    // 获取音频文件路径
+    std::string musicPath = metadata.getFilePath();
+
+    // 准备临时目录
     fs::path tmpDir = fs::temp_directory_path() / "SmallestMusicPlayer";
     try
     {
@@ -950,19 +957,43 @@ std::string FileScanner::extractCoverToTempFile(const std::string &musicPath, co
     {
         return "";
     }
+
+    // 2. 尝试提取内嵌封面数据
     TagLib::ByteVector coverData = extractCoverData(musicPath);
-    if (coverData.isEmpty())
-        return "";
-    std::string safeName = sanitizeFilename(coverName);
-    std::string ext = detectImageExtension(coverData);
-    fs::path targetPath = tmpDir / (safeName + ext);
-    if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
-        return fs::absolute(targetPath).string();
-    std::ofstream outFile(targetPath, std::ios::binary | std::ios::trunc);
-    if (outFile)
+
+    // 如果内嵌数据不为空，保存到临时文件并返回
+    if (!coverData.isEmpty())
     {
-        outFile.write(coverData.data(), coverData.size());
-        return fs::absolute(targetPath).string();
+        // 使用文件名作为基础来生成安全的临时文件名
+        // 原代码使用了传入的 coverName，这里改为使用音频文件名
+        std::string safeName = sanitizeFilename(fs::path(musicPath).stem().string());
+        std::string ext = detectImageExtension(coverData);
+        fs::path targetPath = tmpDir / (safeName + ext);
+
+        // 如果文件已存在且大小大于0，直接返回
+        if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
+        {
+            return fs::absolute(targetPath).string();
+        }
+
+        std::ofstream outFile(targetPath, std::ios::binary | std::ios::trunc);
+        if (outFile)
+        {
+            outFile.write(coverData.data(), coverData.size());
+            return fs::absolute(targetPath).string();
+        }
     }
+
+    // 3. 如果内嵌数据为空，在歌曲所在目录查找外部封面文件
+    fs::path musicDir = fs::path(musicPath).parent_path();
+
+    auto coverPath = findDirectoryCover(musicDir);
+    if (!coverPath.empty())
+    {
+        metadata.setCoverPath(coverPath);
+        return coverPath;
+    }
+
+    // 既没有内嵌封面，也没有外部封面，返回空
     return "";
 }

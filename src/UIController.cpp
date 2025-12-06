@@ -336,7 +336,7 @@ void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
         std::string pathStr = metadata.getCoverPath();
         if (pathStr == "")
         {
-            pathStr = FileScanner::extractCoverToTempFile(metadata.getFilePath(), metadata.getAlbum());
+            pathStr = FileScanner::extractCoverToTempFile(metadata);
             metadata.setCoverPath(pathStr);
             currentNode->setMetaData(metadata);
         }
