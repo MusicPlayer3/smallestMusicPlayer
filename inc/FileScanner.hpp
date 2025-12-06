@@ -3,6 +3,11 @@
 
 #include "MetaData.hpp"
 #include "PlaylistNode.hpp"
+#include <future>
+#include <vector>
+#include <atomic>
+#include <thread>
+#include <mutex>
 
 class FileScanner
 {
@@ -30,11 +35,13 @@ public:
         return rootDir;
     }
 
+    // 静态工具方法
     static MetaData getMetaData(const std::string &musicPath);
     static std::string extractCoverToTempFile(const std::string &musicPath, const std::string &coverName);
 
     void startScan()
     {
+        // 启动扫描线程
         scanThread = std::thread(&FileScanner::scanDir, this);
         scanThread.detach();
     }

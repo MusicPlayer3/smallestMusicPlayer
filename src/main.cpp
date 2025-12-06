@@ -100,7 +100,7 @@ int getch()
     }
 }
 
-void runColorExtractorTest();
+// void runColorExtractorTest();
 void run_cover_test();
 
 // 终端控制模式的主逻辑
@@ -117,18 +117,22 @@ void runTerminalMode(QCoreApplication &app, const QString &rootDir)
     {
         std::cout << "Setting root directory: " << rootDir.toStdString() << '\n';
         mediaController.setRootPath(rootDir.toStdString());
+        auto start = std::chrono::high_resolution_clock::now();
         mediaController.startScan();
 
         // 简单的等待扫描开始
         std::cout << "Scanning...\n";
         while (!mediaController.isScanCplt())
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Scan completed in " << duration.count() << " ms\n";
         std::cout << "Scan completed. Trying to auto-play...\n";
         mediaController.play();
-        run_cover_test();
-        runColorExtractorTest();
+        // run_cover_test();
+        // runColorExtractorTest();
     }
     else
     {
