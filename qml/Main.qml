@@ -148,8 +148,8 @@ ApplicationWindow {
     RowLayout {
         //width: window.width
         height: window.height
-        width: 400
-        //height: 750
+        width: 350
+        //height: 400
         id: musicListView
         z : 2
 
@@ -181,7 +181,7 @@ ApplicationWindow {
                 // 确保列表视图占据父容器的全部空间
                 anchors.fill: parent
                 // 可以设置内边距，让列表与边缘保持一定距离
-                anchors.margins: 10
+                //anchors.margins: 10
                 // 连接 MusicListView 传出的信号 ***
                 onCloseRequested: {
                     musicListView.isOpen = false // 执行关闭操作
@@ -500,16 +500,9 @@ ApplicationWindow {
                     id: marqueeAnimation
                     target: scrollContent
                     property: "x"
-                    // ... (from, to, duration, onRunningChanged 保持不变)
                     
                     easing.type: Easing.Linear
 
-                    // onRunningChanged: {
-                    //     if (!running && to !== 0) {
-                    //         scrollContent.x = from;
-                    //         marqueeAnimation.start();
-                    //     }
-                    // }
                     onRunningChanged: {
                         if (!running && scrollContent.x !== 0 && to !== 0) {
                             // 这里不需要做复杂判断，只要是应该滚动状态下停了，就重启
@@ -592,22 +585,43 @@ ApplicationWindow {
             //     anchors.horizontalCenter: parent.horizontalCenter
             // }
 
-            Text {
+
+            MarqueeText {
+                //width: parent * 0.9
+
+                anchors.horizontalCenter: parent.horizontalCenter
                 text: playerController.artistName
                 color: "#DDDDDD"
                 font.pixelSize: 16
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
 
-            Text {
+                speed: 25
+            }
+            // Text {
+            //     text: playerController.artistName
+            //     color: "#DDDDDD"
+            //     font.pixelSize: 16
+            //     anchors.horizontalCenter: parent.horizontalCenter
+            // }
+            MarqueeText {
+                //width: parent * 0.9
+
+                anchors.horizontalCenter: parent.horizontalCenter
                 text: playerController.albumName
                 color: "#AAAAAA"
                 font.pixelSize: 14
-                anchors.horizontalCenter: parent.horizontalCenter
-                elide: Text.ElideRight
-                width: parent.width
-                horizontalAlignment: Text.AlignHCenter
+
+                speed: 25
+
             }
+            // Text {
+            //     text: playerController.albumName
+            //     color: "#AAAAAA"
+            //     font.pixelSize: 14
+            //     anchors.horizontalCenter: parent.horizontalCenter
+            //     elide: Text.ElideRight
+            //     width: parent.width
+            //     horizontalAlignment: Text.AlignHCenter
+            // }
         }
 
         Item { Layout.fillHeight: true; Layout.preferredHeight: 20 } // 间隔

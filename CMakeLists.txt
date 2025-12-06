@@ -141,6 +141,7 @@ qt_add_qml_module(appMusicPlayer
         SOURCES src/CoverImageProvider.cpp
         SOURCES inc/uicontroller.h
         SOURCES src/UIController.cpp
+        QML_FILES qml/MarqueeText.qml
 )
 
 # ------------------------------

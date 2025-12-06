@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <filesystem> // 用于获取文件夹名称
 #include <qdebug.h>
+#include <QFileInfo> // 用于提取文件夹名称
 
 // ---TODO:这里未来是给我们的MusicNode读取一下，然后把里面的数据暴露出来
 MusicListModel::MusicListModel(QObject *parent) :
@@ -82,6 +83,7 @@ void MusicListModel::loadRoot()
     }
 
     m_currentDirectoryNode = rootNode.get(); // 记录当前位置
+    setCurrentDirectoryNode(m_currentDirectoryNode);
     repopulateList(rootNode->getChildren());
 }
 
@@ -193,7 +195,7 @@ void MusicListModel::handleClick(int index)
 
         // 递归加载：取出子节点，刷新列表
         repopulateList(clickedNode->getChildren());
-
+        setCurrentDirectoryNode(clickedNode);
         // 可选：通知 MediaController 我们进入了新目录 (如果后端需要知道浏览状态)
         // 后端当然不需要知道我们去哪里了，这个游标只由我们管理
         // MediaController::getInstance().enterDirectory(clickedNode);
@@ -241,6 +243,45 @@ void MusicListModel::refreshPlayingState()
     }
 }
 
+void MusicListModel::setCurrentDirectoryNode(PlaylistNode *node)
+{
+    // 如果节点为空，可能是根目录为空，或者应用程序刚启动，这里可以给一个默认值
+    if (!node)
+    {
+        if (m_currentDirName != "播放列表")
+        {
+            m_currentDirName = "播放列表"; // 默认/根目录的标题
+            emit currentDirNameChanged();
+        }
+        return;
+    }
+
+    // 1. 获取新目录的路径
+    // PlaylistNode 的 getPath() 返回 std::string，需要转 QString
+    QString newPath = QString::fromStdString(node->getPath());
+
+    // 2. 使用 QFileInfo 提取文件夹名称
+    QFileInfo info(newPath);
+    QString newDirName = info.fileName();
+
+    // 如果是根目录 (通常没有文件名，或者文件名是 "/" 或驱动器名)
+    if (newDirName.isEmpty() || newDirName == ".")
+    {
+        newDirName = "音乐库"; // 或者你喜欢的根目录名称
+    }
+
+    // 3. 检查是否发生变化，并更新 Model
+    if (m_currentDirName != newDirName)
+    {
+        m_currentDirName = newDirName;
+        // 确保先更新属性，再发出信号
+        emit currentDirNameChanged();
+    }
+
+    // 4. 更新内部记录的节点指针
+    m_currentDirectoryNode = node;
+}
+
 // 返回上一级 (可选实现) 后面来实现,暂时是没有的
 // TODO:返回上一级
 void MusicListModel::goBack()
@@ -252,6 +293,7 @@ void MusicListModel::goBack()
         qDebug() << "Yes have a parent";
         // 3. 更新 Model 内部记录的当前目录
         m_currentDirectoryNode = parentNode.get(); // 假设你有这个成员变量
+        setCurrentDirectoryNode(m_currentDirectoryNode);
 
         // 4. 使用新目录的子项来刷新 QML 视图
         repopulateList(parentNode->getChildren()); // 假设 repopulateList 已经存在
@@ -266,40 +308,3 @@ void MusicListModel::goBack()
 
     // 注意：如果 newDirNode 为空，说明已经在根目录，MediaController 已经阻止了返回
 }
-
-// --- 测试版本的加载Model歌曲列表信息 ---
-
-// 1. const std::vector<std::shared_ptr<PlaylistNode>> &getChildren() const把Vector拿到
-// 2. 遍历PlaylistNode *getCurrentDirectory()里面的Vecter
-// 3. 把Vector里面的数据，放到*QList<MusicItem>里面
-// 4.
-// void MusicListModel::loadInitialData()
-// {
-//     QList<MusicItem> initialData = {
-//         {"これくらいで", "蓝月なくる", QUrl("qrc:/cover1.png"), false},
-//         {"夢で逢いましょう", "SARD UNDERGROUND", QUrl("qrc:/cover2.jpg"), true}, // isPlaying: true
-//         {"いのちの名前 (Cover...)", "Akie秋绘", QUrl("qrc:/cover3.png"), false},
-//         {"君に最後のログづけを", "ま.ゴ娘", QUrl("qrc:/cover4.png"), false},
-//         {"Fotizo", "nayuta/ARForest", QUrl("qrc:/cover5.png"), false},
-//         {"My Sweet Maiden", "Mia REGINA", QUrl("qrc:/cover6.png"), false}};
-//     // int cnt;
-//     // for (//vector)
-//     // {
-//     //     MusicItem item;
-//     //     vector->item; // 从vector里面拿到的PlaylistNode
-//     //                   //
-//     //     if(//先判断是不是一个文件夹){
-//     //         //是 的话,把他 artist写成Dir
-
-//     //         //否 的话,就不管了
-//     //     }else{
-//     //         map<*MusicItem, PlaylistNode>;
-//     //         initialData.push_back(std::move(item));
-//     //         map[&initialData[cnt]] = &vector->metaData;
-//     //     }
-//     // }
-//     // 后面还需要再写一个clean函数把这里的 map 还有musicList里面的数据都清空
-//     beginInsertRows(QModelIndex(), 0, initialData.count() - 1);
-//     m_musicList.append(initialData);
-//     endInsertRows();
-// }

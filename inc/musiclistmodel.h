@@ -24,6 +24,7 @@ struct MusicItem
 class MusicListModel : public QAbstractListModel
 {
     Q_OBJECT
+    Q_PROPERTY(QString currentDirName READ currentDirName NOTIFY currentDirNameChanged FINAL)
 public:
     explicit MusicListModel(QObject *parent = nullptr);
 
@@ -33,6 +34,12 @@ public:
 
     // 关键：定义角色，让 QML 知道如何访问数据
     QHash<int, QByteArray> roleNames() const override;
+
+    // 这个是当前文件名称
+    QString currentDirName() const
+    {
+        return m_currentDirName;
+    }
 
     // 添加数据的方法
     // void loadInitialData();
@@ -50,6 +57,12 @@ public:
     // 4. 返回上一级 (可选，用于面包屑导航)
     Q_INVOKABLE void goBack();
 
+    // 5. 用于在 C++ 内部设置新目录和发出信号
+    void setCurrentDirectoryNode(PlaylistNode *node);
+
+signals:
+    void currentDirNameChanged();
+
 private:
     // 内部函数：根据传入的 Node 列表重置模型数据
     void repopulateList(const std::vector<std::shared_ptr<PlaylistNode>> &nodes);
@@ -64,7 +77,7 @@ private:
     // 记录当前所在的目录节点，用于“返回上一级”
     PlaylistNode *m_currentDirectoryNode = nullptr;
 
-    // 2. 定义自定义角色
+    // 定义自定义角色
     enum MusicRoles
     {
         TitleRole = Qt::UserRole + 1,
@@ -73,5 +86,8 @@ private:
         PlayingRole,
         IsFolderRole
     };
+
+    // 存储当前目录名称的私有成员
+    QString m_currentDirName;
 };
 #endif // MUSICLISTMODEL_H

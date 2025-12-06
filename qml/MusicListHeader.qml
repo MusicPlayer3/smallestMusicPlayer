@@ -1,16 +1,19 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Qt5Compat.GraphicalEffects
+//import QtQuick.Effects
 
 Rectangle {
 
     id:musicListHeader
     // 表头样式，与图片保持一致的深灰色
-    color: "#3C3F46"
-    width: parent.width // 确保宽度跟随父级 (ListView)
+    color: '#003c3f46'
+    //width: parent.width // 确保宽度跟随父级 (ListView)
     height: 50 // 设定一个高度
     // 允许外部设置总时间文本
-    property alias totalDurationText: durationText.text
+    //property alias totalDurationText: durationText.text
+    
 
     property string iconFontFamily: ""
 
@@ -18,6 +21,16 @@ Rectangle {
 
     // 左右边距常量
     readonly property int margin: 10
+
+    // RectangularGlow {
+    //     id: effect
+    //     anchors.fill: musicListHeader
+    //     glowRadius: 1
+    //     spread: 0.1
+    //     color: "#AA000000"
+        
+    //     z:-1
+    // }
 
     // 使用 RowLayout 实现水平布局
     RowLayout {
@@ -85,21 +98,22 @@ Rectangle {
 
             // 标题
             Text {
-                text: "播放列表"
+                text: musicListModel.currentDirName
                 font.pixelSize: 16
                 color: "white"
                 font.bold: true
+                elide: Text.ElideRight
                 Layout.alignment: Qt.AlignHCenter // 居中显示
             }
 
             // 时间信息 (模仿图中的样式)
-            Text {
-                id: durationText
-                text: "" // TODO:这里就暂时先不设置剩余时间了,但是留个接口
-                font.pixelSize: 12
-                color: "#AAAAAA"
-                Layout.alignment: Qt.AlignHCenter
-            }
+            // Text {
+            //     id: durationText
+            //     text: "" // TODO:这里就暂时先不设置剩余时间了,但是留个接口
+            //     font.pixelSize: 12
+            //     color: "#AAAAAA"
+            //     Layout.alignment: Qt.AlignHCenter
+            // }
         }
 
         // **[关键修改 3]：右侧填充 Item**
