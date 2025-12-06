@@ -641,13 +641,17 @@ ApplicationWindow {
                        console.log("Repeat Clicked") // TODO: 这里改变播放状态
                        playMode ++;
                        switch(playMode){
+
                            case 1:
-                               // 列表顺序播放
-                               stylePlayBtn.buttonText = "repeat"
+                               stylePlayBtn.buttonText = "arrow_right_alt";
                                break;
                            case 2:
+                               // 列表顺序播放
+                               stylePlayBtn.buttonText = "repeat";
+                               break;
+                           case 3:
                                // 单曲循环
-                               stylePlayBtn.buttonText = "repeat_one"
+                               stylePlayBtn.buttonText = "repeat_one";
                                playMode = 0;
                                break;
                        }
