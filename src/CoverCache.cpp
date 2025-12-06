@@ -145,13 +145,13 @@ void run_cover_test()
     std::lock_guard<std::mutex> lock(cache.m_mutex);
     const auto &map = cache.covercache;
 
-    qDebug() << "========================================================";
-    qDebug() << "--- Start CoverCache Debug Output (Total Keys:" << map.size() << ") ---";
-    qDebug() << "========================================================";
+    std::cout << "========================================================";
+    std::cout << "--- Start CoverCache Debug Output (Total Keys:" << map.size() << ") ---";
+    std::cout << "========================================================";
 
     if (map.empty())
     {
-        qDebug() << "CoverCache is currently EMPTY. No keys found.";
+        std::cout << "CoverCache is currently EMPTY. No keys found.";
     }
     else
     {
@@ -167,14 +167,15 @@ void run_cover_test()
                              .arg(imgPtr->channels());
             }
 
-            qDebug() << QString("[%1] KEY: \"%2\" | SIZE: %3")
-                            .arg(++count, 2, 10, QChar('0'))
-                            .arg(QString::fromStdString(key))
-                            .arg(status);
+            std::cout << QString("[%1] KEY: \"%2\" | SIZE: %3")
+                             .arg(++count, 2, 10, QChar('0'))
+                             .arg(QString::fromStdString(key))
+                             .arg(status)
+                             .toStdString();
         }
     }
 
-    qDebug() << "========================================================";
-    qDebug() << "--- End CoverCache Debug Output ---";
-    qDebug() << "========================================================";
+    std::cout << "========================================================";
+    std::cout << "--- End CoverCache Debug Output ---";
+    std::cout << "========================================================";
 }

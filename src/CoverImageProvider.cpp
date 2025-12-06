@@ -4,7 +4,7 @@
 QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
 {
     // 1. 根据 QML 传入的 ID (专辑名) 从您的缓存中获取图片指针
-    std::string albumName = id.toStdString();
+    std::string albumName = QUrl::fromPercentEncoding(id.toUtf8()).toStdString();
     std::shared_ptr<CoverImage> imgPtr = CoverCache::instance().get(albumName);
 
     // 2. 检查图片是否有效
