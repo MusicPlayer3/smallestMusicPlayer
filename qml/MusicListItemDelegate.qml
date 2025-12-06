@@ -7,9 +7,10 @@ Rectangle {
     width: ListView.view ? ListView.view.width : 400
     // 列表项背景色，默认透明
     // TODO: 这里到时候也要弄一下我们的智能换颜色哦
-    color: "transparent"
+    // color: "transparent"
     // 高度，用于列表视图计算
     height: 60
+
 
     // 自定义属性，用于接收 Model 数据
     property url itemImageSource: ""
@@ -24,16 +25,17 @@ Rectangle {
 
     // 鼠标区域用于处理点击事件和悬停效果
     MouseArea {
+        id: mouseArea
         anchors.fill: parent
         // 鼠标悬停时变色
-        onEntered: parent.color = "#40444A"
-        onExited: parent.color = "transparent"
+        // onEntered: parent.color = "#40444A"
+        // onExited: parent.color = "transparent"
         onClicked: {
             musicListModel.handleClick(index)
             // 实际应用中：在这里调用 C++ 后端的方法来播放此歌曲
         }
     }
-
+    color: mouseArea.pressed ? "#50555B" : (mouseArea.containsMouse ? "#40444A" : "transparent")
 
 
     RowLayout {

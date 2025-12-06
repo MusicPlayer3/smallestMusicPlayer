@@ -4,217 +4,509 @@ import Qt5Compat.GraphicalEffects
 import QtQuick.Effects
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import QtQuick.Window
 
 import "./"
 
-
 ApplicationWindow {
-    id:window
+    id: window
     visible: true
     width: 400
-    height: 750
+    height: 700
+    minimumWidth: 400 
+    minimumHeight: 700 
     title: "Music Player"
-    color: "transparent" // 为了圆角窗口或自定义背景
-    flags: Qt.FramelessWindowHint | Qt.Window // 无边框窗口
+    color: "transparent"
+    flags: Qt.FramelessWindowHint | Qt.Window
+
+    // =========================================================================
+    // 逻辑控制属性
+    // =========================================================================
+    
+    readonly property int sidebarWidth: 350
+    readonly property int playerMinWidth: 450
+    
+    // 判断当前窗口宽度是否足以容纳分屏
+    readonly property bool isDockCapable: window.width >= (sidebarWidth + playerMinWidth)
+
+    // 控制侧边栏是否展开
+    property bool isSidebarOpen: false
+
+    // 监听分屏能力变化，实现“自动弹出”
+    onIsDockCapableChanged: {
+        // 当窗口拉大到足以分屏时，自动展开播放列表
+        if (isDockCapable) {
+            isSidebarOpen = true
+        }
+        // 当窗口缩小到不足以分屏时，您可以选择自动收起，或者保持原状（变成悬浮遮挡模式）
+        // 这里选择保持原状，由用户决定是否关闭，或者如下行代码自动关闭：
+        // else { isSidebarOpen = false } 
+    }
 
     Connections {
         target: playerController
-        // 1. 监听扫描状态变化
-        // function onIsScanningChanged() {
-        //     if (!playerController.isScanning) {
-        //         console.log("扫描完成，开始加载列表...")
-        //         // [关键] 扫描结束后，通知 Model 加载根目录
-        //         musicListModel.loadRoot()
-        //     }
-        // }
         function onScanCompleted() {
             console.log("C++ Scan Completed, loading root data.");
-            // 当收到 C++ 的扫描完成信号后，调用 Model 的加载函数
             musicListModel.loadRoot(); 
         }
-
-        // 2. [可选] 监听歌曲切换，同步列表高亮
-        // 假设 playerController 发出了 songTitleChanged 或专门的信号
         function onSongTitleChanged() {
             musicListModel.refreshPlayingState()
         }
     }
 
-    // 1. 加载字体
     FontLoader {
         id: materialFont
         source: "qrc:/MaterialIcons-Regular.ttf"
     }
 
-    // 背景（模拟图中的渐变背景） 这个地方到时候
+    // =========================================================================
+    // 1. 全局背景
+    // =========================================================================
     Rectangle {
         id: background
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: playerController.gradientColor1 } // 上部浅色深色
-            GradientStop { position: 0.5; color: playerController.gradientColor2 } // 中部更浅
-            GradientStop { position: 1.0; color: playerController.gradientColor3 } // 下部更深
+            GradientStop { position: 0.0; color: playerController.gradientColor1 } 
+            GradientStop { position: 0.5; color: playerController.gradientColor2 } 
+            GradientStop { position: 1.0; color: playerController.gradientColor3 } 
         }
-        radius: 10 // 窗口圆角
+        radius: isMaximized ? 0 : 10
+        property bool isMaximized: window.visibility === Window.Maximized
+
+        // 顶部拖拽区域
+        MouseArea {
+            height: 50
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            onPressed: window.startSystemMove()
+        }
     }
 
-    // 这个是可拖动的窗口的区域
-    MouseArea{
-        // 锚定到父元素的顶部和左右两侧
-        // anchors.top: parent.top
-        // anchors.left: parent.left
-        // anchors.right: parent.right
-
+    // =========================================================================
+    // 2. 窗口调整大小手柄 (修复 Bug 1)
+    // =========================================================================
+    Item {
         anchors.fill: parent
+        visible: window.visibility !== Window.Maximized
+        z: 1000 // 确保在最上层
 
-        property point clickPos: "0,0"
-        onPressed: {
-            window.startSystemMove()
+        component ResizeArea : MouseArea {
+            property int edgeFlag
+            cursorShape: {
+                switch(edgeFlag) {
+                    case (Qt.TopEdge | Qt.LeftEdge): return Qt.SizeFDiagCursor;
+                    case (Qt.BottomEdge | Qt.RightEdge): return Qt.SizeFDiagCursor;
+                    case (Qt.TopEdge | Qt.RightEdge): return Qt.SizeBDiagCursor;
+                    case (Qt.BottomEdge | Qt.LeftEdge): return Qt.SizeBDiagCursor;
+                    case Qt.TopEdge: return Qt.SizeVerCursor;
+                    case Qt.BottomEdge: return Qt.SizeVerCursor;
+                    case Qt.LeftEdge: return Qt.SizeHorCursor;
+                    case Qt.RightEdge: return Qt.SizeHorCursor;
+                    default: return Qt.ArrowCursor;
+                }
+            }
+            onPressed: window.startSystemResize(edgeFlag)
         }
-        // onPressed: function(mouse){
-        //     clickPos = Qt.point(mouse.x,mouse.y)
-        //     console.log("clickPos:",clickPos)
-        // }
-        // onPositionChanged: function(mouse){
-        //     let delta = Qt.point(mouse.x - clickPos.x ,mouse.y - clickPos.y)
-        //     console.log("delta:",delta)
-        //     window.x += delta.x
-        //     window.y += delta.y
-        //     console.log("window.x:\twindow.y",window.x,window.y)
-        // }
+
+        // 边缘 (5px)
+        ResizeArea { anchors { left: parent.left; top: parent.top; bottom: parent.bottom; topMargin: 10; bottomMargin: 10 } width: 5; edgeFlag: Qt.LeftEdge }
+        ResizeArea { anchors { right: parent.right; top: parent.top; bottom: parent.bottom; topMargin: 10; bottomMargin: 10 } width: 5; edgeFlag: Qt.RightEdge }
+        ResizeArea { anchors { top: parent.top; left: parent.left; right: parent.right; leftMargin: 10; rightMargin: 10 } height: 5; edgeFlag: Qt.TopEdge }
+        ResizeArea { anchors { bottom: parent.bottom; left: parent.left; right: parent.right; leftMargin: 10; rightMargin: 10 } height: 5; edgeFlag: Qt.BottomEdge }
+
+        // 角落 (10x10) - 使用位运算组合 Edge
+        ResizeArea { anchors { top: parent.top; left: parent.left } width: 10; height: 10; edgeFlag: Qt.TopEdge | Qt.LeftEdge }
+        ResizeArea { anchors { top: parent.top; right: parent.right } width: 10; height: 10; edgeFlag: Qt.TopEdge | Qt.RightEdge }
+        ResizeArea { anchors { bottom: parent.bottom; left: parent.left } width: 10; height: 10; edgeFlag: Qt.BottomEdge | Qt.LeftEdge }
+        ResizeArea { anchors { bottom: parent.bottom; right: parent.right } width: 10; height: 10; edgeFlag: Qt.BottomEdge | Qt.RightEdge }
     }
 
-    // 这个让我的文件选择窗口自动在一开始就打开
-    Component.onCompleted: {
-        // 1. 自动打开对话框
-        folderDialog.open()
-    }
-
-    // 文件选择窗口
+    Component.onCompleted: folderDialog.open()
+    
     FolderDialog {
         id: folderDialog
         title: "选择音乐文件夹"
-
-        // 绑定 C++ 提供的默认路径 (CONSTANT 属性)
-        //folder: playerController.defaultMusicPath
-
-        // 当用户点击“确定”选择文件夹后触发
         onAccepted: {
-            console.log("folderDialog.folder 的原始值:", folderDialog.selectedFolder);
-
-            // 将获取到的文件路径转成合适的url
             var urlObject = new URL(folderDialog.selectedFolder);
             var folderPath = urlObject.pathname;
-
             if (Qt.platform.os === "windows" && folderPath.startsWith("/")) {
                 folderPath = folderPath.substring(1);
             }
-
-            // 调用 C++ 方法开始扫描
-            if(folderPath === null){
-                console.log("You not select a folder")
-            }
-            else{
-                playerController.startMediaScan(folderPath)
-            }
-        }
-        onRejected: {
-            console.log("Folder selection cancelled.")
+            if(folderPath) playerController.startMediaScan(folderPath)
         }
     }
 
-    MouseArea {
-        z: -1
-        anchors.fill: parent
-        onClicked: {
-            musicListView.isOpen = false
-        }
-
-    }
-
-    Text {
-        id: qqqtest
-        text: "home"
-        color: "white"
-        anchors.top: parent.top
-        anchors.left: parent.left
-        font.weight: Font.Black
-        font.family: materialFont.name
-        width: 30
-    }
-
-    //--- 歌单程序布局 ---
-
-    RowLayout {
-        //width: window.width
+    // =========================================================================
+    // 3. 侧边栏 (播放列表) - 修复 Bug 4 (层级) & Bug 5 (收起)
+    // =========================================================================
+    Item {
+        id: sidebarContainer
+        width: sidebarWidth
         height: window.height
-        width: 350
-        //height: 400
-        id: musicListView
-        z : 2
+        
+        // 修复 Bug 4: 设置 Z 轴为 500，确保高于窗口右上角的控制按钮 (Z=200)
+        // 这样当侧边栏弹出时，会盖住右上角的按钮，避免点击冲突
+        z: 500 
+        
+        // 位置逻辑：由 isSidebarOpen 唯一决定
+        x: isSidebarOpen ? 0 : -width
 
-        // 初始放在屏幕左侧外面
-        x: isOpen ? 0 : -width
-
-        // 为 x 属性添加动画
         Behavior on x {
-            NumberAnimation {
-                duration: 250
-                easing.type: Easing.InOutQuad
-            }
+            NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
         }
 
-        // 控制开关
-        property bool isOpen: false
+        // 侧边栏背景阴影 (仅在悬浮覆盖模式下显示，即开启但非分屏状态)
+        RectangularGlow {
+            anchors.fill: contentRect
+            glowRadius: 10
+            spread: 0.2
+            color: "#80000000"
+            // 当不是分屏模式(悬浮)且打开时显示阴影
+            visible: !isDockCapable && isSidebarOpen
+        }
 
-        // --- 2. 右侧内容区域，放置 MusicListView ---
         Rectangle {
-            color: "#2B2E33" // 列表背景色
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-
-            // **** 实例化您的自定义 MusicListView 组件 ****
-            // QML 引擎会通过文件名找到并加载它
+            id: contentRect
+            anchors.fill: parent
+            color: "#2B2E33" 
+            
             MusicListView {
-
                 iconFamily: materialFont.name
-                // 确保列表视图占据父容器的全部空间
                 anchors.fill: parent
-                // 可以设置内边距，让列表与边缘保持一定距离
-                //anchors.margins: 10
-                // 连接 MusicListView 传出的信号 ***
                 onCloseRequested: {
-                    musicListView.isOpen = false // 执行关闭操作
+                    window.isSidebarOpen = false 
+                }
+            }
+        }
+    }
+    
+    // 点击遮罩 (仅在悬浮模式有效)
+    MouseArea {
+        anchors.fill: parent
+        z: 499 // 比侧边栏低一点，但比播放器高
+        // 只有在悬浮模式(非 Dock 模式)且侧边栏打开时，才启用遮罩，点击空白处关闭
+        visible: !isDockCapable && isSidebarOpen
+        onClicked: window.isSidebarOpen = false
+    }
+
+    // =========================================================================
+    // 4. 播放器主界面
+    // =========================================================================
+    Item {
+        id: playerContainer
+        height: window.height
+        
+        // 只有当具备分屏能力 且 侧边栏打开时，才进行位置偏移
+        // 否则(即使侧边栏打开但窗口很小)，播放器保持全屏(被遮挡)，x=0
+        property bool isDocked: isDockCapable && isSidebarOpen
+
+        x: isDocked ? sidebarWidth : 0
+        width: isDocked ? (window.width - sidebarWidth) : window.width
+
+        Behavior on x { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+        Behavior on width { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+
+        ColumnLayout {
+            id: mainColumnLayout
+            
+            width: Math.min(parent.width - 40, 400) 
+            height: parent.height - 40 // 留出上下边距
+            
+            anchors.centerIn: parent 
+            spacing: 0 // 手动控制 spacing
+
+            // --- 顶部弹性填充 (修复 Bug 3: 确保垂直居中) ---
+            Item { Layout.fillHeight: true }
+
+            // --- 2. 封面控件 ---
+            Item {
+                Layout.alignment: Qt.AlignHCenter
+                Layout.preferredWidth: Math.min(256, parent.width * 0.7)
+                Layout.preferredHeight: Layout.preferredWidth 
+
+                RectangularGlow {
+                    anchors.fill: coverRect
+                    glowRadius: 10
+                    spread: 0.1
+                    color: "#80000000"
+                    cornerRadius: 20
+                    z:-1
                 }
 
-                // 注意：由于 MusicListView.qml 内部已经定义了 width/height，
-                // 您可能需要在 MusicListView 内部将这些固定尺寸改为
-                // Layout.preferredWidth/Layout.preferredHeight 或删除，
-                // 确保它能适应父容器的大小。
-                //
-                // 在本例中，因为您在 MusicListView 内部使用了 anchors.fill: parent，
-                // 它会覆盖组件内部设置的固定 width/height。
-            }
-        }
+                Rectangle {
+                    id: coverRect
+                    anchors.fill: parent
+                    radius: 20
+                    color: "#dddddd"
+                    clip: true
 
+                    Image {
+                        id: bigPNG
+                        anchors.fill: parent
+                        source: playerController.coverArtSource 
+                        fillMode: Image.PreserveAspectCrop
+                        sourceSize: Qt.size(800, 800)
+                        smooth: true 
+                        mipmap: true 
+                        layer.enabled: true
+                        layer.textureSize: Qt.size(width * Math.max(2, Screen.devicePixelRatio), height * Math.max(2, Screen.devicePixelRatio))
+                        layer.samples: 4 
+                        layer.effect: OpacityMask{
+                            anchors.fill: parent
+                            maskSource: Rectangle {
+                                width: bigPNG.width
+                                height: bigPNG.height
+                                radius: 20      
+                                color: "white"  
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- 间隔 (修复 Bug 2: 增加封面与进度条距离) ---
+            Item { 
+                Layout.fillWidth: true
+                Layout.preferredHeight: 40 // 强制留出 40px 的空间
+            } 
+
+            // --- 3. 进度条区域 ---
+            ColumnLayout{
+                Layout.fillWidth: true
+                Layout.leftMargin: 10
+                Layout.rightMargin: 10
+                spacing: 5
+                
+                Slider {
+                    id: progressSlider
+                    Layout.fillWidth: true
+                    from: 0
+                    to: playerController.totalDurationMicrosec 
+                    Binding {
+                        target: progressSlider
+                        property: "value"
+                        value: playerController.currentPosMicrosec
+                        when: !progressSlider.pressed
+                    }
+                    onPressedChanged: {
+                        if (!pressed) {
+                            playerController.seek(value);
+                            playerController.setIsSeeking(false)
+                        } else {
+                            playerController.setIsSeeking(true)
+                        }
+                    }                
+                    background: Rectangle {
+                        x: progressSlider.leftPadding
+                        y: progressSlider.topPadding + progressSlider.availableHeight / 2 - height / 2
+                        width: progressSlider.availableWidth
+                        height: 4
+                        radius: 2
+                        color: "#50FFFFFF"
+                        Rectangle {
+                            width: progressSlider.visualPosition * parent.width
+                            height: parent.height
+                            color: "white"
+                            radius: 2
+                        }
+                    }
+                    handle: Item {}
+                }
+
+                RowLayout{
+                    Layout.fillWidth: true 
+                    Text {
+                        text: playerController.currentPosText
+                        color: "white"
+                        font.pixelSize: 12
+                    }
+                    Item { Layout.fillWidth: true }
+                    Text {
+                        id: remainingDurationText
+                        text: playerController.remainingTimeText 
+                        color: "white"
+                        font.pixelSize: 12 
+                    }
+                }
+            }
+
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 15 } // 间隔
+
+            // --- 4. 文本信息区域 ---
+            Column {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 5
+
+                MarqueeText {
+                    width: parent.width * 0.95
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: playerController.songTitle
+                    color: "white"
+                    font.pixelSize: 22
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter 
+                }
+
+                MarqueeText {
+                    width: parent.width * 0.95 
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: playerController.artistName
+                    color: "#DDDDDD"
+                    font.pixelSize: 16
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                MarqueeText {
+                    width: parent.width * 0.95
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: playerController.albumName
+                    color: "#AAAAAA"
+                    font.pixelSize: 14
+                    horizontalAlignment: Text.AlignHCenter
+                }
+            }
+
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 25 } // 间隔
+
+            // --- 5. 播放控制 ---
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 30
+                StyleButton {
+                    Layout.preferredWidth: 40; Layout.preferredHeight: 40
+                    buttonText: "skip_previous"
+                    iconFontFamily: materialFont.name
+                    textSize: 30; textColor: "white"
+                    onClicked: playerController.prev()
+                }
+                StyleButton {
+                    Layout.preferredWidth: 60; Layout.preferredHeight: 60
+                    buttonText: playerController.isPlaying ? "pause" : "play_arrow" 
+                    baseColor: "#40FFFFFF"; hoverColor: "#60FFFFFF"; pressedColor: "#90FFFFFF"
+                    iconFontFamily: materialFont.name
+                    textSize: 40; textColor: "white"
+                    onClicked: playerController.playpluse()
+                }
+                StyleButton {
+                    Layout.preferredWidth: 40; Layout.preferredHeight: 40
+                    buttonText: "skip_next"
+                    iconFontFamily: materialFont.name
+                    textSize: 30; textColor: "white"
+                    onClicked: playerController.next()
+                }
+            }
+
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 15 } // 间隔
+
+            // --- 6. 音量控制 ---
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 5
+                Text { text: "volume_mute"; color: "#CCC"; font.pixelSize: 18 ; font.family: materialFont.name}
+                Slider {
+                    id: volumeSlider
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: 200 
+                    from: 0.0; to: 1.0
+                    value: playerController.volume
+                    onValueChanged: playerController.setVolume(value)
+                    background: Rectangle {
+                        x: volumeSlider.leftPadding
+                        y: volumeSlider.topPadding + volumeSlider.availableHeight / 2 - height / 2
+                        width: volumeSlider.availableWidth
+                        height: 12; radius: 6; color: "#40000000" 
+                        Rectangle {
+                            width: volumeSlider.visualPosition * parent.width
+                            height: parent.height; color: "#C0FFFFFF"; radius: 6
+                        }
+                    }
+                    handle: Item {}
+                }
+                Text { text: "volume_up"; color: "#CCC"; font.pixelSize: 18 ; font.family: materialFont.name}
+            }
+
+            Item { Layout.fillWidth: true; Layout.preferredHeight: 30 } // 间隔
+
+            // --- 7. 底部按钮组 ---
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignHCenter
+                spacing: 40 
+                
+                Row {
+                    spacing: 15
+                    StyleButton {
+                        width: 40; height: 40
+                        buttonText: "view_sidebar"
+                        iconFontFamily: materialFont.name
+                        textSize: 18; textColor: "white"
+                        
+                        // 逻辑修改：纯粹作为一个 Toggle 开关
+                        // 无论是在 Dock 模式还是悬浮模式，都可以通过这个按钮收起/展开列表
+                        checkable: true
+                        checked: isSidebarOpen
+                        onClicked: {
+                            window.isSidebarOpen = !window.isSidebarOpen
+                        }
+                    }
+                    StyleButton {
+                        width: 40; height: 40
+                        buttonText: "shuffle"
+                        iconFontFamily: materialFont.name
+                        textSize: 18; textColor: "white"
+                        onClicked: playerController.setShuffle(!playerController.isShuffle)
+                        checkable: true
+                        checked: playerController.isShuffle
+                    }
+                }
+
+                Item { Layout.fillWidth: true; Layout.maximumWidth: 100 }
+
+                Row {
+                    spacing: 15
+                    StyleButton {
+                        id: stylePlayBtn
+                        buttonText: playerController.repeatMode === 1 ? "repeat" : 
+                                    playerController.repeatMode === 2 ? "repeat_one" : 
+                                    "import_export" 
+                        width: 40; height: 40
+                        iconFontFamily: materialFont.name
+                        textSize: 18; textColor: "white"
+                        onClicked: playerController.toggleRepeatMode();
+                    }
+                    StyleButton {
+                        width: 40; height: 40
+                        buttonText: "more_vert" 
+                        iconFontFamily: materialFont.name
+                        textSize: 18; textColor: "white"
+                        onClicked: console.log("More Clicked") 
+                    }
+                }
+            }
+            
+            // --- 底部弹性填充 (确保垂直居中) ---
+            Item { Layout.fillHeight: true }
+        }
     }
 
-    // ==========================================
-    // 1. 顶部三个排版按钮 (最小化, 最大化, 关闭)
-    // ==========================================
+    // =========================================================================
+    // 5. 顶部标题栏按钮
+    // =========================================================================
     Row {
-        id:titleBarbuttons
+        id: titleBarbuttons
         anchors.top: parent.top
         anchors.right: parent.right
-
-        // **【新】添加边距，使其不紧贴边缘**
-        anchors.topMargin: 10 // 顶部边距
-        anchors.rightMargin: 10 // 右侧边距
+        anchors.topMargin: 10 
+        anchors.rightMargin: 10 
         spacing: 8
+        // Z轴 200。侧边栏弹出时 Z=500 会覆盖此区域
+        z: 200 
 
         Repeater {
             model: ["minimize", "fullscreen", "close"]
-
             delegate: Button {
                 id: btn
                 text: modelData
@@ -222,24 +514,12 @@ ApplicationWindow {
                 height: 30
                 font.family: materialFont.name
                 property bool isMaxWindow: false
-
                 background: Rectangle {
-                    id: bg
                     radius: 15
-
-                    // hover / press 高亮逻辑
-                    color: btn.pressed
-                           ? "#80FFFFFF"
-                           : (btn.hovered ? "#60FFFFFF" : "#40FFFFFF")
-
-                    // 动画过渡
-                    Behavior on color {
-                        ColorAnimation { duration: 150 }
-                    }
+                    color: btn.pressed ? "#80FFFFFF" : (btn.hovered ? "#60FFFFFF" : "#40FFFFFF")
+                    Behavior on color { ColorAnimation { duration: 150 } }
                 }
-
                 contentItem: Text {
-                    id: brightText
                     text: btn.text
                     color: "white"
                     font.pixelSize: 15
@@ -247,588 +527,19 @@ ApplicationWindow {
                     verticalAlignment: Text.AlignVCenter
                     font.weight: Font.Black
                     font.family: materialFont.name
-                    // DropShadow {
-                    //     // 设置锚定到文本，使阴影与文本重合
-                    //     anchors.fill: brightText
-
-                    //     // 阴影颜色设置为与文本相同或更亮的颜色
-                    //     color: brightText.color
-
-                    //     // 减小偏移量，让阴影围绕文本扩散
-                    //     horizontalOffset: 0
-                    //     verticalOffset: 0
-
-                    //     // 增加模糊半径，创建柔和的辉光效果，使文本看起来更亮
-                    //     radius: 3.0
-
-                    //     // source 必须是你要加特效的元素
-                    //     source: brightText
-                    // }
                 }
-
                 onClicked: {
-                    switch(index){
-                        case 0:
-                            window.showMinimized();
-                            break;
-                        case 1:
-                            if(isMaxWindow){
-                                window.showNormal();
-                            }else{
-                                window.showMaximized();
-                            }
+                   switch(index){
+                        case 0: window.showMinimized(); break;
+                        case 1: 
+                            if(isMaxWindow) window.showNormal(); 
+                            else window.showMaximized();
                             isMaxWindow = !isMaxWindow
                             break;
-                        case 2:
-                            Qt.quit();
-                            break;
+                        case 2: Qt.quit(); break;
                     }
-                    //if (index === 2) Qt.quit();   // index 2 = “×”
                 }
             }
         }
-    }
-
-
-    // 主布局容器
-    ColumnLayout {
-        id: mainColumnLayout
-        width: 380
-        height: 750
-        anchors.centerIn: parent
-        anchors.margins: 10
-        spacing: 10
-
-        Item {
-            // 按钮高 30，下方间隔 Item 高 20，共 50
-            Layout.preferredHeight: 40 // 占据原有的空间高度
-            Layout.fillWidth: true // 保持宽度不变
-        }
-
-        Item { Layout.fillHeight: true; Layout.preferredHeight: 20 } // 间隔
-
-        // ==========================================
-        // 2. 封面控件 (居中 + 阴影)
-        // ==========================================
-        Item {
-            Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: 256
-            Layout.preferredHeight: 256
-
-            //阴影源
-            RectangularGlow {
-                id: effect
-                anchors.fill: coverRect
-                glowRadius: 10
-                spread: 0.1
-                color: "#80000000"
-                cornerRadius: 20
-                z:-1
-            }
-
-            Rectangle {
-                id: coverRect
-                anchors.fill: parent
-                radius: 20
-                color: "#dddddd"
-                clip: true
-
-                // 这里放你的 Image 控件
-                Image {
-                    id: bigPNG
-                    anchors.fill: parent
-                    // 后端来了，采用的是当 C++ 检测到指针变化并 emit 信号时，这里会自动刷新
-                    source: playerController.coverArtSource 
-                    fillMode: Image.PreserveAspectCrop
-
-                    layer.enabled: true
-                    layer.effect: OpacityMask{
-                        anchors.fill: parent
-                        maskSource: Rectangle {
-                            width: bigPNG.width
-                            height: bigPNG.height
-                            radius: 20      // 使用同样的圆角
-                            color: "white"  // white = 不透明区域
-                        }
-                    }
-                }
-
-            }
-        }
-
-        Item { Layout.fillHeight: true; Layout.preferredHeight: 30 } // 间隔
-
-        // ==========================================
-        // 3. 进度条区域 (时间 - 进度条 - 时间)
-        // ==========================================
-        
-
-        ColumnLayout{
-            Layout.fillWidth: true
-            Layout.leftMargin: 18  
-            Layout.rightMargin: 18
-            spacing: 10
-            Slider {
-                id: progressSlider
-                Layout.fillWidth: true
-                Layout.leftMargin: 2  
-                Layout.rightMargin: 2
-                from: 0
-                to: playerController.totalDurationMicrosec 
-
-                //正式修复滑动条人机打架的问题
-                Binding {
-                    target: progressSlider
-                    property: "value"
-                    value: playerController.currentPosMicrosec
-                    when: !progressSlider.pressed
-                }
-                onPressedChanged: {
-                    // 1. 检查：是否刚刚松手 (pressed 变为 false)
-                    if (!pressed) {
-
-                        // 2. 只有松手后，才提交 Seek 命令
-                        playerController.seek(value);
-                        // 同时释放锁
-                        playerController.setIsSeeking(false)
-                    }
-                    else{// 3. 你没松手,一直按,前端获取前端控制权
-                        playerController.setIsSeeking(true)
-                    }
-                }                
-
-
-                background: Rectangle {
-                    x: progressSlider.leftPadding
-                    y: progressSlider.topPadding + progressSlider.availableHeight / 2 - height / 2
-                    width: progressSlider.availableWidth
-                    height: 4
-                    radius: 2
-                    color: "#50FFFFFF"
-
-                    Rectangle {
-                        width: progressSlider.visualPosition * parent.width
-                        height: parent.height
-                        color: "white"
-                        radius: 2
-                    }
-                }
-                // 隐藏默认的圆球把手
-                handle: Item {}
-            }
-
-            RowLayout{
-                Layout.fillWidth: true // 确保文本容器占满宽度
-                Text {
-                text: playerController.currentPosText
-                color: "white"
-                font.pixelSize: 12
-                }
-                Item { Layout.fillWidth: true }
-
-                Text {
-                    id: remainingDurationText
-                    text: playerController.remainingTimeText 
-                    color: "white"
-                    font.pixelSize: 12 // 推荐字体略小
-                }
-            }
-        }
-
-        Item { Layout.fillHeight: true; Layout.preferredHeight: 10 } // 间隔
-
-        // ==========================================
-        // 4. 文本信息区域 (标题, 演唱者, 专辑)
-        // ==========================================
-        Column {
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 5 // 相邻紧凑一点
-
-            // 1. 视口容器 (用于裁剪)
-            Item {
-                id: viewPort
-                width: parent.width * 0.9
-                //width:380
-                height: 30
-                // 将 viewPort 自身在 Column 中水平居中
-                anchors.horizontalCenter: parent.horizontalCenter
-                clip: true
-
-                // 2. 文本宽度测量器 (隐藏)
-                Text {
-                    id: contentChecker
-                    visible: false
-                    text: playerController.songTitle
-                    //text: "这是一段很长很长的文本.它将超出显示区域"
-                    font.pixelSize: 22
-                    font.bold: true
-                    wrapMode: Text.NoWrap
-                }
-
-                // 3. 实际滚动内容的容器
-                Row {
-                    id: scrollContent
-                    spacing: 50                    
-                    // --- 文本副本 1 和 2 保持不变 ---
-                    // Text 1
-                    Text {
-                        text: contentChecker.text
-                        color: "white"
-                        font.pixelSize: 22
-                        font.bold: true
-                        wrapMode: Text.NoWrap
-                        verticalAlignment: Text.AlignVCenter
-                        height: viewPort.height
-                    }
-
-                    // Text 2 (用于无缝衔接)
-                    Text {
-                        text: contentChecker.text
-                        color: "white"
-                        font.pixelSize: 22
-                        font.bold: true
-                        wrapMode: Text.NoWrap
-                        verticalAlignment: Text.AlignVCenter
-                        height: viewPort.height
-                        visible: contentChecker.implicitWidth > viewPort.width
-                    }
-                }
-
-                // 4. 动画和控制逻辑 (保持不变)
-                PropertyAnimation {
-                    id: marqueeAnimation
-                    target: scrollContent
-                    property: "x"
-                    
-                    easing.type: Easing.Linear
-
-                    onRunningChanged: {
-                        if (!running && scrollContent.x !== 0 && to !== 0) {
-                            // 这里不需要做复杂判断，只要是应该滚动状态下停了，就重启
-                            if (contentChecker.implicitWidth > viewPort.width) {
-                                scrollContent.x = 0; 
-                                marqueeAnimation.start();
-                            }
-                        }
-                    }
-                }
-
-                // 5. 滚动状态控制函数 (增加居中逻辑)
-                function updateMarqueeState() {
-                    marqueeAnimation.stop();
-                    //scrollContent.x = 0; // 动画前重置
-
-                    var textWidth = contentChecker.implicitWidth;
-                    var viewWidth = viewPort.width;
-
-                    // 计算文本未溢出时的居中 X 坐标 (CenterOffset)
-                    ///var centerOffset = (viewPort.width - contentChecker.implicitWidth) / 2;
-                    
-                    // 如果计算出的偏移量小于0，说明文本已经溢出了
-                    if (textWidth > viewWidth) {
-                        // *** 文本溢出：启动滚动 ***
-                        
-                        // 1. 确定起点：从最左侧开始 (x=0)
-                        scrollContent.x = 0;
-
-                        // 1. 设置动画起点：让文本从居中对齐的位置开始
-                        marqueeAnimation.from = 0; // 滚动起点从 viewPort 的左边缘开始
-                        // 我们在 Text.x 上应用 CenterOffset
-                        //scrollContent.x = centerOffset;
-
-                        // 2. 设置动画终点：移动距离等于文本宽度 + 间距
-                        // 因为动画的 'from' 是 0，所以终点需要包含起始的偏移量
-                        // 终点是 (文本宽度 + 间距) 往左移动
-                        marqueeAnimation.to = -(textWidth + scrollContent.spacing);
-                        
-                        // 3. 调整 duration
-                        marqueeAnimation.duration = contentChecker.implicitWidth > 0 ? contentChecker.implicitWidth * 30 : 0;
-
-                        //scrollContent.children[1].visible = true; // 显示第二个副本
-                        marqueeAnimation.start();
-                        
-                    } else {
-                        // *** 文本未溢出：停止滚动，完美居中 ***
-                        // scrollContent.children[1].visible = false;
-                
-                        // // ⚡ 关键调整：使用 anchors.horizontalCenter 属性来保证居中！
-                        // // 这比手动计算 x 坐标更具 QML 规范性，能保证 Text 的中心点对齐 viewPort 的中心点
-                        // scrollContent.anchors.horizontalCenter = viewPort.horizontalCenter;
-
-                        // // 确保 x 属性不受动画残余影响，并禁用 x 的手动设置
-                        // scrollContent.x = 0;
-
-                        var centerX = (viewWidth - textWidth) / 2;
-                
-                        // 2. 直接赋值
-                        scrollContent.x = centerX;
-                    }
-                }
-
-                // 绑定到文本变化或组件完成时检查滚动状态
-                Component.onCompleted: updateMarqueeState()
-                onWidthChanged: updateMarqueeState() // 应对 viewPort 宽度变化
-                Connections {
-                    target: playerController
-                    function onSongTitleChanged() {
-                        viewPort.updateMarqueeState();
-                    }
-                }
-            }
-
-            // Text {
-            //     text: playerController.songTitle
-            //     color: "white"
-            //     font.pixelSize: 22
-            //     font.bold: true
-            //     anchors.horizontalCenter: parent.horizontalCenter
-            // }
-
-
-            MarqueeText {
-                //width: parent * 0.9
-
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: playerController.artistName
-                color: "#DDDDDD"
-                font.pixelSize: 16
-
-                speed: 25
-            }
-            // Text {
-            //     text: playerController.artistName
-            //     color: "#DDDDDD"
-            //     font.pixelSize: 16
-            //     anchors.horizontalCenter: parent.horizontalCenter
-            // }
-            MarqueeText {
-                //width: parent * 0.9
-
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: playerController.albumName
-                color: "#AAAAAA"
-                font.pixelSize: 14
-
-                speed: 25
-
-            }
-            // Text {
-            //     text: playerController.albumName
-            //     color: "#AAAAAA"
-            //     font.pixelSize: 14
-            //     anchors.horizontalCenter: parent.horizontalCenter
-            //     elide: Text.ElideRight
-            //     width: parent.width
-            //     horizontalAlignment: Text.AlignHCenter
-            // }
-        }
-
-        Item { Layout.fillHeight: true; Layout.preferredHeight: 20 } // 间隔
-
-        // ==========================================
-        // 5. 播放控制 (上一首, 播放, 下一首)
-        // 使用封装的 StyledButton
-        // ==========================================
-        RowLayout {
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 30
-
-            // 上一首
-            StyleButton {
-                Layout.preferredWidth: 40
-                Layout.preferredHeight: 40
-                buttonText: "skip_previous"
-                // 内部的 contentItem 默认字体为 20，这里覆盖一下
-                iconFontFamily: materialFont.name
-                textSize: 30
-                textColor: "white"
-                onClicked: playerController.prev()
-            }
-
-            // 播放/暂停 (稍大) 
-            StyleButton {
-                Layout.preferredWidth: 60
-                Layout.preferredHeight: 60
-                buttonText: playerController.isPlaying ? "pause" : "play_arrow" 
-
-                // 设置更高的透明度作为基础颜色，使其更亮
-                baseColor: "#40FFFFFF"
-                hoverColor: "#60FFFFFF"
-                pressedColor: "#90FFFFFF"
-
-                // 设置更大的字体
-                iconFontFamily: materialFont.name
-                textSize: 40
-                textColor: "white"
-                onClicked: {
-                    playerController.playpluse()
-                }
-            }
-
-            // 下一首
-            StyleButton {
-                Layout.preferredWidth: 40
-                Layout.preferredHeight: 40
-                buttonText: "skip_next"
-                iconFontFamily: materialFont.name
-                textSize: 30
-                textColor: "white"
-                onClicked: playerController.next()
-            }
-        }
-
-        Item { Layout.fillHeight: true; Layout.preferredHeight: 1 } // 间隔
-
-        // ==========================================
-        // 6. 音量控制区
-        // ==========================================
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 1
-
-            // 左边小喇叭
-            Text { text: "volume_mute"; color: "#CCC"; font.pixelSize: 18 ; font.family: materialFont.name}
-
-            // 音量条：圆头矩形，无标头，显示占比
-            Slider {
-                id: volumeSlider
-                Layout.fillWidth: true
-                Layout.maximumWidth: 200 // 限制一下最大宽度，不要太长
-                from: 0.0
-                to: 1.0
-
-                value: playerController.volume
-    
-                // 【绑定 2：控制】当用户拖动滑块时，立即调用 C++ 方法设置音量
-                onValueChanged: {
-                    // 如果音量值改变，立即设置后端音量
-                    // 确保 value 在 0.0 到 1.0 之间
-                    playerController.setVolume(value)
-                }
-
-                background: Rectangle {
-                    x: volumeSlider.leftPadding
-                    y: volumeSlider.topPadding + volumeSlider.availableHeight / 2 - height / 2
-                    width: volumeSlider.availableWidth
-                    height: 12 // 稍粗一点的矩形
-                    radius: 6 // 圆角等于高度的一半，形成圆头
-                    color: "#40000000" // 底色
-
-                    Rectangle {
-                        width: volumeSlider.visualPosition * parent.width
-                        height: parent.height
-                        color: "#C0FFFFFF" // 填充色
-                        radius: 6
-                    }
-                }
-                // 完全移除 Handle
-                handle: Item {}
-            }
-
-            // 右边大喇叭
-            Text { text: "volume_up"; color: "#CCC"; font.pixelSize: 18 ; font.family: materialFont.name}
-        }
-
-        Item { Layout.fillHeight: true; Layout.preferredHeight: 1 } // 间隔
-
-        // ==========================================
-        // 7. 底部按钮组 (左2，右2，居中分开)
-        // ==========================================
-        // 这里有个知识点，在普通布局下是用的width ，但是带Layout的就必须使用这个了Layout.preferredWidth
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 100 // <-- 设置左右两组之间的固定距离
-
-            // 左边一组
-            Row {
-                spacing: 15
-                StyleButton {
-                    width: 40;
-                    height: 40
-                    buttonText: "view_sidebar"
-                    iconFontFamily: materialFont.name
-                    textSize: 18
-                    textColor: "white"
-                    onClicked: {
-                        console.log("Lyrics/List Clicked")
-                        musicListView.isOpen = !musicListView.isOpen
-                    }
-                }
-                StyleButton {
-                    width: 40;
-                    height: 40
-                    buttonText: "shuffle"
-                    iconFontFamily: materialFont.name
-                    textSize: 18
-                    textColor: "white"
-
-                    onClicked: {
-                        // 切换逻辑：调用 C++ Setter 来改变后端状态
-                        // 注意：我们传入 checked 的相反值，以切换后端状态。
-                        playerController.setShuffle(!playerController.isShuffle)
-                    }
-                    checkable: true
-                    checked: playerController.isShuffle
-                }
-            }
-
-            // 中间撑开距离
-            //Item { Layout.fillWidth: true }
-
-            // 右边一组
-            Row {
-                spacing: 15
-                StyleButton {
-                    id: stylePlayBtn
-                    //property int playMode : 1 // 1 是列表顺序播放，2 列表循环播放 3 是单曲循环
-                    //buttonText: "repeat" // 初始设置为 "repeat
-                    buttonText: playerController.repeatMode === 1 ? "repeat" : 
-                                playerController.repeatMode === 2 ? "repeat_one" : 
-                                "import_export" // 假设 None 模式使用 import_export (顺序播放)图标
-                    width: 40
-                    height: 40
-                    iconFontFamily: materialFont.name
-                    textSize: 18
-                    textColor: "white"
-                    onClicked:{
-                       //console.log("Repeat Clicked")
-                       playerController.toggleRepeatMode();
-                    //    playMode ++;
-                    //    switch(playMode){
-
-                    //        case 1:
-                    //            // 列表顺序播放
-                    //            stylePlayBtn.buttonText = "arrow_right_alt";
-                    //            break;
-                    //        case 2:
-                    //            // 列表循环播放
-                    //            stylePlayBtn.buttonText = "repeat";
-                    //            break;
-                    //        case 3:
-                    //            // 单曲循环
-                    //            stylePlayBtn.buttonText = "repeat_one";
-                    //            playMode = 0;
-                    //            break;
-                    //    }
-                   }
-                }
-
-                StyleButton {
-                    width: 40;
-                    height: 40
-                    buttonText: "more_vert" // TODO: 更多菜单
-                    iconFontFamily: materialFont.name
-                    textSize: 18
-                    textColor: "white"
-                    onClicked: console.log("More Clicked") // TODO: 留好给定义功能的位置
-                }
-            }
-        }
-
-        // 底部留白
-        Item { Layout.preferredHeight: 40 }
     }
 }
