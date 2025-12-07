@@ -103,7 +103,9 @@ MusicItem MusicListModel::createItemFromNode(PlaylistNode *node, int id)
 
 void MusicListModel::loadRoot()
 {
+#ifdef DEBUG
     run_cover_test(); // 测试代码
+#endif
 
     auto &controller = MediaController::getInstance();
     auto rootNode = controller.getRootNode();

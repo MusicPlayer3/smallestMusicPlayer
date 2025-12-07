@@ -161,8 +161,6 @@ ApplicationWindow {
         Rectangle {
             id: contentRect
             anchors.fill: parent
-            
-            // 恢复不透明背景
             gradient: Gradient {
                 GradientStop { position: 0.0; color: playerController.gradientColor1; Behavior on color { ColorAnimation { duration: 500 } } } 
                 GradientStop { position: 0.5; color: playerController.gradientColor2; Behavior on color { ColorAnimation { duration: 500 } } } 
@@ -173,7 +171,6 @@ ApplicationWindow {
                 iconFamily: materialFont.name
                 anchors.fill: parent
                 onCloseRequested: {
-                    // [修复] 直接调用定时器，不要加 window. 前缀
                     window.isManualSidebarToggle = true
                     window.isSidebarOpen = false
                     manualAnimResetTimer.restart()
@@ -186,7 +183,6 @@ ApplicationWindow {
         z: 499 
         visible: !isDockCapable && isSidebarOpen
         onClicked: {
-            // [修复] 直接调用定时器
             window.isManualSidebarToggle = true
             window.isSidebarOpen = false
             manualAnimResetTimer.restart()
@@ -216,12 +212,16 @@ ApplicationWindow {
         ColumnLayout {
             id: mainColumnLayout
             
-            width: 340 
+            // [布局逻辑] 
+            // 宽度跟随窗口变化，留出 60px 边距。
+            // 这让内部设置为 Layout.fillWidth 的控件（如歌名）可以随窗口拉伸。
+            width: parent.width - 20
+            
             anchors.centerIn: parent 
             
             spacing: 0 
 
-            // --- 1. 封面控件 ---
+            // --- 1. 封面控件 (固定 240x240) ---
             Item {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.preferredWidth: 240
@@ -257,7 +257,7 @@ ApplicationWindow {
 
             Item { Layout.preferredHeight: 30; Layout.preferredWidth: 1 } 
 
-            // --- 2. 波形进度条 ---
+            // --- 2. 波形进度条 (固定宽度 320) ---
             WaveformProgressBar {
                 id: waveProgress
                 Layout.alignment: Qt.AlignHCenter
@@ -282,7 +282,7 @@ ApplicationWindow {
 
             Item { Layout.preferredHeight: 5; Layout.preferredWidth: 1 }
 
-            // --- 3. 时间显示 ---
+            // --- 3. 时间显示 (固定宽度 320) ---
             Item {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.preferredWidth: 320 
@@ -308,14 +308,22 @@ ApplicationWindow {
 
             Item { Layout.preferredHeight: 15; Layout.preferredWidth: 1 }
 
-            // --- 4. 文本信息 ---
+            // --- 4. 文本信息 (可变宽度) ---
+            // 这里使用 Layout.fillWidth: true，使其跟随 mainColumnLayout 的宽度变化
+            // 但内部的 MarqueeText 会根据内容自动判断是居中还是滚动
             Column {
                 Layout.alignment: Qt.AlignHCenter
-                Layout.preferredWidth: 320
+                
+                // [关键] 填满父容器宽度 (即 parent.width - 60)
+                Layout.fillWidth: true 
+                
+                // [可选] 限制最大宽度，避免太宽
+                Layout.maximumWidth: 1000
+                
                 spacing: 5
 
                 MarqueeText {
-                    width: parent.width 
+                    width: parent.width // 跟随 Column 宽度
                     anchors.horizontalCenter: parent.horizontalCenter
                     text: playerController.songTitle
                     color: "white"
@@ -344,10 +352,15 @@ ApplicationWindow {
 
             Item { Layout.preferredHeight: 25; Layout.preferredWidth: 1 }
 
-            // --- 5. 播放控制 ---
+            // --- 5. 播放控制 (固定宽度 320) ---
+            // 尽管父容器变宽了，但我们给这里设置了 preferredWidth，它会保持固定大小并居中
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
-                spacing: 40 
+                Layout.preferredWidth: 320
+                
+                // 使用弹簧 Item 将按钮居中分布
+                Item { Layout.fillWidth: true }
+                
                 StyleButton {
                     Layout.preferredWidth: 45; Layout.preferredHeight: 45
                     buttonText: "skip_previous"
@@ -355,6 +368,9 @@ ApplicationWindow {
                     textSize: 35; textColor: "white"
                     onClicked: playerController.prev()
                 }
+                
+                Item { Layout.preferredWidth: 40 } // 按钮间距
+
                 StyleButton {
                     Layout.preferredWidth: 70; Layout.preferredHeight: 70 
                     buttonText: playerController.isPlaying ? "pause" : "play_arrow" 
@@ -363,6 +379,9 @@ ApplicationWindow {
                     textSize: 50; textColor: "white"
                     onClicked: playerController.playpluse()
                 }
+
+                Item { Layout.preferredWidth: 40 } // 按钮间距
+
                 StyleButton {
                     Layout.preferredWidth: 45; Layout.preferredHeight: 45
                     buttonText: "skip_next"
@@ -370,11 +389,13 @@ ApplicationWindow {
                     textSize: 35; textColor: "white"
                     onClicked: playerController.next()
                 }
+                
+                Item { Layout.fillWidth: true }
             }
 
             Item { Layout.preferredHeight: 20; Layout.preferredWidth: 1 }
 
-            // --- 6. 音量控制 ---
+            // --- 6. 音量控制 (固定宽度 320) ---
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.preferredWidth: 320 
@@ -412,7 +433,7 @@ ApplicationWindow {
 
             Item { Layout.preferredHeight: 20; Layout.preferredWidth: 1 }
 
-            // --- 7. 底部按钮 ---
+            // --- 7. 底部按钮 (固定宽度 320) ---
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
                 Layout.preferredWidth: 320
@@ -426,7 +447,6 @@ ApplicationWindow {
                         textSize: 20; textColor: "white"
                         checkable: true; checked: isSidebarOpen
                         onClicked: {
-                            // [修复] 直接调用定时器
                             window.isManualSidebarToggle = true
                             window.isSidebarOpen = !window.isSidebarOpen
                             manualAnimResetTimer.restart()
@@ -442,7 +462,7 @@ ApplicationWindow {
                     }
                 }
 
-                Item { Layout.fillWidth: true } 
+                Item { Layout.minimumWidth: 100; Layout.maximumWidth: 100 } 
 
                 Row {
                     spacing: 20 
@@ -466,7 +486,7 @@ ApplicationWindow {
                 }
             }
             
-            Item { Layout.preferredHeight: 20 }
+            // Item { Layout.preferredHeight: 1 }
         }
     }
 
@@ -484,7 +504,7 @@ ApplicationWindow {
             delegate: Button {
                 id: btn
                 text: modelData
-                width: 30; height: 30
+                width: 25; height: 25
                 font.family: materialFont.name
                 property bool isMaxWindow: false
                 background: Rectangle {
