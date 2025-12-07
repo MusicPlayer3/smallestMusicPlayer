@@ -228,7 +228,7 @@ int main(int argc, char *argv[])
     av_log_set_level(AV_LOG_INFO);
 #endif
 #ifdef RELEASE
-    av_log_set_level(AV_LOG_ERROR);
+    av_log_set_level(AV_LOG_QUIET);
 
 #endif
     // qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
