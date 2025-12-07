@@ -17,7 +17,6 @@
 #include "MediaController.hpp"
 #include "ColorExtractor.hpp"
 #include "CoverCache.hpp"
-#include <taglib.h>
 
 // --- Linux Terminal Control Section ---
 #if defined(Q_OS_LINUX)

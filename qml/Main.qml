@@ -80,7 +80,7 @@ ApplicationWindow {
         property bool isMaximized: window.visibility === Window.Maximized
 
         MouseArea {
-            height: 50
+            anchors.fill: parent
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
