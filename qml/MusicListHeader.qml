@@ -74,7 +74,7 @@ Rectangle {
                             searchInput.text = "" 
                         }
                     }
-                    width: 30; height: 30
+                    width: 30; height: 40
                 }
             }
 
