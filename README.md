@@ -2,7 +2,13 @@
 
 ## 简介
 
-这是一个使用c++编写的小型本地音乐播放器，支持Windows / Linux双端。使用ffmpeg库进行音频播放，使用taglib库进行音频标签的提取。播放列表支持直接以文件浏览器视图进行管理
+这是一个使用c++编写的小型本地音乐播放器，灵感来源于[amberol](https://gitlab.gnome.org/World/amberol)，因为amberol不支持在应用中显示歌曲，并且播放列表视图只有歌曲，没法做文件夹层次视图，所以就想着另起炉灶自己搓一个.jpg&emsp;&emsp;顺带也将这个项目作为学习ffmpeg和qml的练手项目了.png
+
+因为周围的人没有写UI的所以UI部分仿照了[amberol](https://gitlab.gnome.org/World/amberol)的UI来进行设计，日后有重新构建一个独立的UI的想法，但短期内估计不会整。如果这样对作者本人造成了影响且本人不希望被模仿的话我会立即修改UI （真不会设计UI求放过（（
+
+这个播放器支持Windows / Linux双端。使用ffmpeg库进行音频播放，使用taglib库进行音频标签的提取。播放列表支持直接以文件浏览器视图进行管理
+
+播放器名字和logo还没想到，就暂定MusicPlayer和无logo吧（跑
 
 ![播放界面](./picture/mainWindow.png)
 
