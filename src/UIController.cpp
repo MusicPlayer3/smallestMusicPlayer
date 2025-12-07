@@ -319,7 +319,7 @@ void UIController::generateWaveformForNode(PlaylistNode *node)
         AsyncWaveformResult result;
         result.filePath = filePath;
         
-        int barCount = 60;
+        int barCount = 70;
         int totalWidth = 320; 
         int calculatedBarWidth = 0;
         int maxHeight = 60; 
