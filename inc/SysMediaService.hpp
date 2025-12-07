@@ -9,6 +9,26 @@
 #include <sdbus-c++/sdbus-c++.h>
 #endif
 
+#ifdef __WIN32__
+
+namespace mpris
+{
+enum class PlaybackStatus
+{
+    Playing,
+    Paused,
+    Stopped
+};
+enum class LoopStatus
+{
+    None,
+    Track,
+    Playlist
+};
+} // namespace mpris
+
+#endif
+
 class SysMediaService
 {
     MediaController &controller;

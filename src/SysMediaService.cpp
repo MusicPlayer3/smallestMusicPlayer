@@ -119,16 +119,33 @@ std::string SysMediaService::localPathToUri(const std::string &path)
 {
     if (path.empty())
         return "";
-    if (path.find("file://") == 0)
-        return path;
-    if (path.find("http") == 0)
+    if (path.find("file://") == 0 || path.find("http") == 0)
         return path;
 
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+
+    for (unsigned char c : path)
+    {
+        // 保留字符：字母、数字、安全符号
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '/' || c == '~')
+        {
+            escaped << c;
+        }
+        else
+        {
+            // URL 编码
+            escaped << '%' << std::setw(2) << int(c);
+        }
+    }
+
     std::string uri = "file://";
-    // 简单处理，实际可能需要 URL 编码
-    if (path[0] != '/')
+    if (!path.empty() && path[0] != '/')
+    {
         uri += "/";
-    uri += path;
+    }
+    uri += escaped.str();
     return uri;
 }
 
@@ -267,5 +284,23 @@ void SysMediaService::setShuffle(bool shuffle)
     {
         server->set_shuffle(shuffle);
     }
+}
+#endif
+
+#ifdef __WIN32__
+void SysMediaService::triggerSeeked(std::chrono::microseconds position)
+{
+}
+
+void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
+{
+}
+
+void SysMediaService::setShuffle(bool shuffle)
+{
+}
+void SysMediaService::setMetaData(const MetaData &metadata)
+{
+    // setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), metadata.getCoverPath(), metadata.getDuration(), metadata.getFilePath());
 }
 #endif
