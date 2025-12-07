@@ -180,12 +180,16 @@ AudioPlayer::~AudioPlayer()
     }
 
     freeResources();
+    closeAudioDevice();
     SDL_Quit();
 }
 
 void AudioPlayer::freeResources()
 {
-    closeAudioDevice();
+    if (outputMode.load() != OUTPUT_MIXING)
+    {
+        closeAudioDevice();
+    }
     m_currentSource.reset();
     m_preloadSource.reset();
     flushQueue();
@@ -350,6 +354,12 @@ void AudioPlayer::closeAudioDevice()
 
 bool AudioPlayer::openAudioDevice()
 {
+    if (outputMode.load() == OUTPUT_MIXING && m_audioDeviceID != 0)
+    {
+        // 确保设备处于非暂停状态将在 play() 中处理，或者在这里确保也可以
+        // 但根据上下文，这里只负责设备存在的确认
+        return true;
+    }
     closeAudioDevice();
 
     SDL_AudioSpec desired, obtained;
