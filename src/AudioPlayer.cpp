@@ -846,11 +846,17 @@ std::vector<int> AudioPlayer::buildAudioWaveform(const std::string &filepath, in
     std::vector<int> barHeights(barCount, 0);
     if (barCount <= 0 || totalWidth <= 0)
         return barHeights;
-    barWidth = totalWidth / barCount;
+
+    // 计算单个条的宽度，留一点缝隙给 spacing (假设 spacing 为 2)
+    // 这里 barWidth 只是引用传出，实际绘制由 QML 控制，但为了逻辑严谨计算一下
+    barWidth = (totalWidth / barCount) - 2;
+    if (barWidth < 1)
+        barWidth = 1;
 
     AVFormatContext *fmt = nullptr;
     if (avformat_open_input(&fmt, filepath.c_str(), nullptr, nullptr) < 0)
         return barHeights;
+
     if (avformat_find_stream_info(fmt, nullptr) < 0)
     {
         avformat_close_input(&fmt);
@@ -884,12 +890,12 @@ std::vector<int> AudioPlayer::buildAudioWaveform(const std::string &filepath, in
     SwrContext *swr = swr_alloc();
     AVChannelLayout in_layout = ctx->ch_layout;
     AVChannelLayout out_layout;
-    av_channel_layout_default(&out_layout, 1); // Mix to Mono for waveform
+    av_channel_layout_default(&out_layout, 1); // Mix to Mono
 
     av_opt_set_chlayout(swr, "in_chlayout", &in_layout, 0);
     av_opt_set_chlayout(swr, "out_chlayout", &out_layout, 0);
     av_opt_set_int(swr, "in_sample_rate", ctx->sample_rate, 0);
-    av_opt_set_int(swr, "out_sample_rate", 44100, 0); // Downsample for speed? Keep original often better
+    av_opt_set_int(swr, "out_sample_rate", 44100, 0);
     av_opt_set_sample_fmt(swr, "in_sample_fmt", ctx->sample_fmt, 0);
     av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_FLT, 0);
     swr_init(swr);
@@ -897,18 +903,17 @@ std::vector<int> AudioPlayer::buildAudioWaveform(const std::string &filepath, in
     int64_t duration = fmt->duration;
     double durationSec = (duration > 0) ? (double)duration / AV_TIME_BASE : 1.0;
 
-    // 粗略计算每个 bar 代表的采样数 (44100Hz 下)
     double samplesPerBar = (durationSec * 44100) / barCount;
     if (samplesPerBar < 1)
         samplesPerBar = 1;
 
     std::vector<float> peaks(barCount, 0.0f);
+    float globalMax = 0.0f; // [优化] 记录全局最大值
     int64_t currentSample = 0;
 
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
 
-    // Reuse buffer
     uint8_t *outData = nullptr;
     int outLineSize = 0;
     const int MAX_SAMPLES = 8192;
@@ -930,9 +935,17 @@ std::vector<int> AudioPlayer::buildAudioWaveform(const std::string &filepath, in
                         {
                             float val = std::abs(samples[i]);
                             int idx = static_cast<int>((currentSample + i) / samplesPerBar);
-                            if (idx < barCount && val > peaks[idx])
+                            if (idx < barCount)
                             {
-                                peaks[idx] = val;
+                                if (val > peaks[idx])
+                                {
+                                    peaks[idx] = val;
+                                }
+                                // [优化] 同时更新全局最大值
+                                if (val > globalMax)
+                                {
+                                    globalMax = val;
+                                }
                             }
                         }
                         currentSample += out_samples;
@@ -951,9 +964,21 @@ std::vector<int> AudioPlayer::buildAudioWaveform(const std::string &filepath, in
     avcodec_free_context(&ctx);
     avformat_close_input(&fmt);
 
+    // [优化] 如果音频静音或读取失败，避免除以零
+    if (globalMax < 0.0001f)
+        globalMax = 1.0f;
+
     for (int i = 0; i < barCount; ++i)
     {
-        barHeights[i] = static_cast<int>(std::min(peaks[i], 1.0f) * maxHeight);
+        // [优化] 归一化处理：val / globalMax
+        float normalized = peaks[i] / globalMax;
+
+        // [优化] 非线性映射：使用幂函数 (pow 0.75) 拉伸动态范围
+        // 这会让较小的数值变大一些，避免波形看起来太瘦；同时保留大数值的差异
+        float visualHeight = std::pow(normalized, 0.75f) * maxHeight;
+
+        // 确保至少有 2 像素高度，不然看起来像断了一样
+        barHeights[i] = static_cast<int>(std::max(2.0f, visualHeight));
     }
     return barHeights;
 }

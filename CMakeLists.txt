@@ -11,7 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ------------------------------
 # QML 项目需要 Quick，保留 Multimedia 和 LinguistTools (用于翻译)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Multimedia LinguistTools QuickControls2 Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Quick Multimedia LinguistTools QuickControls2 Widgets Concurrent)
 qt_standard_project_setup(REQUIRES 6.8)
 qt_policy(SET QTP0004 NEW) # 优化 QML 模块的隐式导入行为
 
@@ -148,6 +148,7 @@ qt_add_qml_module(appMusicPlayer
         SOURCES inc/uicontroller.h
         SOURCES src/UIController.cpp
         QML_FILES qml/MarqueeText.qml
+        QML_FILES qml/WaveformProgressBar.qml
 )
 
 # ------------------------------

@@ -2,12 +2,12 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Qt5Compat.GraphicalEffects
+import QtQuick.Window // [新增]
 
 Rectangle {
     id: musicListHeader
     color: '#003c3f46'
     
-    // 动态高度控制
     height: isSearching ? 100 : 50
     Behavior on height { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
 
@@ -17,6 +17,9 @@ Rectangle {
     property bool isSearching: false
 
     layer.enabled: true
+    // [优化]：修复 Header 遮罩边缘模糊
+    layer.textureSize: Qt.size(width * Screen.devicePixelRatio, height * Screen.devicePixelRatio)
+
     layer.effect: OpacityMask {
         maskSource: Rectangle {
             width: musicListHeader.width
@@ -25,16 +28,15 @@ Rectangle {
         }
     }
 
-    // 使用 Column 确保内部布局稳定
+    // ... 内部 Column 内容保持不变，因为我们只修改了上面的 layer 属性 ...
     Column {
         anchors.fill: parent
 
-        // --- 第一行：标题栏 (高度固定 50) ---
+        // --- 第一行：标题栏 ---
         Item {
             width: parent.width
             height: 50
             
-            // 左侧按钮
             Row {
                 anchors.left: parent.left
                 anchors.leftMargin: 10
@@ -69,15 +71,13 @@ Rectangle {
                         if (musicListHeader.isSearching) {
                             searchInput.forceActiveFocus() 
                         } else {
-                            // 收起时，先清空输入框，再触发空搜索以恢复列表
                             searchInput.text = "" 
                         }
                     }
-                    width: 30; height: 40
+                    width: 30; height: 30
                 }
             }
 
-            // 中间标题
             MarqueeText {
                 anchors.centerIn: parent
                 width: parent.width - 180 
@@ -88,7 +88,6 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter 
             }
 
-            // 右侧按钮
             Row {
                 anchors.right: parent.right
                 anchors.rightMargin: 10
@@ -109,7 +108,7 @@ Rectangle {
             }
         }
 
-        // --- 第二行：搜索框 (高度固定 50) ---
+        // --- 第二行：搜索框 ---
         Item {
             width: parent.width
             height: 50

@@ -2,41 +2,30 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Qt5Compat.GraphicalEffects
+import QtQuick.Window // [新增]
 
 Rectangle {
+    id: delegateRoot
     width: ListView.view ? ListView.view.width : 400
-    // 列表项背景色，默认透明
-    // TODO: 这里到时候也要弄一下我们的智能换颜色哦
-    // color: "transparent"
-    // 高度，用于列表视图计算
     height: 60
 
+    color: mouseArea.pressed ? "#50555B" : (mouseArea.containsMouse ? "#40444A" : "transparent")
 
-    // 自定义属性，用于接收 Model 数据
     property url itemImageSource: ""
     property string itemTitle: ""
     property string itemArtist: ""
-    // 新增属性：标记是否正在播放，用于显示播放图标
     property bool isItemPlaying: false
-
     property string iconFontFamily: ""
-
     property bool isFolder: false
 
-    // 鼠标区域用于处理点击事件和悬停效果
     MouseArea {
         id: mouseArea
         anchors.fill: parent
-        // 鼠标悬停时变色
-        // onEntered: parent.color = "#40444A"
-        // onExited: parent.color = "transparent"
+        hoverEnabled: true 
         onClicked: {
             musicListModel.handleClick(index)
-            // 实际应用中：在这里调用 C++ 后端的方法来播放此歌曲
         }
     }
-    color: mouseArea.pressed ? "#50555B" : (mouseArea.containsMouse ? "#40444A" : "transparent")
-
 
     RowLayout {
         anchors.left: parent.left
@@ -44,108 +33,81 @@ Rectangle {
         anchors.leftMargin: 10
         anchors.rightMargin: 10
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 10 // 内部控件之间的间距
+        spacing: 10 
         layoutDirection: Qt.LeftToRight
-        //rowWrapPolicy: RowLayout.NoWrap
-
-        //--- 1. 左侧图片 ---
-        /*Image {
-            id: albumCover
-            source: itemImageSource
-            Layout.preferredWidth: 40
-            Layout.preferredHeight: 40
-            // 保持图片的宽高比
-            fillMode: Image.PreserveAspectCrop
-            // 让图片看起来像一个圆角/方形
-            clip: true
-            layer.enabled: true
-            layer.effect: OpacityMask{
-                anchors.fill: parent
-                maskSource: Rectangle {
-                    width: albumCover.width
-                    height: albumCover.height
-                    radius: 20      // 使用同样的圆角
-                    color: "white"  // white = 不透明区域
-                }
-            }
-        }*/
 
         Rectangle {
             id: albumRect
-            // width: 50
-            // height: 50
             Layout.preferredWidth: 40
             Layout.preferredHeight: 40
-
             radius: 4
             color: "#dddddd"
             clip: true
 
-            // 这里放你的 Image 控件
             Image {
                 id: albumCover
                 anchors.fill: parent
                 source: itemImageSource 
                 fillMode: Image.PreserveAspectCrop
+                
+                // [优化]：列表图片源尺寸根据屏幕密度缩放，防止加载过小的图导致放大模糊
+                sourceSize: Qt.size(50 * Screen.devicePixelRatio, 50 * Screen.devicePixelRatio) 
+                
+                asynchronous: true
+                smooth: true 
+                mipmap: true // 列表小图开启 mipmap 有助于平滑
 
                 layer.enabled: true
+                
+                // [优化]：设置纹理大小适配屏幕缩放 (1:1 物理像素)
+                layer.textureSize: Qt.size(width * Screen.devicePixelRatio, height * Screen.devicePixelRatio)
+                
                 layer.effect: OpacityMask{
                     anchors.fill: parent
                     maskSource: Rectangle {
                         width: albumCover.width
                         height: albumCover.height
-                        radius: 4      // 使用同样的圆角
-                        color: "white"  // white = 不透明区域
+                        radius: 4      
+                        color: "white" 
                     }
                 }
             }
         }
 
-
-        // --- 2. 中间标题和艺术家 (上下堆叠) ---
         ColumnLayout {
             Layout.fillWidth: true
             Layout.preferredWidth: 0
             Layout.preferredHeight: parent.height
-
-            // 垂直居中对齐
             Layout.alignment: Qt.AlignVCenter
-            spacing: 2 // 上下 Text 之间的微小间距
+            spacing: 2 
 
-            // 歌曲标题
             Text {
                 text: itemTitle
                 font.pixelSize: 14
-                color: "white" // 白色标题
-                elide: Text.ElideRight // 文本过长时显示省略号
+                color: "white" 
+                elide: Text.ElideRight 
                 maximumLineCount: 1
-
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignLeft
             }
 
-            // 艺术家/作者
             Text {
                 text: itemArtist
                 font.pixelSize: 12
-                color: "#AAAAAA" // 浅灰色作者
+                color: "#AAAAAA" 
                 elide: Text.ElideRight
                 maximumLineCount: 1
                 visible: !isFolder
-
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignLeft
             }
         }
 
-        // --- 3. 右侧正在播放图标 (可选) ---
-        // 模仿 SARD UNDERGROUND 那一行右边的播放图标
         Text {
-            visible: isItemPlaying // 只有当 isItemPlaying 为 true 时才显示
-            text: "audiotrack" // 用一个简单的符号模拟播放图标
+            visible: isItemPlaying 
+            text: "audiotrack" 
             font.pixelSize: 16
             color: "#66CCFF"
-
             Layout.preferredWidth: 20
             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
             font.family: iconFontFamily
