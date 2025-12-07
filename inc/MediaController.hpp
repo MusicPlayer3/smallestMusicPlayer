@@ -118,6 +118,8 @@ public:
     // 用户在UI列表中点击了某首歌
     void setNowPlayingSong(PlaylistNode *node);
 
+    PlaylistNode *findFirstValidAudio(PlaylistNode *node);
+
     // 目录导航：进入子目录
     // void enterDirectory(PlaylistNode *dirNode);
     // // 目录导航：返回上一级 (操作 currentDir)

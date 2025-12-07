@@ -444,7 +444,10 @@ void UIController::checkAndUpdateScanState()
         emit scanCompleted();
         m_hasLoadedInitialData = true;
         m_isScanning = false;
-        m_mediaController.play();
+        auto firstSong = m_mediaController.findFirstValidAudio(m_mediaController.getRootNode().get());
+        m_mediaController.setNowPlayingSong(firstSong);
+        m_mediaController.pause();
+        // m_mediaController.play();
     }
 }
 

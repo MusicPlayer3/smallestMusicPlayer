@@ -3,10 +3,12 @@
 #include <random>
 
 // --- 静态辅助函数：递归查找第一个有效音频 ---
-static PlaylistNode *findFirstValidAudio(PlaylistNode *node)
+PlaylistNode *MediaController::findFirstValidAudio(PlaylistNode *node)
 {
     if (!node)
+    {
         return nullptr;
+    }
 
     const auto &children = node->getChildren();
     for (const auto &child : children)
