@@ -485,17 +485,13 @@ inline void Server::set_volume_external(double value)
 
 inline void Server::set_position_method(sdbus::ObjectPath id, int64_t pos)
 {
-    std::cout << "set_position_method" << std::endl
-              << "can seek:" << can_seek() << std::endl;
     if (!can_seek())
     {
-        std::cout << "return in can_seek" << std::endl;
         return;
     }
     auto tid = metadata.find(detail::field_to_string(Field::TrackId));
     if (tid == metadata.end())
     {
-        std::cout << "no trackid in metadata" << std::endl;
         return;
     }
 
