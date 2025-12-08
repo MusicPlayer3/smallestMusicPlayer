@@ -62,15 +62,7 @@ else()
     pkg_check_modules(SDBUSCPP REQUIRED sdbus-c++)
 endif()
 
-# ------------------------------
-# 硬件指令集优化 (AVX2)
-# ------------------------------
-CHECK_CXX_COMPILER_FLAG("-mavx2" COMPILER_SUPPORTS_AVX2)
-if(COMPILER_SUPPORTS_AVX2)
-    if(NOT MSVC)
-        add_compile_options(-mavx2 -mfma)
-    endif()
-endif()
+
 
 # ------------------------------
 # 通用 Include 配置
@@ -103,6 +95,7 @@ qt_add_executable(appMusicPlayer
     inc/mpris_server.hpp
     inc/musiclistmodel.h
     inc/Precompiled.h
+    inc/SimpleThreadPool.hpp
     inc/stb_image_resize2.h
     inc/stb_image_write.h
     inc/stb_image.h
@@ -203,6 +196,20 @@ else()
             ${TAGLIB_LIBRARY_DIRS}
         )
     endif()
+endif()
+
+# -----------------------------------------------------------
+# 开启 AVX2 和 FMA 指令集优化
+# -----------------------------------------------------------
+if(MSVC)
+    # Visual Studio (MSVC)
+    # /arch:AVX2 会自动开启 AVX2 和 FMA
+    target_compile_options(appMusicPlayer PRIVATE /arch:AVX2)
+else()
+    # GCC 或 Clang (Linux / macOS / MinGW)
+    # -mavx2: 开启 AVX2
+    # -mfma:  开启 FMA (Fused Multiply-Add)，代码中的 _mm256_fmadd_ps 需要它
+    target_compile_options(appMusicPlayer PRIVATE -mavx2 -mfma)
 endif()
 
 # ------------------------------

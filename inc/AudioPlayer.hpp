@@ -1,7 +1,7 @@
 #ifndef AUDIOPLAYER_HPP
 #define AUDIOPLAYER_HPP
 
-#include "Precompiled.h" 
+#include "Precompiled.h"
 
 enum outputMod : std::uint8_t
 {
@@ -45,11 +45,25 @@ public:
 
     // 静态工具
     static bool isValidAudio(const std::string &path);
+    /**
+     * @brief 生成歌曲波形
+     *
+     * @param filepath 文件路径
+     * @param barCount 波形条数
+     * @param totalWidth 波形总宽度
+     * @param barWidth 单个波形条宽度
+     * @param maxHeight 最大高度
+     * @param startTimeUS 开始时间（微秒）
+     * @param endTimeUS 结束时间（微秒）
+     * @return std::vector<int> 
+     */
     static std::vector<int> buildAudioWaveform(const std::string &filepath,
                                                int barCount,
                                                int totalWidth,
                                                int &barWidth,
-                                               int maxHeight);
+                                               int maxHeight,
+                                               int64_t startTimeUS,
+                                               int64_t endTimeUS);
 
     // 控制接口
     bool setPath(const std::string &path);

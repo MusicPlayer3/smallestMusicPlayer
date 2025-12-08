@@ -169,13 +169,15 @@ private:
     // 定义一个结构体来存储异步结果
     struct AsyncWaveformResult
     {
+        quint64 generationId;
         QString filePath;
         std::vector<int> heights;
         int barWidth;
     };
 
     QFutureWatcher<AsyncWaveformResult> m_waveformWatcher;
-    QString m_currentWaveformPath; // 当前UI期望显示的歌曲路径，用于校验
+    // 用于记录当前 UI 需要的最新请求 ID
+    quint64 m_currentWaveformGeneration = 0;
 };
 
 #endif // UICONTROLLER_H

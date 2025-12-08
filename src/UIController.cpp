@@ -35,6 +35,7 @@ UIController::UIController(QObject *parent) :
     // [新增] 连接异步监听器
     connect(&m_waveformWatcher, &QFutureWatcher<AsyncWaveformResult>::finished,
             this, &UIController::onWaveformCalculationFinished);
+    m_currentWaveformGeneration = 0; // 初始化 ID
 }
 
 // [新增] 析构清理
@@ -297,26 +298,31 @@ void UIController::generateWaveformForNode(PlaylistNode *node)
     m_waveformHeights.clear();
     emit waveformHeightsChanged();
 
-    if (!node || node->isDir())
+    m_currentWaveformGeneration++;
+    quint64 thisRequestId = m_currentWaveformGeneration;
+
+    if (!node && node->isDir())
     {
-        m_currentWaveformPath = ""; // 标记无效
         return;
     }
 
     std::string stdFilePath = node->getMetaData().getFilePath();
     if (stdFilePath.empty())
+    {
         return;
+    }
 
+    // 准备数据 (在主线程栈上)
     QString filePath = QString::fromStdString(stdFilePath);
-
-    // 2. 标记我们期望的最新歌曲路径
-    m_currentWaveformPath = filePath;
+    auto startTime = node->getMetaData().getOffset();
+    auto endTime = node->getMetaData().getOffset() + node->getMetaData().getDuration(); // 注意：这里通常是 Start + Duration = End
 
     // 3. 在后台线程执行计算
     // 使用 QtConcurrent::run 运行 lambda
-    QFuture<AsyncWaveformResult> future = QtConcurrent::run([filePath]()
+    QFuture<AsyncWaveformResult> future = QtConcurrent::run([=]()
                                                             {
         AsyncWaveformResult result;
+        result.generationId = thisRequestId; // 携带 ID 回来
         result.filePath = filePath;
         
         int barCount = 70;
@@ -324,15 +330,16 @@ void UIController::generateWaveformForNode(PlaylistNode *node)
         int calculatedBarWidth = 0;
         int maxHeight = 60; 
 
-        // 这是一个耗时操作，现在在线程池中运行
+        // 这是一个耗时操作
         result.heights = AudioPlayer::buildAudioWaveform(
-            filePath.toStdString(), 
-            barCount, 
-            totalWidth, 
-            calculatedBarWidth, 
-            maxHeight
-        );
-        
+            filePath.toStdString(),
+            barCount,
+            totalWidth,
+            calculatedBarWidth,
+            maxHeight,
+            startTime,
+            endTime); // 传入正确的时间片段
+
         result.barWidth = calculatedBarWidth;
         return result; });
 
@@ -349,9 +356,9 @@ void UIController::onWaveformCalculationFinished()
     // [关键] 检查结果是否过时
     // 如果在计算过程中用户又切了一首歌，m_currentWaveformPath 会变成新歌的路径
     // 此时 result.filePath 是旧歌的路径，不匹配，则丢弃，防止 UI 闪烁
-    if (result.filePath != m_currentWaveformPath)
+    if (result.generationId != m_currentWaveformGeneration)
     {
-        // qDebug() << "Discarding stale waveform result for:" << result.filePath;
+        // qDebug() << "Discarding expired waveform result. Got ID:" << result.generationId << " Expected:" << m_currentWaveformGeneration;
         return;
     }
 

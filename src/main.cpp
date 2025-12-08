@@ -10,6 +10,7 @@
 #include <iostream>
 #include <atomic>
 
+#include "AudioPlayer.hpp"
 #include "musiclistmodel.h"
 #include "uicontroller.h"
 #include "CoverImageProvider.hpp"
@@ -131,6 +132,32 @@ void runTerminalMode(QCoreApplication &app, const QString &rootDir)
         std::cout << "Scan completed in " << duration.count() << " ms\n";
         std::cout << "Scan completed. Trying to auto-play...\n";
         mediaController.play();
+        auto nowPlaying = mediaController.getCurrentPlayingNode();
+        int barwidth = 0;
+        std::cout << "Waveform generation test 1 \n file path:/mnt/software/CloudMusic(for MP4)/R・I・O・T/RAISE A SUILEN - R·I·O·T.flac\n";
+        start = std::chrono::high_resolution_clock::now();
+        auto res = AudioPlayer::buildAudioWaveform("/mnt/software/CloudMusic(for MP4)/R・I・O・T/RAISE A SUILEN - R·I·O·T.flac", 70, 320, barwidth, 60,0,0);
+        end = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Waveform generated in " << duration.count() << " ms\n";
+        std::cout << "Waveform Data:\n";
+        for (auto &i : res)
+        {
+            std::cout << i << " ";
+        }
+        std::cout << "\n";
+        std::cout << "Waveform generation test 2 \n file path:/mnt/software/CloudMusic(for MP4)/Roselia/02. Ringing Bloom.m4a\n";
+        start = std::chrono::high_resolution_clock::now();
+        res = AudioPlayer::buildAudioWaveform("/mnt/software/CloudMusic(for MP4)/Roselia/02. Ringing Bloom.m4a", 70, 320, barwidth, 60,0,0);
+        end = std::chrono::high_resolution_clock::now();
+        duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Waveform generated in " << duration.count() << " ms\n";
+        std::cout << "Waveform Data:\n";
+        for (auto &i : res)
+        {
+            std::cout << i << " ";
+        }
+        std::cout << "\n";
         // run_cover_test();
         // runColorExtractorTest();
     }
