@@ -223,13 +223,23 @@ void SysMediaService::onPlay()
 void SysMediaService::onLoopStatusChanged(mpris::LoopStatus status)
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] LoopStatusChanged signal received: %d\n", status);
-    // TODO: loopStatusChanged
+    if (status == mpris::LoopStatus::None)
+    {
+        controller.setRepeatMode(RepeatMode::None);
+    }
+    else if (status == mpris::LoopStatus::Playlist)
+    {
+        controller.setRepeatMode(RepeatMode::Playlist);
+    }
+    else if (status == mpris::LoopStatus::Track)
+    {
+        controller.setRepeatMode(RepeatMode::Single);
+    }
 }
 
 void SysMediaService::onShuffleChanged(bool shuffle)
 {
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] ShuffleChanged signal received: %d\n", shuffle);
-    // TODO: shuffleChanged
     controller.setShuffle(shuffle);
 }
 
