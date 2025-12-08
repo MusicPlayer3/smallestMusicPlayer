@@ -1,6 +1,7 @@
 #include "CoverCache.hpp"
 #include <QDebug>
 #include "CoverImage.hpp"
+#include "SDL_log.h"
 
 namespace fs = std::filesystem;
 
@@ -42,6 +43,7 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
     }
     catch (const std::bad_alloc &)
     {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "CoverCache: Out of memory resizing image for album %s", album.c_str());
         return;
     }
 
@@ -71,8 +73,9 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
             shard.map[album] = std::move(img);
         }
     }
-    catch (...)
+    catch (const std::exception &e)
     {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "CoverCache: Failed to create CoverImage for album %s: %s", album.c_str(), e.what());
     }
 }
 

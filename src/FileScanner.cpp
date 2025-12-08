@@ -1,10 +1,11 @@
 #include "FileScanner.hpp"
 #include "CoverCache.hpp"
 #include "MetaData.hpp"
-#include "AudioPlayer.hpp"
 #include "Precompiled.h"
+#include "SDL_log.h"
 
 // ================= TagLib Headers =================
+#include <exception>
 #include <taglib/fileref.h>
 #include <taglib/tag.h>
 #include <taglib/tfile.h>
@@ -216,7 +217,7 @@ struct CueTrackInfo
     std::string audioFile;
 };
 
-static std::string cleanString(std::string str)
+static std::string cleanString(const std::string &str)
 {
     size_t first = str.find_first_not_of(" \t\r\n\"");
     if (std::string::npos == first)
@@ -433,8 +434,9 @@ static std::string findDirectoryCover(const fs::path &dirPath)
             }
         }
     }
-    catch (...)
+    catch (const std::exception &e)
     {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to scan directory cover: %s", e.what());
     }
     return "";
 }
@@ -480,7 +482,7 @@ static void processTrackCover(const std::string &musicPath, const std::string &a
     {
         int w = 0, h = 0;
         StbiPtr imgPixels = loadBufferAsRGBA(reinterpret_cast<const unsigned char *>(data.data()),
-                                             data.size(), w, h);
+                                             static_cast<int>(data.size()), w, h);
         if (imgPixels)
         {
             CoverCache::instance().putCompressedFromPixels(albumKey, imgPixels.get(), w, h, 4);
@@ -600,8 +602,9 @@ static std::vector<std::shared_ptr<PlaylistNode>> processCueAndGetNodes(
             }
         }
     }
-    catch (...)
+    catch (const std::exception &e)
     {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "[FileScanner:607]:Error processing cue file %s: %s", cuePath.c_str(), e.what());
     }
     return resultNodes;
 }
@@ -648,7 +651,7 @@ static std::string findDeepAudio(const std::shared_ptr<PlaylistNode> &node)
 }
 
 // 封装一个独立的任务函数，用于处理单个音频文件
-static std::shared_ptr<PlaylistNode> processSingleFile(std::string filePath)
+static std::shared_ptr<PlaylistNode> processSingleFile(const std::string &filePath)
 {
     try
     {
@@ -665,8 +668,9 @@ static std::shared_ptr<PlaylistNode> processSingleFile(std::string filePath)
         fileNode->setMetaData(md);
         return fileNode;
     }
-    catch (...)
+    catch (const std::exception &e)
     {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "[FileScanner:672]:Error processing file %s: %s", filePath.c_str(), e.what());
         return nullptr;
     }
 }
@@ -730,8 +734,9 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
             }
         }
     }
-    catch (...)
+    catch (const std::exception &e)
     {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "[FileScanner:737] directory_iterator failed: %s", e.what());
     }
 
     // 2. 并行处理当前文件夹下的所有音频文件
@@ -749,8 +754,9 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
         {
             canon = fs::canonical(p).string();
         }
-        catch (...)
+        catch (const std::exception &e)
         {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "[FileScanner:751] canonical failed: %s", e.what());
         }
 
         if (processedFiles.count(fpath) || processedFiles.count(canon))
@@ -953,8 +959,9 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
         if (!fs::exists(tmpDir))
             fs::create_directories(tmpDir);
     }
-    catch (...)
+    catch (const std::exception &e)
     {
+        SDL_LogError(SDL_LOG_CATEGORY_SYSTEM, "[FileScanner:964]:Failed to create temp directory: %s", e.what());
         return "";
     }
 
