@@ -14,8 +14,8 @@ SysMediaService::SysMediaService(MediaController &controller_) : controller(cont
     }
 
     // 基础信息设置
-    server->set_identity("smallestMusicPlayer");
-    // server->set_desktop_entry("smallestMusicPlayer"); // 需对应 .desktop 文件名
+    server->set_identity("MusicPlayer");
+    server->set_desktop_entry("music-player"); // 需对应 .desktop 文件名
     server->set_supported_uri_schemes({"file"});
     server->set_supported_mime_types({"application/octet-stream", "audio/mpeg", "audio/flac", "audio/x-wav", "text/plain"});
 
@@ -156,6 +156,7 @@ void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
         SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[SysMediaService] Error: MPRIS server not initialized.\n");
         return;
     }
+    SDL_Log("[SysMediaService] Setting playback status to %d\n", status);
     server->set_playback_status(status);
 }
 

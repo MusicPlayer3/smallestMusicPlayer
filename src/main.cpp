@@ -133,10 +133,11 @@ void runTerminalMode(QCoreApplication &app, const QString &rootDir)
         std::cout << "Scan completed. Trying to auto-play...\n";
         mediaController.play();
         auto nowPlaying = mediaController.getCurrentPlayingNode();
+#ifdef DEBUG
         int barwidth = 0;
         std::cout << "Waveform generation test 1 \n file path:/mnt/software/CloudMusic(for MP4)/R・I・O・T/RAISE A SUILEN - R·I·O·T.flac\n";
         start = std::chrono::high_resolution_clock::now();
-        auto res = AudioPlayer::buildAudioWaveform("/mnt/software/CloudMusic(for MP4)/R・I・O・T/RAISE A SUILEN - R·I·O·T.flac", 70, 320, barwidth, 60,0,0);
+        auto res = AudioPlayer::buildAudioWaveform("/mnt/software/CloudMusic(for MP4)/R・I・O・T/RAISE A SUILEN - R·I·O·T.flac", 70, 320, barwidth, 60, 0, 0);
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         std::cout << "Waveform generated in " << duration.count() << " ms\n";
@@ -148,7 +149,7 @@ void runTerminalMode(QCoreApplication &app, const QString &rootDir)
         std::cout << "\n";
         std::cout << "Waveform generation test 2 \n file path:/mnt/software/CloudMusic(for MP4)/Roselia/02. Ringing Bloom.m4a\n";
         start = std::chrono::high_resolution_clock::now();
-        res = AudioPlayer::buildAudioWaveform("/mnt/software/CloudMusic(for MP4)/Roselia/02. Ringing Bloom.m4a", 70, 320, barwidth, 60,0,0);
+        res = AudioPlayer::buildAudioWaveform("/mnt/software/CloudMusic(for MP4)/Roselia/02. Ringing Bloom.m4a", 70, 320, barwidth, 60, 0, 0);
         end = std::chrono::high_resolution_clock::now();
         duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         std::cout << "Waveform generated in " << duration.count() << " ms\n";
@@ -158,6 +159,7 @@ void runTerminalMode(QCoreApplication &app, const QString &rootDir)
             std::cout << i << " ";
         }
         std::cout << "\n";
+#endif
         // run_cover_test();
         // runColorExtractorTest();
     }
@@ -259,6 +261,16 @@ int main(int argc, char *argv[])
 
 #endif
     // qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
+#ifdef __linux__
+    // qputenv("SDL_AUDIODRIVER", "pulseaudio");
+    // 2. 【新增】设置 SDL 应用程序名称
+    // 这会让 pactl list sink-inputs 显示 "MusicPlayer" 而不是 "SDL Application"
+    SDL_SetHint(SDL_HINT_APP_NAME, "MusicPlayer");
+
+    // 3. 【新增】明确告诉 Linux 这是一个媒体播放器流
+    // 这有助于系统进行策略管理（比如电话进来自动暂停音乐）
+    SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
+#endif
 
     // 1. 预解析参数以决定是否启用 GUI (仅 Linux)
     bool useGui = true;
@@ -291,6 +303,8 @@ int main(int argc, char *argv[])
 #if defined(Q_OS_LINUX)
         // 使用 QCoreApplication，无图形界面依赖
         QCoreApplication app(argc, argv);
+        app.setOrganizationName("MusicPlayer3");
+        app.setApplicationName("MusicPlayer");
 
         runTerminalMode(app, rootDir);
 
@@ -308,6 +322,9 @@ int main(int argc, char *argv[])
         QApplication app(argc, argv);
         QQuickStyle::setStyle("Basic");
         QQmlApplicationEngine engine;
+        app.setOrganizationName("MusicPlayer3");
+        app.setApplicationName("MusicPlayer");
+        app.setDesktopFileName("music-player");
 
         // 注册 Image Provider
         engine.addImageProvider(QStringLiteral("covercache"), new CoverImageProvider);
