@@ -853,16 +853,13 @@ void AudioPlayer::setOutputMode(outputMod mode)
 // --- Static: Waveform ---
 
 // =========================================================
-//  Part 1: SIMD 计算内核 (完全保持不变)
+//  SIMD 计算内核
 // =========================================================
 struct ChunkResult
 {
     float sumSquares;
     int actualCount;
 };
-
-// ... [此处省略 computeSumSquaresAVX2_Float / S16 / S32 / U8 的代码，与上一版完全一致，请保留] ...
-// 为节省篇幅，这里假定你已经保留了上述 SIMD 函数
 
 // Float SIMD
 static ChunkResult computeSumSquaresAVX2_Float(const float *data, int range_count, int step, int decimation)
@@ -901,6 +898,7 @@ static ChunkResult computeSumSquaresAVX2_S16(const int16_t *data, int range_coun
     float sum = 0.0f;
     int processed = 0;
     int i = 0;
+    // 归一化系数：确保 int16 最大值映射到 1.0f
     const float SCALE_S16 = 1.0f / 32768.0f;
     if (step == 1)
     {
@@ -937,6 +935,7 @@ static ChunkResult computeSumSquaresAVX2_S32(const int32_t *data, int range_coun
     float sum = 0.0f;
     int processed = 0;
     int i = 0;
+    // 归一化系数：确保 int32 最大值映射到 1.0f
     const float SCALE_S32 = 1.0f / 2147483648.0f;
     if (step == 1)
     {
@@ -1013,14 +1012,14 @@ struct SafePacket
 };
 
 // =========================================================
-//  Part 2: 策略A - 并行 Seek (FLAC) - 支持时间段
+//  Part 2: 策略A - 并行 Seek (FLAC/MP3)
 // =========================================================
 static std::vector<BarData> processAudioChunk_StrategyA(
     std::string filepath,
     int streamIdx,
-    int64_t absoluteStartSample, // 该线程处理的绝对起始采样点
-    int64_t absoluteEndSample,   // 该线程处理的绝对结束采样点
-    int64_t globalStartSample,   // 整首歌的绝对起始采样点 (用于计算相对偏移)
+    int64_t absoluteStartSample,
+    int64_t absoluteEndSample,
+    int64_t globalStartSample,
     double samplesPerBar,
     int totalBars)
 {
@@ -1055,15 +1054,13 @@ static std::vector<BarData> processAudioChunk_StrategyA(
             decimation = 1;
     }
 
-    // Seek 到该线程负责的起始位置
     int64_t seekTimestamp = av_rescale_q(absoluteStartSample, (AVRational){1, ctx->sample_rate}, fmt->streams[streamIdx]->time_base);
-    // 总是 Backward seek 保证不漏数据
     av_seek_frame(fmt, streamIdx, seekTimestamp, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(ctx);
 
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
-    int64_t currentGlobalSample = -1; // 这是一个“绝对”采样计数
+    int64_t currentGlobalSample = -1;
 
     while (av_read_frame(fmt, pkt) >= 0)
     {
@@ -1073,7 +1070,6 @@ static std::vector<BarData> processAudioChunk_StrategyA(
             {
                 while (avcodec_receive_frame(ctx, frame) >= 0)
                 {
-                    // 校准绝对采样位置
                     if (frame->pts != AV_NOPTS_VALUE)
                     {
                         int64_t ptsSample = av_rescale_q(frame->pts, fmt->streams[streamIdx]->time_base, (AVRational){1, ctx->sample_rate});
@@ -1085,14 +1081,12 @@ static std::vector<BarData> processAudioChunk_StrategyA(
                     else if (currentGlobalSample == -1)
                         currentGlobalSample = 0;
 
-                    // 如果当前帧已经超过了本线程的负责范围，退出
                     if (currentGlobalSample >= absoluteEndSample)
                         goto cleanup;
 
                     int samples = frame->nb_samples;
                     int offset = 0;
 
-                    // 处理 Seek 预读导致的头部多余数据
                     if (currentGlobalSample < absoluteStartSample)
                     {
                         offset = static_cast<int>(absoluteStartSample - currentGlobalSample);
@@ -1104,7 +1098,6 @@ static std::vector<BarData> processAudioChunk_StrategyA(
                     }
 
                     int processSamples = samples - offset;
-                    // 处理尾部超出范围
                     if (currentGlobalSample + samples > absoluteEndSample)
                     {
                         processSamples = static_cast<int>(absoluteEndSample - (currentGlobalSample + offset));
@@ -1112,7 +1105,6 @@ static std::vector<BarData> processAudioChunk_StrategyA(
                     if (processSamples <= 0)
                         continue;
 
-                    // 准备数据
                     int channels = ctx->ch_layout.nb_channels;
                     int step = 1;
                     bool isPlanar = av_sample_fmt_is_planar(ctx->sample_fmt);
@@ -1123,12 +1115,8 @@ static std::vector<BarData> processAudioChunk_StrategyA(
                     int processedInFrame = 0;
                     int64_t frameBaseSample = currentGlobalSample + offset;
 
-                    // [关键修改] 计算相对 Bar 索引
-                    // Bar 0 对应 globalStartSample
                     int64_t relativeSample = frameBaseSample - globalStartSample;
                     int curBarIdx = static_cast<int>(relativeSample / samplesPerBar);
-
-                    // 双重保护，防止 Seek 误差导致写入越界
                     if (curBarIdx < 0)
                         curBarIdx = 0;
 
@@ -1136,8 +1124,6 @@ static std::vector<BarData> processAudioChunk_StrategyA(
 
                     while (processedInFrame < processSamples && curBarIdx < totalBars)
                     {
-                        // boundary 是相对的，要加上 globalStartSample 变绝对，或者把 frameBaseSample 变相对
-                        // 这里我们用相对量计算 needed
                         int64_t currentRelative = (frameBaseSample + processedInFrame) - globalStartSample;
                         int64_t needed = static_cast<int64_t>(nextBarBoundaryRel) - currentRelative;
 
@@ -1172,7 +1158,6 @@ static std::vector<BarData> processAudioChunk_StrategyA(
                         localBars[curBarIdx].actualCount += res.actualCount;
                         processedInFrame += count;
 
-                        // 推进到下一 Bar
                         if (((frameBaseSample + processedInFrame) - globalStartSample) >= nextBarBoundaryRel)
                         {
                             curBarIdx++;
@@ -1194,13 +1179,13 @@ cleanup:
 }
 
 // =========================================================
-//  Part 3: 策略B - 流水线内存解码 (M4A) - 支持时间段
+//  Part 3: 策略B - 流水线内存解码 (M4A/MP4)
 // =========================================================
 static std::vector<BarData> processPacketBatch_StrategyB(
     std::vector<AVPacket *> packets,
     AVCodecParameters *codecPar,
     AVRational timeBase,
-    int64_t globalStartSample, // 整段音频的绝对起始点
+    int64_t globalStartSample,
     double samplesPerBar,
     int totalBars)
 {
@@ -1238,10 +1223,6 @@ static std::vector<BarData> processPacketBatch_StrategyB(
                     continue;
 
                 int64_t ptsSample = av_rescale_q(frame->pts, timeBase, (AVRational){1, ctx->sample_rate});
-
-                // 如果解码出的帧在 globalStartSample 之前太远（Seek 预读），可以跳过
-                // 但为了计算准确，我们还是解码，但在 bar index 计算时会通过 < 0 过滤掉
-
                 int samples = frame->nb_samples;
                 int channels = ctx->ch_layout.nb_channels;
                 int step = 1;
@@ -1252,15 +1233,11 @@ static std::vector<BarData> processPacketBatch_StrategyB(
 
                 int processedInFrame = 0;
                 int64_t frameBaseSample = ptsSample;
-
-                // [关键修改] 相对索引计算
                 int64_t relativeSample = frameBaseSample - globalStartSample;
                 int curBarIdx = static_cast<int>(relativeSample / samplesPerBar);
 
-                // 如果这一帧完全在开始时间之前
                 if (curBarIdx < 0 && (relativeSample + samples) < 0)
                     continue;
-                // 如果这一帧跨越了起点，需要处理
                 if (curBarIdx < 0)
                     curBarIdx = 0;
 
@@ -1268,10 +1245,7 @@ static std::vector<BarData> processPacketBatch_StrategyB(
 
                 while (processedInFrame < samples && curBarIdx < totalBars)
                 {
-                    // 当前相对位置
                     int64_t currentRel = (frameBaseSample + processedInFrame) - globalStartSample;
-
-                    // 如果还在起点之前（负数），跳过数据
                     if (currentRel < 0)
                     {
                         processedInFrame++;
@@ -1325,7 +1299,7 @@ static std::vector<BarData> processPacketBatch_StrategyB(
 }
 
 // =========================================================
-//  Part 4: 主函数 (支持 start/end)
+//  Part 4: 主函数
 // =========================================================
 std::vector<int> AudioPlayer::buildAudioWaveform(
     const std::string &filepath,
@@ -1333,9 +1307,8 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
     int totalWidth,
     int &barWidth,
     int maxHeight,
-    int64_t startTimeUS, // 新增：起始时间(微秒)
-    int64_t endTimeUS    // 新增：结束时间(微秒)，0 表示到文件末尾
-)
+    int64_t startTimeUS,
+    int64_t endTimeUS)
 {
     std::vector<int> barHeights(barCount, 0);
     if (barCount <= 0 || totalWidth <= 0)
@@ -1370,7 +1343,7 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
     if (startTimeUS < 0)
         startTimeUS = 0;
     if (startTimeUS >= endTimeUS)
-    { // 无效区间
+    {
         avformat_close_input(&fmt);
         return barHeights;
     }
@@ -1378,7 +1351,6 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
     int64_t segmentDurationUS = endTimeUS - startTimeUS;
     int sampleRate = fmt->streams[streamIdx]->codecpar->sample_rate;
 
-    // 将微秒转换为采样点数
     int64_t globalStartSample = av_rescale(startTimeUS, sampleRate, 1000000);
     int64_t globalEndSample = av_rescale(endTimeUS, sampleRate, 1000000);
     int64_t totalSegmentSamples = globalEndSample - globalStartSample;
@@ -1403,23 +1375,23 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
     int threadCount = std::thread::hardware_concurrency();
     if (threadCount < 2)
         threadCount = 2;
-    // 如果片段很短（比如<1秒），强制单线程，避免开销
     if (segmentDurationUS < 1000000)
         threadCount = 1;
 
     std::vector<std::future<std::vector<BarData>>> futures;
+
+    // 用于最终数据汇总
+    std::vector<BarData> finalBarsData(barCount);
 
     // === Strategy A: 并行 Seek (FLAC) ===
     if (!useStrategyB)
     {
         avformat_close_input(&fmt);
 
-        // 将总段落 totalSegmentSamples 分给多个线程
         int64_t samplesPerThread = totalSegmentSamples / threadCount;
 
         for (int i = 0; i < threadCount; ++i)
         {
-            // 每个线程负责的绝对区间
             int64_t tStart = globalStartSample + i * samplesPerThread;
             int64_t tEnd = (i == threadCount - 1) ? globalEndSample : (tStart + samplesPerThread);
 
@@ -1427,6 +1399,19 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
                 SimpleThreadPool::instance().enqueue(
                     processAudioChunk_StrategyA,
                     filepath, streamIdx, tStart, tEnd, globalStartSample, samplesPerBar, barCount));
+        }
+
+        // 汇总结果 A
+        for (auto &fut : futures)
+        {
+            std::vector<BarData> chunkResult = fut.get();
+            for (int i = 0; i < barCount; ++i)
+            {
+                if (chunkResult[i].actualCount > 0)
+                {
+                    finalBarsData[i] = chunkResult[i];
+                }
+            }
         }
     }
     // === Strategy B: 流水线读取 (M4A) ===
@@ -1443,20 +1428,15 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
 
         AVPacket *tempPkt = av_packet_alloc();
 
-        // [新增] Seek 到起点
-        // 注意：fmt->duration 对应的单位是 AV_TIME_BASE，stream duration 对应 stream->time_base
-        // 我们用 av_rescale_q 转换
         int64_t seekTarget = av_rescale_q(startTimeUS, (AVRational){1, 1000000}, timeBase);
         av_seek_frame(fmt, streamIdx, seekTarget, AVSEEK_FLAG_BACKWARD);
 
-        // 记录结束的 PTS，用于提前停止读取
         int64_t endPTS = av_rescale_q(endTimeUS, (AVRational){1, 1000000}, timeBase);
 
         while (av_read_frame(fmt, tempPkt) >= 0)
         {
             if (tempPkt->stream_index == streamIdx)
             {
-                // 如果读到的包 PTS 已经超过了结束时间，停止读取
                 if (tempPkt->pts != AV_NOPTS_VALUE && tempPkt->pts > endPTS)
                 {
                     av_packet_unref(tempPkt);
@@ -1491,9 +1471,7 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
         av_packet_free(&tempPkt);
         avformat_close_input(&fmt);
 
-        // 等待结果...
-        std::vector<BarData> finalBarsData(barCount);
-        float globalMaxRMS = 0.0f;
+        // 汇总结果 B
         for (auto &fut : futures)
         {
             std::vector<BarData> chunkResult = fut.get();
@@ -1507,62 +1485,55 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
             }
         }
         avcodec_parameters_free(&codecPar);
-
-        // 归一化并返回 (Strategy B)
-        std::vector<float> rmsValues(barCount);
-        for (int i = 0; i < barCount; ++i)
-        {
-            if (finalBarsData[i].actualCount > 0)
-            {
-                float rms = std::sqrt(finalBarsData[i].sumSquares / finalBarsData[i].actualCount);
-                rmsValues[i] = rms;
-                if (rms > globalMaxRMS)
-                    globalMaxRMS = rms;
-            }
-        }
-        if (globalMaxRMS < 0.0001f)
-            globalMaxRMS = 1.0f;
-        for (int i = 0; i < barCount; ++i)
-        {
-            float normalized = rmsValues[i] / globalMaxRMS;
-            barHeights[i] = static_cast<int>(std::max(2.0f, normalized * maxHeight));
-        }
-        return barHeights;
     }
 
-    // Strategy A 的结果汇总
-    std::vector<BarData> finalBarsData(barCount);
-    float globalMaxRMS = 0.0f;
-    for (auto &fut : futures)
-    {
-        std::vector<BarData> chunkResult = fut.get();
-        for (int i = 0; i < barCount; ++i)
-        {
-            if (chunkResult[i].actualCount > 0)
-            {
-                finalBarsData[i] = chunkResult[i];
-            }
-        }
-    }
+    // =========================================================
+    //  Part 5: 绝对响度算法 (dB Scale)
+    // =========================================================
 
-    // 通用归一化
-    std::vector<float> rmsValues(barCount);
+    // 设置分贝范围
+    // 0 dBFS 是数字音频最大值
+    // -55 dBFS 作为视觉上的"静音底噪" (低于此值显示为 0 或 最小高度)
+    const float DB_CEILING = 0.0f;
+    const float DB_FLOOR = -55.0f;
+    const float DB_RANGE = DB_CEILING - DB_FLOOR;
+    const int MIN_HEIGHT_PX = 2; // 最小像素高度，防止断裂感
+
     for (int i = 0; i < barCount; ++i)
     {
+        float visualHeight = 0.0f;
+
         if (finalBarsData[i].actualCount > 0)
         {
+            // 1. 计算 RMS (0.0 ~ 1.0)
+            // 这里的 RMS 是线性的，1.0 代表 0 dBFS (满刻度)
             float rms = std::sqrt(finalBarsData[i].sumSquares / finalBarsData[i].actualCount);
-            rmsValues[i] = rms;
-            if (rms > globalMaxRMS)
-                globalMaxRMS = rms;
+
+            // 防止 log10(0) 导致 -inf
+            if (rms < 1e-9f)
+                rms = 1e-9f;
+
+            // 2. 转换为 dB
+            // 20 * log10(rms)
+            float db = 20.0f * std::log10(rms);
+
+            // 3. 映射到视觉范围 [0.0, 1.0]
+            // 如果 db > 0 (Clip)，限制为 0
+            if (db > DB_CEILING)
+                db = DB_CEILING;
+
+            // 如果 db < -55，设为 -55
+            if (db < DB_FLOOR)
+                db = DB_FLOOR;
+
+            // 线性归一化 dB 值到 0~1
+            float normalized = (db - DB_FLOOR) / DB_RANGE;
+
+            // 4. 计算最终高度
+            visualHeight = normalized * maxHeight;
         }
-    }
-    if (globalMaxRMS < 0.0001f)
-        globalMaxRMS = 1.0f;
-    for (int i = 0; i < barCount; ++i)
-    {
-        float normalized = rmsValues[i] / globalMaxRMS;
-        barHeights[i] = static_cast<int>(std::max(2.0f, normalized * maxHeight));
+
+        barHeights[i] = static_cast<int>(std::max((float)MIN_HEIGHT_PX, visualHeight));
     }
 
     return barHeights;
