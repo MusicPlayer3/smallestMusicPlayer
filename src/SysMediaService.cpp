@@ -156,7 +156,6 @@ void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
         SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[SysMediaService] Error: MPRIS server not initialized.\n");
         return;
     }
-    SDL_Log("[SysMediaService] Setting playback status to %d\n", status);
     server->set_playback_status(status);
 }
 
