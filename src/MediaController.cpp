@@ -70,7 +70,7 @@ void MediaController::monitorLoop()
         bool justSwitched = false;
 
         // ---------------------------------------------------------
-        // 情况 A: 物理文件发生了切换
+        // 情况 A: 物理文件发生了切换 (外部调用 setPath 或 列表循环逻辑触发)
         // ---------------------------------------------------------
         if (!realCurrentPath.empty() && realCurrentPath != lastDetectedPath)
         {
@@ -103,7 +103,6 @@ void MediaController::monitorLoop()
                 currentPlayingSongs = newNode;
                 updateMetaData(currentPlayingSongs);
 
-                // [修改] 判空保护
                 if (mediaService)
                     mediaService->triggerSeeked(std::chrono::microseconds(0));
 
@@ -114,7 +113,7 @@ void MediaController::monitorLoop()
             lastDetectedPath = realCurrentPath;
         }
         // ---------------------------------------------------------
-        // 情况 B: 同一文件内的 CUE 分轨切换
+        // 情况 B: 同一文件内的 CUE 分轨切换 (常规播放)
         // ---------------------------------------------------------
         else if (isPlaying.load() && !realCurrentPath.empty() && realCurrentPath == lastDetectedPath)
         {
@@ -140,7 +139,6 @@ void MediaController::monitorLoop()
                             currentPlayingSongs = nextNode;
                             updateMetaData(currentPlayingSongs);
 
-                            // [修改] 判空保护
                             if (mediaService)
                                 mediaService->triggerSeeked(std::chrono::microseconds(0));
 
@@ -151,15 +149,42 @@ void MediaController::monitorLoop()
                 }
             }
         }
+        // ---------------------------------------------------------
+        // [修复] 情况 C: 播放器底层已自然结束并清空路径 (例如 Seek 到末尾)
+        // ---------------------------------------------------------
+        else if (isPlaying.load() && realCurrentPath.empty() && !lastDetectedPath.empty())
+        {
+            // 如果 logic 是 Playing，且刚才还有路径，现在突然没了，说明底层 AudioPlayer 跑完了
+            std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+
+            PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
+
+            // 只有当存在下一首时才自动播放，否则视为播放结束
+            if (nextNode)
+            {
+                // 模拟切歌逻辑
+                playNode(nextNode);
+
+                // playNode 会更新 lastDetectedPath，所以这里不需要手动更新
+                justSwitched = true;
+            }
+            else
+            {
+                // 没有下一首了 (例如单次播放且不循环)，停止状态
+                isPlaying = false;
+                lastDetectedPath = ""; // 重置检测路径
+                if (mediaService)
+                    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+            }
+        }
 
         // 2. 检测播放是否自然停止
         if (isPlaying.load() && player->getNowPlayingTime() > 0 && !player->isPlaying())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            if (!player->isPlaying())
+            if (!player->isPlaying() && !player->getCurrentPath().empty())
             {
                 isPlaying = false;
-                // [修改] 判空保护
                 if (mediaService)
                     mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
             }
@@ -170,7 +195,6 @@ void MediaController::monitorLoop()
         {
             if (!justSwitched)
             {
-                // [修改] 判空保护
                 if (mediaService)
                     mediaService->setPosition(std::chrono::microseconds(getCurrentPosMicroseconds()));
             }
@@ -403,6 +427,9 @@ void MediaController::play()
     {
         mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
     }
+#ifdef DEBUG
+    SDL_Log("[MediaController] play()");
+#endif
 }
 
 void MediaController::pause()
@@ -415,6 +442,9 @@ void MediaController::pause()
     {
         mediaService->setPlayBackStatus(mpris::PlaybackStatus::Paused);
     }
+#ifdef DEBUG
+    SDL_Log("[MediaController] pause()");
+#endif
 }
 
 void MediaController::playpluse()
@@ -658,6 +688,11 @@ int64_t MediaController::getDurationMicroseconds()
 
 void MediaController::seek(int64_t pos_microsec)
 {
+    static std::chrono::time_point<std::chrono::steady_clock> lastSeekTime;
+    if (std::chrono::steady_clock::now() - lastSeekTime < std::chrono::milliseconds(100))
+    {
+        return;
+    }
     int64_t offset = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(controllerMutex);
@@ -673,6 +708,10 @@ void MediaController::seek(int64_t pos_microsec)
     {
         mediaService->setPosition(std::chrono::microseconds(pos_microsec));
     }
+    lastSeekTime = std::chrono::steady_clock::now();
+#ifdef DEBUG
+    SDL_Log("[MediaController]: seek to %ld", pos_microsec);
+#endif
 }
 
 // --- 初始化与扫描 ---
