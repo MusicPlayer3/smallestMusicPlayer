@@ -1,7 +1,6 @@
 #include "CoverCache.hpp"
 #include <QDebug>
 #include "CoverImage.hpp"
-#include "SDL_log.h"
 
 namespace fs = std::filesystem;
 

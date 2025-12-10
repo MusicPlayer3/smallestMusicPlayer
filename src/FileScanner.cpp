@@ -2,7 +2,6 @@
 #include "CoverCache.hpp"
 #include "MetaData.hpp"
 #include "Precompiled.h"
-#include "SDL_log.h"
 
 // ================= TagLib Headers =================
 #include <exception>
