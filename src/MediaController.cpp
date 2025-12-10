@@ -345,7 +345,7 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
         int64_t offset = node->getMetaData().getOffset();
         if (offset > 0)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            // std::this_thread::sleep_for(std::chrono::milliseconds(15));
             player->seek(offset);
         }
         else
@@ -642,6 +642,7 @@ int64_t MediaController::getCurrentPosMicroseconds()
     }
 
     int64_t relPos = absPos - offset;
+    // SDL_Log("[MediaController]: current absPos: %ld, offset: %ld, relPos: %ld", absPos, offset, relPos);
     return (relPos < 0) ? 0 : relPos;
 }
 
@@ -731,44 +732,96 @@ RepeatMode MediaController::getRepeatMode()
     return repeatMode.load();
 }
 
-// 辅助：原地转小写，避免分配新内存
-static bool containsIgnoreCase(const std::string &haystack, const std::string &needleLower)
+// ==========================================
+// 1. 定义权重常量 (你可以根据喜好调整)
+// ==========================================
+namespace SearchWeights
 {
-    if (needleLower.empty())
-        return true;
+const int SCORE_TITLE = 100;   // 歌名最重要
+const int SCORE_ARTIST = 80;   // 歌手次之
+const int SCORE_ALBUM = 60;    // 专辑
+const int SCORE_FILENAME = 40; // 文件名保底
 
-    // 如果 haystack 比 needle 短，直接返回 false
-    if (haystack.size() < needleLower.size())
-        return false;
+// 匹配类型的倍率
+const double MULTIPLIER_EXACT = 3.0;    // 完全一样 (e.g. 搜"Hello" 命中 "Hello")
+const double MULTIPLIER_PREFIX = 1.5;   // 开头就是 (e.g. 搜"He" 命中 "Hello")
+const double MULTIPLIER_CONTAINS = 1.0; // 中间包含 (e.g. 搜"el" 命中 "Hello")
+} // namespace SearchWeights
 
-    // 简单的搜索实现，避免构造完整的 haystackLower
-    auto it = std::search(
-        haystack.begin(), haystack.end(),
-        needleLower.begin(), needleLower.end(),
-        [](char h, char n)
-        {
-            return std::tolower(static_cast<unsigned char>(h)) == n;
-        });
+// ==========================================
+// 2. 辅助结构体：用于存储临时搜索结果和分数
+// ==========================================
+struct ScoredResult
+{
+    PlaylistNode *node;
+    int score;
 
-    return it != haystack.end();
+    // 用于排序：分数高的在前面
+    bool operator>(const ScoredResult &other) const
+    {
+        return score > other.score;
+    }
+};
+
+// ==========================================
+// 3. 辅助函数：计算单个字段的匹配分数
+// ==========================================
+// 参数：text(源文本), queryLower(小写的搜索词), baseWeight(该字段的基础分)
+static int calculateFieldScore(const std::string &text, const std::string &queryLower, int baseWeight)
+{
+    if (text.empty())
+        return 0;
+
+    // 为了匹配，需要将源文本转小写（注意：这里会有内存分配，追求极致性能可用 string_view + 自定义比较）
+    std::string textLower = text;
+    std::transform(textLower.begin(), textLower.end(), textLower.begin(),
+                   [](unsigned char c)
+                   { return std::tolower(c); });
+
+    size_t pos = textLower.find(queryLower);
+
+    // 1. 如果没找到，0分
+    if (pos == std::string::npos)
+    {
+        return 0;
+    }
+
+    // 2. 计算匹配质量
+    double multiplier = SearchWeights::MULTIPLIER_CONTAINS;
+
+    if (textLower == queryLower)
+    {
+        // 完全匹配：分数最高
+        multiplier = SearchWeights::MULTIPLIER_EXACT;
+    }
+    else if (pos == 0)
+    {
+        // 前缀匹配：分数较高 (比如搜 "周"，"周杰伦" 排在 "小周" 前面)
+        multiplier = SearchWeights::MULTIPLIER_PREFIX;
+    }
+
+    return static_cast<int>(baseWeight * multiplier);
 }
+
+// ==========================================
+// 4. 核心搜索逻辑实现
+// ==========================================
+
+// 声明递归函数 (修改了签名，传入 vector<ScoredResult>)
+static void searchRecursiveWithScore(PlaylistNode *scope, const std::string &queryLower, std::vector<ScoredResult> &results);
 
 std::vector<PlaylistNode *> MediaController::searchSongs(const std::string &query)
 {
-    std::vector<PlaylistNode *> results;
+    std::vector<PlaylistNode *> finalResults;
     if (query.empty())
     {
-        return results;
+        return finalResults;
     }
 
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
 
-    // 确定搜索范围：
-    // 题目定义“当前播放列表...包含子文件夹”。
-    // 这里定义为：如果正在播放，搜索该歌曲所在文件夹(及其子目录)；
-    // 如果没在播放，搜索当前浏览目录(currentDir)；如果都没，搜索根目录。
+    // 1. 确定搜索根节点 (保持原有逻辑)
     PlaylistNode *searchRoot = nullptr;
-
     if (currentPlayingSongs && currentPlayingSongs->getParent())
     {
         searchRoot = currentPlayingSongs->getParent().get();
@@ -783,19 +836,33 @@ std::vector<PlaylistNode *> MediaController::searchSongs(const std::string &quer
     }
 
     if (!searchRoot)
-        return results;
+        return finalResults;
 
-    // 预处理 query 为小写，方便模糊匹配
+    // 2. 预处理 query 为小写
     std::string queryLower = query;
     std::transform(queryLower.begin(), queryLower.end(), queryLower.begin(),
                    [](unsigned char c)
                    { return std::tolower(c); });
 
-    searchRecursive(searchRoot, queryLower, results);
-    return results;
+    // 3. 收集带分数的结果
+    std::vector<ScoredResult> scoredResults;
+    searchRecursiveWithScore(searchRoot, queryLower, scoredResults);
+
+    // 4. 执行加权排序 (分数从高到低)
+    std::sort(scoredResults.begin(), scoredResults.end(), std::greater<ScoredResult>());
+
+    // 5. 提取 Node 指针到最终列表
+    finalResults.reserve(scoredResults.size());
+    for (const auto &res : scoredResults)
+    {
+        finalResults.push_back(res.node);
+    }
+
+    return finalResults;
 }
 
-void MediaController::searchRecursive(PlaylistNode *scope, const std::string &queryLower, std::vector<PlaylistNode *> &results)
+// 递归函数的具体实现
+static void searchRecursiveWithScore(PlaylistNode *scope, const std::string &queryLower, std::vector<ScoredResult> &results)
 {
     if (!scope)
         return;
@@ -805,31 +872,33 @@ void MediaController::searchRecursive(PlaylistNode *scope, const std::string &qu
     {
         if (child->isDir())
         {
-            searchRecursive(child.get(), queryLower, results);
+            // 如果是文件夹，继续递归
+            searchRecursiveWithScore(child.get(), queryLower, results);
         }
         else
         {
-            // 优先检查 Title
-            const std::string &title = child->getMetaData().getTitle();
-            bool match = false;
+            // 是文件，开始多字段打分
+            const MetaData &meta = child->getMetaData();
+            int totalScore = 0;
 
-            if (!title.empty())
-            {
-                match = containsIgnoreCase(title, queryLower);
-            }
+            // A. 匹配标题
+            totalScore += calculateFieldScore(meta.getTitle(), queryLower, SearchWeights::SCORE_TITLE);
 
-            // 如果 Title 没匹配，检查文件名
-            if (!match)
-            {
-                // 注意：这里 path 获取 filename 还是会产生临时对象，
-                // 进一步优化可以在 PlaylistNode 缓存 filename
-                std::string filename = fs::path(child->getPath()).filename().string();
-                match = containsIgnoreCase(filename, queryLower);
-            }
+            // B. 匹配歌手
+            totalScore += calculateFieldScore(meta.getArtist(), queryLower, SearchWeights::SCORE_ARTIST);
 
-            if (match)
+            // C. 匹配专辑
+            totalScore += calculateFieldScore(meta.getAlbum(), queryLower, SearchWeights::SCORE_ALBUM);
+
+            // D. 匹配文件名 (如果没有元数据，通常文件名很重要)
+            // 获取文件名 (例如 "song.mp3")
+            std::string filename = fs::path(child->getPath()).filename().string();
+            totalScore += calculateFieldScore(filename, queryLower, SearchWeights::SCORE_FILENAME);
+
+            // 如果总分大于0，说明至少有一个字段命中了
+            if (totalScore > 0)
             {
-                results.push_back(child.get());
+                results.push_back({child.get(), totalScore});
             }
         }
     }
