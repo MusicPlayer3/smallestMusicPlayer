@@ -2,6 +2,15 @@
 #define AUDIOPLAYER_HPP
 
 #include "Precompiled.h"
+#include "miniaudio.h"
+#include <vector>
+#include <string>
+#include <queue>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <condition_variable>
+#include <functional>
 
 enum outputMod : std::uint8_t
 {
@@ -47,15 +56,6 @@ public:
     static bool isValidAudio(const std::string &path);
     /**
      * @brief 生成歌曲波形
-     *
-     * @param filepath 文件路径
-     * @param barCount 波形条数
-     * @param totalWidth 波形总宽度
-     * @param barWidth 单个波形条宽度
-     * @param maxHeight 最大高度
-     * @param startTimeUS 开始时间（微秒）
-     * @param endTimeUS 结束时间（微秒）
-     * @return std::vector<int> 
      */
     static std::vector<int> buildAudioWaveform(const std::string &filepath,
                                                int barCount,
@@ -127,11 +127,16 @@ private:
     PlayerState oldPlayingState{PlayerState::STOPPED};
     std::atomic<int64_t> seekTarget{0};
     bool isFirstPlay = true;
+    // 解码器时间游标 (微秒)，用于在没有 PTS 时推算时间
+    std::atomic<int64_t> m_decoderCursor{0};
 
     // 预加载控制
     std::atomic<bool> hasPreloaded{false};
     std::unique_ptr<AudioStreamSource> m_currentSource;
     std::unique_ptr<AudioStreamSource> m_preloadSource;
+
+    // 资源保护锁 (新增：防止参数重置时解码线程运行)
+    std::mutex decodeMutex;
 
     // 音频队列 (生产者-消费者)
     std::mutex audioFrameQueueMutex; // 保护 queue 和 currentFrame
@@ -153,11 +158,20 @@ private:
     std::atomic<double> volume{1.0};
     char errorBuffer[AV_ERROR_MAX_STRING_SIZE * 2] = {0};
 
-    // SDL 设备
+    // Miniaudio 设备
     AudioParams mixingParams;
     AudioParams deviceParams;
-    SDL_AudioSpec deviceSpec;
-    SDL_AudioDeviceID m_audioDeviceID = 0;
+
+    // --- Miniaudio Context ---
+    ma_context m_context;
+    bool m_contextInited = false;
+
+    ma_device m_device;
+    bool m_deviceInited = false;
+
+    // --- 辅助方法 ---
+    // 用于从当前 AVFormatContext 提取 "Artist - Title" 字符串
+    std::string getCurrentStreamTitle() const;
 
     // --- 私有方法 ---
     void freeResources();
@@ -179,8 +193,8 @@ private:
     bool performSeamlessSwitch();
     void applyFadeOutToLastFrame();
 
-    // SDL 回调
-    static void sdl2_audio_callback(void *userdata, Uint8 *stream, int len);
+    // Miniaudio 回调
+    static void ma_data_callback(ma_device *pDevice, void *pOutput, const void *pInput, ma_uint32 frameCount);
 };
 
 #endif // AUDIOPLAYER_HPP

@@ -92,6 +92,7 @@ qt_add_executable(appMusicPlayer
     inc/FileScanner.hpp
     inc/MediaController.hpp
     inc/MetaData.hpp
+    inc/miniaudio.h
     inc/mpris_server.hpp
     inc/musiclistmodel.h
     inc/Precompiled.h

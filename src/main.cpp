@@ -270,6 +270,7 @@ int main(int argc, char *argv[])
     // 3. 【新增】明确告诉 Linux 这是一个媒体播放器流
     // 这有助于系统进行策略管理（比如电话进来自动暂停音乐）
     SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
+    setenv("PULSE_PROP", "media.role=music", 0); // 0 表示不覆盖，如果已设置则保持
 #endif
 
     // 1. 预解析参数以决定是否启用 GUI (仅 Linux)
