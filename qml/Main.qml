@@ -362,30 +362,6 @@ ApplicationWindow {
             }
         }
 
-        // ---------- 新增：显示用的“虚拟时间”与格式化函数 ----------
-        function microsecToText(us) {
-            // us: microseconds
-            if (!isFinite(us) || us <= 0)
-                return "0:00";
-            var s = Math.floor(us / 1000000);
-            var m = Math.floor(s / 60);
-            var sec = s % 60;
-            return m + ":" + (sec < 10 ? "0" + sec : sec);
-        }
-
-        // displayedProgress 优先级：
-        // 1) 拖拽中 -> waveProgress.dragProgress
-        // 2) 悬浮预览 -> waveProgress.hoverProgress
-        // 3) 默认 -> 实际播放进度（playerController.currentPosMicrosec / total）
-        property real displayedProgress: (waveProgress.dragProgress >= 0) ? waveProgress.dragProgress : (waveProgress.isHovering ? waveProgress.hoverProgress : (playerController.totalDurationMicrosec > 0 ? playerController.currentPosMicrosec / playerController.totalDurationMicrosec : 0))
-
-        property real displayedCurrentMicrosec: (playerController.totalDurationMicrosec > 0) ? (playerController.totalDurationMicrosec * displayedProgress) : 0
-        property real displayedRemainingMicrosec: Math.max(0, (playerController.totalDurationMicrosec - displayedCurrentMicrosec))
-
-        property string displayedCurrentText: microsecToText(displayedCurrentMicrosec)
-        property string displayedRemainingText: "-" + microsecToText(displayedRemainingMicrosec)
-        // ------------------------------------------------------------------
-
         ColumnLayout {
             id: mainColumnLayout
 
@@ -482,9 +458,7 @@ ApplicationWindow {
                 Layout.preferredHeight: 15
 
                 Text {
-                    // 这里绑定到 playerContainer 的 displayedCurrentText，
-                    // 会在拖拽时跟随鼠标进度显示（但不实际 seek）
-                    text: playerContainer.displayedCurrentText
+                    text: playerController.currentPosText
                     color: "white"
                     font.pixelSize: 12
                     anchors.left: parent.left
@@ -493,8 +467,7 @@ ApplicationWindow {
 
                 Text {
                     id: remainingDurationText
-                    // 同样绑定到 displayedRemainingText（带 '-' 前缀）
-                    text: playerContainer.displayedRemainingText
+                    text: "-" + playerController.remainingTimeText
                     color: "white"
                     font.pixelSize: 12
                     anchors.right: parent.right

@@ -28,8 +28,6 @@ Item {
     property real hoverProgress: 0.0
     property bool isHovering: false
 
-    property real dragProgress: -1
-
     signal seekRequested(real position)
     signal pressed
     signal released
@@ -117,24 +115,18 @@ Item {
                 color: {
                     var idxPct = index / root.displayedHeights.length;
 
-                    // --- 拖动中：显示拖拽进度 ---
-                    if (root.dragProgress >= 0) {
-                        if (idxPct <= root.dragProgress)
-                            return root.playedColor;
-                        return root.remainingColor;
-                    }
-
-                    // --- 悬浮预览 ---
                     if (root.isHovering) {
+                        // 悬浮状态：显示从头到鼠标位置的 hoverColor
+                        // 这会覆盖当前的播放进度显示，给用户明确的“跳转预览”
                         if (idxPct <= root.hoverProgress)
                             return root.hoverColor;
                         return root.remainingColor;
+                    } else {
+                        // 普通状态：显示播放进度
+                        if (idxPct <= root.progress)
+                            return root.playedColor;
+                        return root.remainingColor;
                     }
-
-                    // --- 普通播放 ---
-                    if (idxPct <= root.progress)
-                        return root.playedColor;
-                    return root.remainingColor;
                 }
 
                 // 颜色变化仍然保留平滑过渡
@@ -152,11 +144,12 @@ Item {
         id: mouseArea
         anchors.fill: parent
         anchors.margins: -10
+
+        // [新增] 开启悬浮感应
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
 
-        property real pendingSeek: 0.0
-
+        // 提取计算逻辑
         function calculateP(mouseX) {
             var localPos = mapToItem(waveRow, mouseX, 0);
             var unscaledWidth = waveRow.width;
@@ -168,28 +161,37 @@ Item {
             return p;
         }
 
-        onEntered: root.isHovering = true
-        onExited: root.isHovering = false
+        function updateSeek(mouseX) {
+            var p = calculateP(mouseX);
+            root.seekRequested(p);
+        }
 
-        onPressed: {
-            root.pressed();
-            pendingSeek = calculateP(mouseX);
-            root.dragProgress = pendingSeek; // 启动拖拽模式
+        // [新增] 悬浮事件处理
+        onEntered: {
+            root.isHovering = true;
+        }
+
+        onExited: {
+            root.isHovering = false;
         }
 
         onPositionChanged: {
+            // 实时更新悬浮进度
             root.hoverProgress = calculateP(mouseX);
 
+            // 如果正在拖拽，同时也更新实际 Seek
             if (pressed) {
-                pendingSeek = root.hoverProgress;
-                root.dragProgress = pendingSeek; // 拖动中更新 UI 进度
+                updateSeek(mouseX);
             }
+        }
+
+        onPressed: {
+            root.pressed();
+            updateSeek(mouseX);
         }
 
         onReleased: {
             root.released();
-            root.dragProgress = -1; // 退出拖拽模式
-            root.seekRequested(pendingSeek);
         }
     }
 }
