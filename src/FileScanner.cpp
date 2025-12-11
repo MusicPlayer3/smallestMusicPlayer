@@ -4,7 +4,6 @@
 #include "Precompiled.h"
 
 // ================= TagLib Headers =================
-#include <exception>
 #include <taglib/fileref.h>
 #include <taglib/tag.h>
 #include <taglib/tfile.h>
@@ -25,7 +24,17 @@
 #include <queue>
 #include <condition_variable>
 #include <functional>
+#include <vector>
+#include <string>
+#include <memory>
+#include <sstream> // 确保引入 stringstream
 #include "SimpleThreadPool.hpp"
+
+// 引入 uchardet
+#include <uchardet.h>
+
+// 引入 SDL 用于字符编码转换
+#include <SDL.h>
 
 namespace fs = std::filesystem;
 
@@ -53,8 +62,136 @@ struct AVFormatContextDeleter
 };
 using AVContextPtr = std::unique_ptr<AVFormatContext, AVFormatContextDeleter>;
 
+struct UchardetDeleter
+{
+    void operator()(uchardet_t ud) const
+    {
+        if (ud)
+            uchardet_delete(ud);
+    }
+};
+using UchardetPtr = std::unique_ptr<std::remove_pointer<uchardet_t>::type, UchardetDeleter>;
+
 // ==========================================
-// 1. 后缀名支持
+// 编码转换与探测工具
+// ==========================================
+
+class EncodingDetector
+{
+public:
+    static std::string detectAndConvert(const std::string &rawData)
+    {
+        if (rawData.empty())
+            return "";
+
+        // 1. 快速检查：如果是合法的 UTF-8，直接返回
+        if (isValidUTF8(rawData))
+        {
+            return rawData;
+        }
+
+        // 2. 使用 uchardet 进行探测
+        std::string detectedEncoding = detectCharset(rawData);
+
+        // 3. 兜底策略
+        if (detectedEncoding.empty())
+        {
+            // 如果探测失败，对于 CUE 文件，国内环境最可能是 GB18030
+            detectedEncoding = "GB18030";
+        }
+
+        // 4. 执行转换
+        if (detectedEncoding == "UTF-8" || detectedEncoding == "ASCII")
+        {
+            return rawData;
+        }
+
+        return convertToUTF8(rawData, detectedEncoding.c_str());
+    }
+
+private:
+    static std::string detectCharset(const std::string &data)
+    {
+        UchardetPtr ud(uchardet_new());
+        if (!ud)
+            return "";
+
+        int retval = uchardet_handle_data(ud.get(), data.c_str(), data.length());
+        if (retval != 0)
+            return "";
+
+        uchardet_data_end(ud.get());
+
+        const char *charset = uchardet_get_charset(ud.get());
+        return charset ? std::string(charset) : "";
+    }
+
+    static bool isValidUTF8(const std::string &data)
+    {
+        const unsigned char *bytes = (const unsigned char *)data.c_str();
+        while (*bytes)
+        {
+            if ((*bytes & 0x80) == 0)
+                bytes++;
+            else if ((*bytes & 0xE0) == 0xC0)
+            {
+                if ((bytes[1] & 0xC0) != 0x80)
+                    return false;
+                bytes += 2;
+            }
+            else if ((*bytes & 0xF0) == 0xE0)
+            {
+                if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80)
+                    return false;
+                bytes += 3;
+            }
+            else if ((*bytes & 0xF8) == 0xF0)
+            {
+                if ((bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80)
+                    return false;
+                bytes += 4;
+            }
+            else
+                return false;
+        }
+        return true;
+    }
+
+    static std::string convertToUTF8(const std::string &data, const char *fromEncoding)
+    {
+        if (data.empty())
+            return "";
+
+        SDL_iconv_t cd = SDL_iconv_open("UTF-8", fromEncoding);
+        if (cd == (SDL_iconv_t)-1)
+        {
+            if (std::string(fromEncoding) == "GB2312")
+                return convertToUTF8(data, "GB18030");
+            return data;
+        }
+
+        size_t inLeft = data.size();
+        const char *inBuf = data.c_str();
+
+        size_t outLen = inLeft * 4 + 1;
+        std::vector<char> outBuf(outLen);
+        char *outPtr = outBuf.data();
+        size_t outLeft = outLen;
+
+        size_t res = SDL_iconv(cd, &inBuf, &inLeft, &outPtr, &outLeft);
+        SDL_iconv_close(cd);
+
+        if (res == (size_t)-1)
+        {
+            return data;
+        }
+
+        return std::string(outBuf.data(), outLen - outLeft);
+    }
+};
+
+// ==========================================
+// 1. 后缀名支持 (保持不变)
 // ==========================================
 
 static std::unordered_set<std::string> g_supportedAudioExts;
@@ -116,7 +253,7 @@ inline bool hasExtension(const std::string &filename, const std::string &ext)
 }
 
 // ==========================================
-// 2. CUE 解析 (基本保持不变)
+// 2. CUE 解析 (关键修改：整体探测)
 // ==========================================
 
 static int64_t parseCueTime(const std::string &timeStr)
@@ -148,19 +285,51 @@ static std::string cleanString(const std::string &str)
     return str.substr(first, (last - first + 1));
 }
 
+// [重要修改]：parseCueFile 改为先读取全部内容，统一探测编码，再解析
 static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
 {
     std::vector<CueTrackInfo> tracks;
-    std::ifstream file(cuePath);
+
+    // 1. 读取整个 CUE 文件到 buffer
+    std::ifstream file(cuePath, std::ios::binary | std::ios::ate);
     if (!file.is_open())
         return tracks;
+
+    auto fileSize = file.tellg();
+    if (fileSize <= 0)
+        return tracks;
+
+    std::string rawBuffer(fileSize, '\0');
+    file.seekg(0, std::ios::beg);
+    if (!file.read(&rawBuffer[0], fileSize))
+        return tracks;
+
+    // 2. 对整个文件内容进行编码探测和转换
+    //    这样 uchardet 拥有最大上下文，能准确区分 GB18030 和 Latin-1
+    std::string utf8Content = EncodingDetector::detectAndConvert(rawBuffer);
+
+    // 3. 处理 UTF-8 BOM (如果存在)
+    //    虽然 detectAndConvert 内的 isValidUTF8 可能已经处理了 BOM 后的有效性，
+    //    但 stringstream 不会跳过 BOM，可能导致第一行解析失败。
+    size_t bomOffset = 0;
+    if (utf8Content.size() >= 3 && (unsigned char)utf8Content[0] == 0xEF && (unsigned char)utf8Content[1] == 0xBB && (unsigned char)utf8Content[2] == 0xBF)
+    {
+        bomOffset = 3;
+    }
+
+    // 4. 使用 stringstream 解析转换后的 UTF-8 文本
+    std::stringstream fileSS(utf8Content.substr(bomOffset));
 
     std::string line, globalPerformer, globalTitle, currentFile;
     CueTrackInfo currentTrack;
     bool inTrack = false;
 
-    while (std::getline(file, line))
+    // 接下来的逻辑是标准的 ASCII/UTF-8 解析，不需要再做 detectAndConvert
+    while (std::getline(fileSS, line))
     {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+
         std::string token;
         std::stringstream ss(line);
         ss >> token;
@@ -197,7 +366,8 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
         {
             std::string content;
             std::getline(ss, content);
-            content = cleanString(content);
+            content = cleanString(content); // content 已经是 UTF-8
+
             if (inTrack)
                 currentTrack.title = content;
             else
@@ -207,7 +377,8 @@ static std::vector<CueTrackInfo> parseCueFile(const fs::path &cuePath)
         {
             std::string content;
             std::getline(ss, content);
-            content = cleanString(content);
+            content = cleanString(content); // content 已经是 UTF-8
+
             if (inTrack)
                 currentTrack.performer = content;
             else
@@ -280,7 +451,6 @@ static TagLib::ByteVector extractCoverData(const std::string &musicPath)
     p.make_preferred();
     std::string ext = getLowerExtension(musicPath);
 
-    // TagLib 通常是线程安全的，只要不同线程操作不同的 FileRef 对象
     if (ext == ".mp3" || ext == ".wav" || ext == ".aiff" || ext == ".aif")
     {
         TagLib::FileRef f(p.c_str(), false);
@@ -364,7 +534,7 @@ static std::string findDirectoryCover(const fs::path &dirPath)
 }
 
 // ==========================================
-// 4. 图片加载与通道强制
+// 4. 图片加载
 // ==========================================
 
 static StbiPtr loadBufferAsRGBA(const unsigned char *data, int size, int &w, int &h)
@@ -394,7 +564,6 @@ static StbiPtr loadFileAsRGBA(const std::string &path, int &w, int &h)
     return loadBufferAsRGBA(buffer.data(), (int)size, w, h);
 }
 
-// 单曲封面处理 (现在将在多线程中调用，CoverCache 必须是线程安全的)
 static void processTrackCover(const std::string &musicPath, const std::string &albumKey)
 {
     if (albumKey.empty())
@@ -418,30 +587,49 @@ static void processTrackCover(const std::string &musicPath, const std::string &a
 
 static int64_t getFFmpegDuration(const std::string &filePath)
 {
-    // ffmpeg 的 avformat_open_input 只要使用不同的 AVFormatContext，就是线程安全的
     AVFormatContext *ctxRaw = nullptr;
     if (avformat_open_input(&ctxRaw, filePath.c_str(), nullptr, nullptr) != 0)
         return 0;
-
     AVContextPtr ctx(ctxRaw);
     if (avformat_find_stream_info(ctx.get(), nullptr) < 0)
         return 0;
     if (ctx->duration != AV_NOPTS_VALUE)
         return ctx->duration;
-
     for (unsigned int i = 0; i < ctx->nb_streams; i++)
     {
         if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
         {
             if (ctx->streams[i]->duration != AV_NOPTS_VALUE)
             {
-                return av_rescale_q(ctx->streams[i]->duration,
-                                    ctx->streams[i]->time_base,
-                                    AV_TIME_BASE_Q);
+                return av_rescale_q(ctx->streams[i]->duration, ctx->streams[i]->time_base, AV_TIME_BASE_Q);
             }
         }
     }
     return 0;
+}
+
+// 辅助：从 TagLib::String 提取并探测编码
+static std::string resolveTag(const TagLib::String &tagStr)
+{
+    if (tagStr.isEmpty())
+        return "";
+
+    // 1. 如果 TagLib 已经明确这是宽字符 (Unicode)，信赖它
+    bool hasWide = false;
+    for (size_t i = 0; i < tagStr.length(); ++i)
+    {
+        if (tagStr[i] > 255)
+        {
+            hasWide = true;
+            break;
+        }
+    }
+    if (hasWide)
+        return tagStr.toCString(true); // 转为 UTF-8
+
+    // 2. 否则取原始字节流，交给 uchardet
+    std::string raw = tagStr.to8Bit(false);
+    return EncodingDetector::detectAndConvert(raw);
 }
 
 MetaData FileScanner::getMetaData(const std::string &musicPath)
@@ -456,9 +644,9 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
         if (!f.isNull() && f.tag())
         {
             TagLib::Tag *tag = f.tag();
-            musicData.setTitle(tag->title().toCString(true));
-            musicData.setArtist(tag->artist().toCString(true));
-            musicData.setAlbum(tag->album().toCString(true));
+            musicData.setTitle(resolveTag(tag->title()));
+            musicData.setArtist(resolveTag(tag->artist()));
+            musicData.setAlbum(resolveTag(tag->album()));
             musicData.setYear(tag->year() > 0 ? std::to_string(tag->year()) : "");
         }
         musicData.setFilePath(p.string());
@@ -469,10 +657,9 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
 }
 
 // ==========================================
-// 6. 目录扫描与构建 (多线程优化版)
+// 6. 目录扫描与构建
 // ==========================================
 
-// CUE 处理保持同步（通常 CUE 文件很少，且解析很快）
 static std::vector<std::shared_ptr<PlaylistNode>> processCueAndGetNodes(
     const fs::path &cuePath)
 {
@@ -491,19 +678,14 @@ static std::vector<std::shared_ptr<PlaylistNode>> processCueAndGetNodes(
                 pAudio.make_preferred();
 
                 auto trackNode = std::make_shared<PlaylistNode>(pAudio.string(), false);
+                MetaData md = FileScanner::getMetaData(pAudio.string()); // 内部已处理编码
 
-                // CUE 中的元数据通常不需要 FFmpeg 探测时长(CUE里有)，也不需要读TagLib(CUE里有)
-                // 但为了保险起见，这里复用 getMetaData 还是比较稳妥的，或者可以优化
-                // 考虑到 CUE 文件较少，此处为了逻辑一致性，暂不通过线程池分发（数量级小）
-                // 若 CUE 链接的 FLAC 很大，计算 Duration 仍需 ffmpeg，耗时。
-                // 考虑到复杂性，这里仍串行执行，因为 CUE 场景通常文件数不多。
-
-                MetaData md = FileScanner::getMetaData(pAudio.string());
-
+                // CUE 解析后的 track 信息已经是 UTF-8，直接覆盖
                 if (!track.title.empty())
                     md.setTitle(track.title);
                 if (!track.performer.empty())
                     md.setArtist(track.performer);
+
                 md.setOffset(track.startTime);
                 if (track.duration > 0)
                     md.setDuration(track.duration);
@@ -516,9 +698,7 @@ static std::vector<std::shared_ptr<PlaylistNode>> processCueAndGetNodes(
 
                 std::string albumKey = md.getAlbum().empty() ? "Unknown" : md.getAlbum();
                 trackNode->setCoverKey(albumKey);
-
                 processTrackCover(pAudio.string(), albumKey);
-
                 trackNode->setMetaData(md);
                 resultNodes.push_back(trackNode);
             }
@@ -559,9 +739,7 @@ static std::string findDeepAudio(const std::shared_ptr<PlaylistNode> &node)
     for (const auto &child : node->getChildren())
     {
         if (!child->isDir())
-        {
             return child->getPath();
-        }
         else
         {
             std::string res = findDeepAudio(child);
@@ -572,21 +750,16 @@ static std::string findDeepAudio(const std::shared_ptr<PlaylistNode> &node)
     return "";
 }
 
-// 封装一个独立的任务函数，用于处理单个音频文件
 static std::shared_ptr<PlaylistNode> processSingleFile(const std::string &filePath)
 {
     try
     {
         auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
-        // 这里包含 heavy work: FFmpeg duration + TagLib
         MetaData md = FileScanner::getMetaData(filePath);
 
         std::string albumKey = md.getAlbum().empty() ? "Unknown" : md.getAlbum();
         fileNode->setCoverKey(albumKey);
-
-        // heavy work: Image decode & resize -> CoverCache
         processTrackCover(filePath, albumKey);
-
         fileNode->setMetaData(md);
         return fileNode;
     }
@@ -597,7 +770,6 @@ static std::shared_ptr<PlaylistNode> processSingleFile(const std::string &filePa
     }
 }
 
-// 核心逻辑：递归构建
 static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 {
     if (fs::is_symlink(dirPath))
@@ -605,7 +777,6 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 
     fs::path preferredPath = dirPath;
     preferredPath.make_preferred();
-
     std::string dirPathStr = preferredPath.string();
     if (dirPathStr.length() > 1 && (dirPathStr.back() == '/' || dirPathStr.back() == '\\'))
     {
@@ -617,6 +788,8 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
     if (folderName.empty())
         folderName = "Unknown_Folder";
 
+    folderName = EncodingDetector::detectAndConvert(folderName);
+
     auto node = std::make_shared<PlaylistNode>(preferredPath.string(), true);
     node->setCoverKey(folderName);
 
@@ -624,7 +797,6 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
     std::vector<std::string> audioFilesToProcess;
     std::vector<fs::path> subDirsToProcess;
 
-    // 1. 扫描当前目录下的所有条目 (快速 IO 遍历)
     try
     {
         for (const auto &entry : fs::directory_iterator(preferredPath))
@@ -634,15 +806,11 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
                 std::string pathStr = entry.path().string();
                 if (hasExtension(pathStr, ".cue"))
                 {
-                    // CUE 处理比较特殊，产生多个节点，且需要逻辑关联，暂不放入线程池
                     auto nodes = processCueAndGetNodes(entry.path());
                     for (auto &n : nodes)
                     {
                         node->addChild(n);
-                        processedFiles.insert(n->getPath()); // 这里存的是 Split 后的虚拟路径或原文件路径
-                        // 修正：CUE通常指向一个大文件，这里应该把该大文件的真实路径加入processed
-                        // processCueAndGetNodes 内部逻辑比较复杂，简化起见，CUE 处理完后不阻止原文件被扫描(如果有重合)
-                        // 但通常我们希望避免重复。此处逻辑维持原样，仅做结构调整。
+                        processedFiles.insert(n->getPath());
                     }
                 }
                 else if (isffmpeg(pathStr))
@@ -661,36 +829,26 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "[FileScanner:737] directory_iterator failed: %s", e.what());
     }
 
-    // 2. 并行处理当前文件夹下的所有音频文件
-    //    这是解决 "1个文件夹 1000 首歌" 慢的关键
     std::vector<std::future<std::shared_ptr<PlaylistNode>>> fileFutures;
     fileFutures.reserve(audioFilesToProcess.size());
 
     for (const auto &fpath : audioFilesToProcess)
     {
-        // 简单去重检查 (配合 CUE)
-        // 注意：canonical 可能慢，如果没必要可去掉
         fs::path p(fpath);
         std::string canon = fpath;
         try
         {
             canon = fs::canonical(p).string();
         }
-        catch (const std::exception &e)
+        catch (...)
         {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "[FileScanner:751] canonical failed: %s", e.what());
         }
 
         if (processedFiles.count(fpath) || processedFiles.count(canon))
             continue;
-
-        // 提交到线程池
-        fileFutures.push_back(
-            SimpleThreadPool::instance().enqueue(processSingleFile, fpath));
+        fileFutures.push_back(SimpleThreadPool::instance().enqueue(processSingleFile, fpath));
     }
 
-    // 3. 递归处理子文件夹 (串行递归，但子文件夹内部的文件处理是并行的)
-    //    这样既利用了多核(处理文件)，又避免了线程池被递归目录任务占满导致死锁
     for (const auto &subDir : subDirsToProcess)
     {
         auto child = buildNodeFromDir(subDir);
@@ -698,38 +856,28 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
             node->addChild(child);
     }
 
-    // 4. 等待当前文件夹的所有文件任务完成并收集结果
     for (auto &fut : fileFutures)
     {
-        auto childNode = fut.get(); // 阻塞直到该文件处理完毕
+        auto childNode = fut.get();
         if (childNode)
-        {
             node->addChild(childNode);
-        }
     }
 
-    // [剪枝]
     if (node->getChildren().empty())
         return nullptr;
-
     node->sortChildren();
 
-    // 5. 确定文件夹封面 (必须在子节点全部 ready 后进行)
     std::string finalCoverPath = "";
     bool isAudioExtract = false;
 
     std::string localCover = findDirectoryCover(preferredPath);
     if (!localCover.empty())
-    {
         finalCoverPath = localCover;
-    }
     else
     {
         std::string subDirCover = findDeepCoverImage(node);
         if (!subDirCover.empty())
-        {
             finalCoverPath = subDirCover;
-        }
         else
         {
             std::string firstAudio = findDeepAudio(node);
@@ -743,20 +891,13 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 
     if (!finalCoverPath.empty())
     {
-        // 这一步也涉及图片解码和 resize，可以考虑并行，但为了保证逻辑顺序（必须先找到路径），
-        // 且每个文件夹只做一次，放在主流程是可以接受的。
-        // 如果想极致优化，也可以 throw 到 thread pool，但需要注意 CoverCache 的写安全。
         int w = 0, h = 0;
         StbiPtr imgPixels(nullptr);
-
         if (isAudioExtract)
         {
             TagLib::ByteVector data = extractCoverData(finalCoverPath);
             if (!data.isEmpty())
-            {
-                imgPixels = loadBufferAsRGBA(reinterpret_cast<const unsigned char *>(data.data()),
-                                             data.size(), w, h);
-            }
+                imgPixels = loadBufferAsRGBA(reinterpret_cast<const unsigned char *>(data.data()), data.size(), w, h);
         }
         else
         {
@@ -765,11 +906,9 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 
         if (imgPixels)
         {
-            // 此时 CoverCache 必须是线程安全的
             CoverCache::instance().putCompressedFromPixels(folderName, imgPixels.get(), w, h, 4);
         }
     }
-
     return node;
 }
 
@@ -785,7 +924,6 @@ void FileScanner::scanDir()
         return;
     }
 
-    // 单文件处理 (保持原样)
     if (fs::is_regular_file(rootPath))
     {
         if (hasExtension(rootDir, ".cue"))
@@ -795,7 +933,6 @@ void FileScanner::scanDir()
             auto nodes = processCueAndGetNodes(rootPath);
             for (auto &n : nodes)
                 root->addChild(n);
-
             if (!root->getChildren().empty())
             {
                 root->sortChildren();
@@ -804,26 +941,20 @@ void FileScanner::scanDir()
         }
         else if (isffmpeg(rootDir))
         {
-            // 单个文件直接复用 processSingleFile 逻辑
             rootNode = processSingleFile(rootPath.string());
         }
         hasScanCpld = true;
         return;
     }
 
-    // 目录处理
     auto root = buildNodeFromDir(rootPath);
-
     if (root)
-    {
         rootNode = root;
-    }
     else
     {
         rootNode = std::make_shared<PlaylistNode>(rootPath.string(), true);
         rootNode->setCoverKey(rootPath.filename().string());
     }
-
     hasScanCpld = true;
 }
 
@@ -865,16 +996,10 @@ static std::string detectImageExtension(const TagLib::ByteVector &data)
 
 std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
 {
-    // 1. 检查 metadata 中是否已有封面路径
     if (!metadata.getCoverPath().empty())
-    {
         return metadata.getCoverPath();
-    }
 
-    // 获取音频文件路径
     std::string musicPath = metadata.getFilePath();
-
-    // 准备临时目录
     fs::path tmpDir = fs::temp_directory_path() / "SmallestMusicPlayer";
     try
     {
@@ -887,24 +1012,14 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
         return "";
     }
 
-    // 2. 尝试提取内嵌封面数据
     TagLib::ByteVector coverData = extractCoverData(musicPath);
-
-    // 如果内嵌数据不为空，保存到临时文件并返回
     if (!coverData.isEmpty())
     {
-        // 使用文件名作为基础来生成安全的临时文件名
-        // 原代码使用了传入的 coverName，这里改为使用音频文件名
         std::string safeName = sanitizeFilename(fs::path(musicPath).stem().string());
         std::string ext = detectImageExtension(coverData);
         fs::path targetPath = tmpDir / (safeName + ext);
-
-        // 如果文件已存在且大小大于0，直接返回
         if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
-        {
             return fs::absolute(targetPath).string();
-        }
-
         std::ofstream outFile(targetPath, std::ios::binary | std::ios::trunc);
         if (outFile)
         {
@@ -913,16 +1028,12 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
         }
     }
 
-    // 3. 如果内嵌数据为空，在歌曲所在目录查找外部封面文件
     fs::path musicDir = fs::path(musicPath).parent_path();
-
     auto coverPath = findDirectoryCover(musicDir);
     if (!coverPath.empty())
     {
         metadata.setCoverPath(coverPath);
         return coverPath;
     }
-
-    // 既没有内嵌封面，也没有外部封面，返回空
     return "";
 }

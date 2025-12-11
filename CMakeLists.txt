@@ -60,6 +60,7 @@ else()
     pkg_check_modules(SDL2 REQUIRED sdl2)
     pkg_check_modules(TAGLIB REQUIRED taglib)
     pkg_check_modules(SDBUSCPP REQUIRED sdbus-c++)
+    pkg_check_modules(UCHARDET REQUIRED uchardet)
 endif()
 
 
@@ -72,6 +73,7 @@ include_directories(
     ${FFMPEG_INCLUDE_DIRS}
     ${SDL2_INCLUDE_DIRS}
     ${TAGLIB_INCLUDE_DIRS}
+    ${UCHARDET_INCLUDE_DIRS}
 )
 if(SDBUSCPP_FOUND)
     include_directories(${SDBUSCPP_INCLUDE_DIRS})
@@ -225,6 +227,7 @@ target_link_libraries(appMusicPlayer
         ${SDL2_LIBRARIES}
         ${TAGLIB_LIBRARIES}
         z
+        ${UCHARDET_LIBRARIES}
 )
 
 # 仅在 SDBUSCPP 被找到时才链接它 (Linux)
