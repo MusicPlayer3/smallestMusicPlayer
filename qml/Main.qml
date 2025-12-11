@@ -20,6 +20,18 @@ ApplicationWindow {
     flags: Qt.FramelessWindowHint | Qt.Window
 
     // =========================================================================
+    // [新增] 用于 QML 内部动态计算时间的辅助函数
+    // =========================================================================
+    function formatTimeJS(microsecs) {
+        if (microsecs < 0) microsecs = 0;
+        var totalSecs = Math.floor(microsecs / 1000000);
+        var m = Math.floor(totalSecs / 60);
+        var s = totalSecs % 60;
+        // 补零操作
+        return (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+    }
+
+    // =========================================================================
     // 逻辑控制属性
     // =========================================================================
 
@@ -451,24 +463,45 @@ ApplicationWindow {
                 Layout.preferredWidth: 1
             }
 
-            // --- 3. 时间显示 (固定宽度 320) ---
+            // --- 3. 时间显示 ---
             Item {
                 Layout.alignment: Qt.AlignHCenter
-                Layout.preferredWidth: 320
+                Layout.preferredWidth: 280
                 Layout.preferredHeight: 15
 
+                // 左侧：当前时间 / 预览时间
                 Text {
-                    text: playerController.currentPosText
-                    color: "white"
+                    // 如果波形条处于悬浮状态，计算悬浮位置的时间；否则显示 C++ 传来的当前播放时间
+                    text: waveProgress.isHovering 
+                          ? window.formatTimeJS(playerController.totalDurationMicrosec * waveProgress.hoverProgress)
+                          : playerController.currentPosText
+                    
+                    // [可选] 悬浮时改变颜色提示用户这是预览
+                    color: waveProgress.isHovering ? "#E0E0E0" : "white" 
+                    
                     font.pixelSize: 12
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                 }
 
+                // 右侧：剩余时间
                 Text {
                     id: remainingDurationText
-                    text: "-" + playerController.remainingTimeText
-                    color: "white"
+                    // 如果波形条处于悬浮状态，计算悬浮位置剩余的时间；否则显示 C++ 传来的剩余时间
+                    text: {
+                        if (waveProgress.isHovering) {
+                            var total = playerController.totalDurationMicrosec;
+                            var currentPreview = total * waveProgress.hoverProgress;
+                            var remaining = total - currentPreview;
+                            return "-" + window.formatTimeJS(remaining);
+                        } else {
+                            return "-" + playerController.remainingTimeText;
+                        }
+                    }
+
+                    // [可选] 悬浮时改变颜色
+                    color: waveProgress.isHovering ? "#E0E0E0" : "white"
+
                     font.pixelSize: 12
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
