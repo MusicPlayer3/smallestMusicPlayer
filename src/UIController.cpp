@@ -36,6 +36,9 @@ UIController::UIController(QObject *parent) :
     connect(&m_waveformWatcher, &QFutureWatcher<AsyncWaveformResult>::finished,
             this, &UIController::onWaveformCalculationFinished);
     m_currentWaveformGeneration = 0; // 初始化 ID
+
+    // 初始化 OutputMode
+    m_outputMode = static_cast<int>(m_mediaController.getOUTPUTMode());
 }
 
 // [新增] 析构清理
@@ -242,6 +245,96 @@ void UIController::setShuffle(bool newShuffle)
     {
         m_isShuffle = newShuffle;
         emit isShuffleChanged();
+    }
+}
+
+// [新增] Output Mode 相关实现
+int UIController::outputMode() const
+{
+    return m_outputMode;
+}
+
+void UIController::setOutputMode(int mode)
+{
+    if (mode < 0 || mode > 1)
+        return;
+
+    outputMod newMode = (mode == 0) ? OUTPUT_DIRECT : OUTPUT_MIXING;
+    m_mediaController.setOUTPUTMode(newMode);
+
+    // 更新本地缓存
+    if (m_outputMode != mode)
+    {
+        m_outputMode = mode;
+        emit outputModeChanged();
+    }
+}
+
+// 辅助函数：Index <-> AVSampleFormat
+AVSampleFormat UIController::indexToAvFormat(int index)
+{
+    switch (index)
+    {
+    case 0: return AV_SAMPLE_FMT_S16;
+    case 1: return AV_SAMPLE_FMT_S32;
+    case 2: return AV_SAMPLE_FMT_FLT;
+    case 3: return AV_SAMPLE_FMT_DBL;
+    default: return AV_SAMPLE_FMT_FLT;
+    }
+}
+
+int UIController::avFormatToIndex(AVSampleFormat fmt)
+{
+    // 简化匹配，忽略 planar 区别
+    switch (fmt)
+    {
+    case AV_SAMPLE_FMT_S16:
+    case AV_SAMPLE_FMT_S16P: return 0;
+    case AV_SAMPLE_FMT_S32:
+    case AV_SAMPLE_FMT_S32P: return 1;
+    case AV_SAMPLE_FMT_FLT:
+    case AV_SAMPLE_FMT_FLTP: return 2;
+    case AV_SAMPLE_FMT_DBL:
+    case AV_SAMPLE_FMT_DBLP: return 3;
+    default: return 3;
+    }
+}
+
+void UIController::applyMixingParams(int sampleRate, int formatIndex)
+{
+    // 1. 设置参数
+    AVSampleFormat fmt = indexToAvFormat(formatIndex);
+    m_mediaController.setMixingParameters(sampleRate, fmt);
+
+    // 2. [修改] 等待 500ms 后读取 (符合需求)
+    QTimer::singleShot(500, this, [=, this]()
+                       {
+        AudioParams currentParams = m_mediaController.getDeviceParameters();
+        
+        int actualRate = currentParams.sampleRate;
+        int actualFmtIndex = avFormatToIndex(currentParams.sampleFormat);
+        
+        emit mixingParamsApplied(actualRate, actualFmtIndex); });
+}
+
+QVariantMap UIController::getCurrentDeviceParams()
+{
+    AudioParams params = m_mediaController.getDeviceParameters();
+
+    QVariantMap result;
+    result["sampleRate"] = params.sampleRate;
+    result["formatIndex"] = avFormatToIndex(params.sampleFormat);
+
+    return result;
+}
+
+void UIController::checkAndUpdateOutputMode()
+{
+    int current = static_cast<int>(m_mediaController.getOUTPUTMode());
+    if (m_outputMode != current)
+    {
+        m_outputMode = current;
+        emit outputModeChanged();
     }
 }
 
@@ -523,6 +616,9 @@ void UIController::checkAndUpdateShuffleState()
 void UIController::updateStateFromController()
 {
     checkAndUpdateScanState();
+
+    // [新增] 检查输出模式
+    checkAndUpdateOutputMode();
 
     PlaylistNode *currentNode = m_mediaController.getCurrentPlayingNode();
     bool isSongChanged = false;

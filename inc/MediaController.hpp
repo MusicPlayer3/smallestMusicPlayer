@@ -112,6 +112,12 @@ public:
     // 重复模式设置
     void setRepeatMode(RepeatMode mode);
     RepeatMode getRepeatMode();
+    // 输出模式设置
+    void setMixingParameters(int sampleRate, AVSampleFormat smapleFormat);
+    void setOUTPUTMode(outputMod mode);
+    outputMod getOUTPUTMode();
+    AudioParams getMixingParameters();
+    AudioParams getDeviceParameters();
 
     // --- 列表与导航交互 ---
 

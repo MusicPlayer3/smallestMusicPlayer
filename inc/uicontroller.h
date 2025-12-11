@@ -9,8 +9,8 @@
 #include <QStandardPaths>
 #include <QDateTime>
 #include <vector>
-#include <QtConcurrent/QtConcurrent> // [新增]
-#include <QFutureWatcher>            // [新增]
+#include <QtConcurrent/QtConcurrent>
+#include <QFutureWatcher>
 
 #include "MediaController.hpp"
 
@@ -39,10 +39,11 @@ class UIController : public QObject
     Q_PROPERTY(int repeatMode READ getRepeatMode NOTIFY repeatModeChanged FINAL);
     Q_PROPERTY(QVariantList waveformHeights READ waveformHeights NOTIFY waveformHeightsChanged FINAL);
     Q_PROPERTY(int waveformBarWidth READ waveformBarWidth NOTIFY waveformHeightsChanged FINAL);
+    Q_PROPERTY(int outputMode READ outputMode WRITE setOutputMode NOTIFY outputModeChanged FINAL);
 
 public:
     explicit UIController(QObject *parent = nullptr);
-    ~UIController(); // [新增] 析构函数，用于清理 watcher
+    ~UIController();
 
     Q_INVOKABLE void startMediaScan(const QString &path);
 
@@ -80,8 +81,16 @@ public:
     {
         return m_waveformBarWidth;
     }
+    int outputMode() const;
 
     Q_INVOKABLE void search(const QString &query);
+
+    // [修改] 应用混音参数 (QML 调用)
+    Q_INVOKABLE void applyMixingParams(int sampleRate, int formatIndex);
+
+    // [新增] 获取当前设备实际参数 (用于 UI 初始化)
+    // 返回 Map: { "sampleRate": int, "formatIndex": int }
+    Q_INVOKABLE QVariantMap getCurrentDeviceParams();
 
 signals:
     // ... [原有的信号保持不变] ...
@@ -103,6 +112,8 @@ signals:
     void repeatModeChanged();
     void searchResultFound(QVariantList results);
     void waveformHeightsChanged();
+    void outputModeChanged();
+    void mixingParamsApplied(int actualSampleRate, int actualFormatIndex);
 
 public slots:
     void updateStateFromController();
@@ -114,14 +125,12 @@ public slots:
     Q_INVOKABLE void setVolume(double volume);
     void setShuffle(bool newShuffle);
     Q_INVOKABLE void toggleRepeatMode();
-
-    // [新增] 处理异步波形计算完成的槽函数
+    void setOutputMode(int mode);
     void onWaveformCalculationFinished();
 
 private:
     MediaController &m_mediaController;
     QTimer m_stateTimer;
-
     QString m_defaultPath;
     bool m_isScanning = false;
 
@@ -133,27 +142,25 @@ private:
     void checkAndUpdateVolumeState();
     void checkAndUpdateShuffleState();
     void checkAndUpdateRepeatModeState();
-
+    void checkAndUpdateOutputMode();
     void generateWaveformForNode(PlaylistNode *node);
     void doSearchRecursive(PlaylistNode *node, const QString &query, QVariantList &results);
 
+    AVSampleFormat indexToAvFormat(int index);
+    int avFormatToIndex(AVSampleFormat fmt);
+
     QString m_coverArtSource;
     PlaylistNode *m_lastPlayingNode = nullptr;
-
     QString m_songTitle;
     QString m_artistName;
     QString m_albumName;
-
     QString m_currentPosText = "00:00";
     QString m_remainingTimeText = "00:00";
-
     qint64 m_totalDurationMicrosec = 0;
     qint64 m_currentPosMicrosec = 0;
-
     QString m_gradientColor1 = "#7d5a5a";
     QString m_gradientColor2 = "#6b4a4a";
     QString m_gradientColor3 = "#5a3c3c";
-
     bool m_isPlaying = false;
     double m_volume = 1.0;
     QTimer m_volumeTimer;
@@ -161,12 +168,10 @@ private:
     bool m_isSeeking = false;
     qint64 m_lastSeekRequestTime = 0;
     int m_repeatMode = 0;
-
+    int m_outputMode = 0;
     QVariantList m_waveformHeights;
     int m_waveformBarWidth = 4;
 
-    // [新增] 异步处理相关变量
-    // 定义一个结构体来存储异步结果
     struct AsyncWaveformResult
     {
         quint64 generationId;
@@ -174,9 +179,7 @@ private:
         std::vector<int> heights;
         int barWidth;
     };
-
     QFutureWatcher<AsyncWaveformResult> m_waveformWatcher;
-    // 用于记录当前 UI 需要的最新请求 ID
     quint64 m_currentWaveformGeneration = 0;
 };
 

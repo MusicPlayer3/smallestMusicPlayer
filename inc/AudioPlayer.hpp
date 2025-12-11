@@ -76,7 +76,12 @@ public:
     // 参数设置
     void setMixingParameters(const AudioParams &params);
     AudioParams getMixingParameters() const;
+    AudioParams getDeviceParameters() const;
     void setOutputMode(outputMod mode);
+    outputMod getOutputMode() const
+    {
+        return outputMode;
+    }
 
     // 状态查询
     bool isPlaying() const;

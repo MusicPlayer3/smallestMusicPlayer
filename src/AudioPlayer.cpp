@@ -17,7 +17,7 @@ static std::string my_av_strerror(int errnum)
 namespace
 {
 constexpr double PRELOAD_TRIGGER_SECONDS_BEFORE_END = 10.0;
-constexpr double AUDIO_BUFFER_DURATION_SECONDS = 0.2; // 200ms
+constexpr double AUDIO_BUFFER_DURATION_SECONDS = 0.4; // 400ms
 constexpr int MIN_AUDIO_QUEUE_SIZE = 4;
 } // namespace
 
@@ -488,6 +488,11 @@ void AudioPlayer::setOutputMode(outputMod mode)
 AudioParams AudioPlayer::getMixingParameters() const
 {
     return mixingParams;
+}
+
+AudioParams AudioPlayer::getDeviceParameters() const
+{
+    return deviceParams;
 }
 
 // --- Audio Device Management (Miniaudio) ---

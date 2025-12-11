@@ -133,18 +133,20 @@ qt_add_qml_module(appMusicPlayer
     VERSION 1.0
     SOURCES ${RES}
     QML_FILES
-        qml/Main.qml
+        qml/BubblePopup.qml
         qml/ListView.qml
-        qml/StyleButton.qml
+        qml/Main.qml
+        qml/MarqueeText.qml
         qml/MusicListHeader.qml
         qml/MusicListItemDelegate.qml
         qml/MusicListView.qml
+        qml/OutputSettingsWindow.qml
+        qml/StyleButton.qml
+        qml/WaveformProgressBar.qml
         SOURCES inc/CoverImageProvider.hpp
         SOURCES src/CoverImageProvider.cpp
         SOURCES inc/uicontroller.h
         SOURCES src/UIController.cpp
-        QML_FILES qml/MarqueeText.qml
-        QML_FILES qml/WaveformProgressBar.qml
 )
 
 # ------------------------------

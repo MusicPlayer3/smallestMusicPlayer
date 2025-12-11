@@ -1,4 +1,5 @@
 #include "MediaController.hpp"
+#include "AudioPlayer.hpp"
 #include "SysMediaService.hpp" // 确保包含此头文件
 #include <random>
 
@@ -941,4 +942,34 @@ static void searchRecursiveWithScore(PlaylistNode *scope, const std::string &que
             }
         }
     }
+}
+
+void MediaController::setMixingParameters(int sampleRate, AVSampleFormat smapleFormat)
+{
+    AudioParams params;
+    params.sampleRate = sampleRate;
+    params.sampleFormat = smapleFormat;
+    params.ch_layout = AV_CHANNEL_LAYOUT_STEREO;
+    params.channels = 2;
+    player->setMixingParameters(params);
+}
+
+void MediaController::setOUTPUTMode(outputMod mode)
+{
+    player->setOutputMode(mode);
+}
+
+outputMod MediaController::getOUTPUTMode()
+{
+    return player->getOutputMode();
+}
+
+AudioParams MediaController::getMixingParameters()
+{
+    return player->getMixingParameters();
+}
+
+AudioParams MediaController::getDeviceParameters()
+{
+    return player->getDeviceParameters();
 }
