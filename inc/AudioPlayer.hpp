@@ -30,7 +30,7 @@ enum class PlayerState : std::uint8_t
 struct AudioParams
 {
     int sampleRate = 96000;
-    AVSampleFormat sampleFormat = AV_SAMPLE_FMT_FLT;
+    AVSampleFormat sampleFormat = AV_SAMPLE_FMT_S32;
     AVChannelLayout ch_layout = AV_CHANNEL_LAYOUT_STEREO;
     int channels = 2;
 };
