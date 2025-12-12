@@ -87,7 +87,6 @@ qt_add_resources(RES qrc/img.qrc)
 qt_add_executable(appMusicPlayer
     # C++ Sources
     inc/AudioPlayer.hpp
-    inc/ColorExtractor.hpp
     inc/CoverCache.hpp
     inc/CoverImage.hpp
     inc/CoverImageProvider.hpp
@@ -106,7 +105,6 @@ qt_add_executable(appMusicPlayer
     inc/uicontroller.h
 
     src/AudioPlayer.cpp
-    src/ColorExtractor.cpp
     src/CoverCache.cpp
     src/CoverImageProvider.cpp
     src/FileScanner.cpp
@@ -133,6 +131,7 @@ qt_add_qml_module(appMusicPlayer
     VERSION 1.0
     SOURCES ${RES}
     QML_FILES
+        qml/Background.qml
         qml/BubblePopup.qml
         qml/ListView.qml
         qml/Main.qml

@@ -58,6 +58,8 @@ public:
 
     // [新增] 初始化支持的音频后缀列表 (通常自动调用，也可手动调用)
     static void initSupportedExtensions();
+
+    friend void printPlaylistTree(const std::shared_ptr<PlaylistNode> &root);
 };
 
 #endif

@@ -80,7 +80,7 @@ Window {
 
     // 动画
     OpacityAnimator {
-        target: root
+        target: bgContainer
         from: 0
         to: 1
         duration: 150

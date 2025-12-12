@@ -16,9 +16,16 @@ private:
     MetaData metaData;                                   // 音频文件元数据(如果不是目录的话)
     std::vector<std::shared_ptr<PlaylistNode>> children; // 这个目录下的子目录+音频文件
     std::weak_ptr<PlaylistNode> parent;                  // 父节点   (如果是根节点则为空)
+    std::uint64_t totalSongs;                            // 总歌曲数
+    std::uint64_t totalDuration;                         // 总时长(单位为秒)
 public:
     PlaylistNode(const std::string &path = std::string(), bool isDir = false) : _isDir(isDir), path(path)
     {
+    }
+    // 允许外部传入比较器对子节点进行重新排序
+    void reorderChildren(std::function<bool(const std::shared_ptr<PlaylistNode> &, const std::shared_ptr<PlaylistNode> &)> comparator)
+    {
+        std::sort(children.begin(), children.end(), comparator);
     }
     void sortChildren()
     {
@@ -74,6 +81,23 @@ public:
     std::shared_ptr<PlaylistNode> getParent()
     {
         return parent.lock();
+    }
+
+    void setTotalSongs(const std::uint64_t &totalSongs)
+    {
+        this->totalSongs = totalSongs;
+    }
+    void setTotalDuration(const std::uint64_t &totalDuration)
+    {
+        this->totalDuration = totalDuration;
+    }
+    std::uint64_t getTotalSongs() const
+    {
+        return totalSongs;
+    }
+    std::uint64_t getTotalDuration() const
+    {
+        return totalDuration;
     }
 };
 

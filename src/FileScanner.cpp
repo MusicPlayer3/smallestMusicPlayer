@@ -2,6 +2,10 @@
 #include "CoverCache.hpp"
 #include "MetaData.hpp"
 #include "Precompiled.h"
+#include <print>
+#include <chrono>
+#include <filesystem>
+#include <format>
 
 // ================= TagLib Headers =================
 #include <taglib/fileref.h>
@@ -585,27 +589,92 @@ static void processTrackCover(const std::string &musicPath, const std::string &a
 // 5. 元数据获取
 // ==========================================
 
-static int64_t getFFmpegDuration(const std::string &filePath)
+struct AudioTechInfo
 {
+    int64_t duration = 0; // 微秒
+    uint32_t sampleRate = 0;
+    uint16_t bitDepth = 0;
+    std::string formatType;
+};
+
+static AudioTechInfo getAudioTechInfo(const std::string &filePath)
+{
+    AudioTechInfo info;
+    // 初始化 info.bitDepth 为 0，这是一个良好的默认值
+    info.bitDepth = 0;
+    info.duration = 0;
+
     AVFormatContext *ctxRaw = nullptr;
     if (avformat_open_input(&ctxRaw, filePath.c_str(), nullptr, nullptr) != 0)
-        return 0;
-    AVContextPtr ctx(ctxRaw);
+        return info;
+
+    AVContextPtr ctx(ctxRaw); // 假设你有自定义的智能指针封装
     if (avformat_find_stream_info(ctx.get(), nullptr) < 0)
-        return 0;
+        return info;
+
+    // 获取时长
     if (ctx->duration != AV_NOPTS_VALUE)
-        return ctx->duration;
-    for (unsigned int i = 0; i < ctx->nb_streams; i++)
     {
-        if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+        info.duration = ctx->duration;
+    }
+
+    // 查找最佳音频流
+    int streamIdx = av_find_best_stream(ctx.get(), AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (streamIdx >= 0)
+    {
+        AVStream *stream = ctx->streams[streamIdx];
+        AVCodecParameters *par = stream->codecpar;
+
+        // 1. 时长回退逻辑
+        if (info.duration == 0 && stream->duration != AV_NOPTS_VALUE)
         {
-            if (ctx->streams[i]->duration != AV_NOPTS_VALUE)
+            info.duration = av_rescale_q(stream->duration, stream->time_base, AV_TIME_BASE_Q);
+        }
+
+        // 2. 采样率
+        info.sampleRate = par->sample_rate;
+
+        // 获取编码描述符 (提前获取，后面位深度判断也要用)
+        const AVCodecDescriptor *desc = avcodec_descriptor_get(par->codec_id);
+
+        // 3. 格式类型
+        if (desc && desc->name)
+        {
+            info.formatType = desc->name;
+        }
+        else
+        {
+            info.formatType = "unknown";
+        }
+
+        // 4.位深度 (Bit Depth)
+        if (par->bits_per_raw_sample > 0)
+        {
+            // 如果容器显式声明了位深 (如 FLAC 24bit, WAV 16bit)，直接使用
+            info.bitDepth = par->bits_per_raw_sample;
+        }
+        else
+        {
+            // 如果 bits_per_raw_sample 为 0 (常见于 MP3, AAC, Vorbis, 浮点 WAV)
+            // 检查是否为“有损压缩”格式
+            // 如果是 Lossy 格式，位深度概念不适用，保持为 0，或者你可以强制设为 16
+            bool isLossy = desc && (desc->props & AV_CODEC_PROP_LOSSY);
+
+            if (!isLossy)
             {
-                return av_rescale_q(ctx->streams[i]->duration, ctx->streams[i]->time_base, AV_TIME_BASE_Q);
+                // 只有在非有损压缩 (即 PCM / Lossless) 且没有 bits_per_raw_sample 时，
+                // 我们才根据解码后的 sample_fmt 推算位深。
+                int bytes = av_get_bytes_per_sample(static_cast<AVSampleFormat>(par->format));
+                if (bytes > 0)
+                {
+                    info.bitDepth = bytes * 8;
+                }
             }
+            
         }
     }
-    return 0;
+
+    return info;
 }
 
 // 辅助：从 TagLib::String 提取并探测编码
@@ -640,6 +709,7 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
 
     if (fs::exists(p))
     {
+        // 1. TagLib 获取常规标签
         TagLib::FileRef f(p.c_str());
         if (!f.isNull() && f.tag())
         {
@@ -651,7 +721,21 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
         }
         musicData.setFilePath(p.string());
         musicData.setParentDir(p.parent_path().string());
-        musicData.setDuration(getFFmpegDuration(p.string()));
+
+        // 2. FFmpeg 获取技术参数 (时长、采样率、位深、格式)
+        AudioTechInfo techInfo = getAudioTechInfo(p.string());
+        musicData.setDuration(techInfo.duration);
+        musicData.setSampleRate(techInfo.sampleRate);
+        musicData.setBitDepth(techInfo.bitDepth);
+        musicData.setFormatType(techInfo.formatType);
+
+        // 3. 获取文件最后修改时间
+        std::error_code ec;
+        auto lastWriteTime = fs::last_write_time(p, ec);
+        if (!ec)
+        {
+            musicData.setLastWriteTime(lastWriteTime);
+        }
     }
     return musicData;
 }
@@ -773,7 +857,9 @@ static std::shared_ptr<PlaylistNode> processSingleFile(const std::string &filePa
 static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 {
     if (fs::is_symlink(dirPath))
+    {
         return nullptr;
+    }
 
     fs::path preferredPath = dirPath;
     preferredPath.make_preferred();
@@ -786,7 +872,9 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
 
     std::string folderName = preferredPath.filename().string();
     if (folderName.empty())
+    {
         folderName = "Unknown_Folder";
+    }
 
     folderName = EncodingDetector::detectAndConvert(folderName);
 
@@ -909,6 +997,30 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath)
             CoverCache::instance().putCompressedFromPixels(folderName, imgPixels.get(), w, h, 4);
         }
     }
+
+    // 统计当前文件夹下的总歌曲数和总时长
+    uint64_t totalSongs = 0;
+    uint64_t totalDurationSec = 0;
+
+    for (const auto &child : node->getChildren())
+    {
+        if (child->isDir())
+        {
+            // 如果是子文件夹，累加子文件夹的统计数据
+            totalSongs += child->getTotalSongs();
+            totalDurationSec += child->getTotalDuration();
+        }
+        else
+        {
+            // 如果是文件（包括 CUE 分轨后的节点，通常也是叶子节点）
+            totalSongs++;
+            // MetaData 中的 Duration 是微秒，PlaylistNode 需要秒
+            totalDurationSec += (child->getMetaData().getDuration() / 1000000);
+        }
+    }
+
+    node->setTotalSongs(totalSongs);
+    node->setTotalDuration(totalDurationSec);
     return node;
 }
 
@@ -931,8 +1043,20 @@ void FileScanner::scanDir()
             auto root = std::make_shared<PlaylistNode>(rootPath.parent_path().string(), true);
             root->setCoverKey(rootPath.parent_path().filename().string());
             auto nodes = processCueAndGetNodes(rootPath);
+
+            uint64_t tSongs = 0;
+            uint64_t tDuration = 0;
+
             for (auto &n : nodes)
+            {
                 root->addChild(n);
+                tSongs++;
+                tDuration += (n->getMetaData().getDuration() / 1000000);
+            }
+
+            root->setTotalSongs(tSongs);
+            root->setTotalDuration(tDuration);
+
             if (!root->getChildren().empty())
             {
                 root->sortChildren();
@@ -942,11 +1066,18 @@ void FileScanner::scanDir()
         else if (isffmpeg(rootDir))
         {
             rootNode = processSingleFile(rootPath.string());
+            // 单个文件节点本身不算作“列表”，但如果是根节点，也可以视作包含1首歌
+            if (rootNode)
+            {
+                rootNode->setTotalSongs(1);
+                rootNode->setTotalDuration(rootNode->getMetaData().getDuration() / 1000000);
+            }
         }
         hasScanCpld = true;
         return;
     }
 
+    // 目录扫描情况，buildNodeFromDir 内部已经计算了统计信息
     auto root = buildNodeFromDir(rootPath);
     if (root)
         rootNode = root;
@@ -954,6 +1085,8 @@ void FileScanner::scanDir()
     {
         rootNode = std::make_shared<PlaylistNode>(rootPath.string(), true);
         rootNode->setCoverKey(rootPath.filename().string());
+        rootNode->setTotalSongs(0);
+        rootNode->setTotalDuration(0);
     }
     hasScanCpld = true;
 }
@@ -1036,4 +1169,89 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
         return coverPath;
     }
     return "";
+}
+
+// 辅助函数：将 file_time_type 转换为本地时间字符串
+// 利用 C++23 的 zoned_time 自动处理时区
+std::string formatTime(std::filesystem::file_time_type ftime)
+{
+    if (ftime == std::filesystem::file_time_type::min())
+        return "Unknown Time";
+
+    try
+    {
+        // 1. 将文件时间转换为系统时间 (clock_cast 是 C++20 引入)
+        auto sysTime = std::chrono::clock_cast<std::chrono::system_clock>(ftime);
+
+        // 2. 转换为当前时区的本地时间 (zoned_time 是 C++20 引入)
+        // 注意：这通常需要编译器链接了时区数据库 (ICU 或 OS API)
+        auto localTime = std::chrono::zoned_time(std::chrono::current_zone(), sysTime);
+
+        // 3. 格式化输出，{:%F %T} 等同于 %Y-%m-%d %H:%M:%S
+        return std::format("{:%F %T}", localTime);
+    }
+    catch (...)
+    {
+        // 如果时区转换失败（极少数环境），回退到系统时间显示
+        auto sysTime = std::chrono::clock_cast<std::chrono::system_clock>(ftime);
+        return std::format("{:%F %T} (UTC)", sysTime);
+    }
+}
+
+// 内部递归打印函数
+void printNodeRecursive(const std::shared_ptr<PlaylistNode> &node, std::string prefix, bool isLast)
+{
+    if (!node)
+        return;
+
+    // 获取显示名称
+    std::filesystem::path p(node->getPath());
+    std::string name = p.filename().string();
+    if (name.empty())
+        name = node->getPath(); // 处理根目录可能是 "C:" 或 "/" 的情况
+
+    // 1. 打印树状前缀和名称 (C++23 std::print)
+    std::print("{}{}{}", prefix, (isLast ? "└── " : "├── "), name);
+
+    // 2. 打印属性信息
+    if (node->isDir())
+    {
+        // 文件夹：totalSongs, totalDuration
+        std::println(" [DIR] Songs: {}, Duration: {}s",
+                     node->getTotalSongs(),
+                     node->getTotalDuration());
+    }
+    else
+    {
+        // 音频文件：lastWriteTime, sampleRate, bitDepth, formatType
+        const auto &md = node->getMetaData();
+        std::println(" [FILE] LastMod: {}, Rate: {}Hz, Depth: {}bit, Fmt: {}",
+                     formatTime(md.getLastWriteTime()),
+                     md.getSampleRate(),
+                     md.getBitDepth(),
+                     md.getFormatType());
+    }
+
+    // 3. 递归处理子节点
+    const auto &children = node->getChildren();
+    for (size_t i = 0; i < children.size(); ++i)
+    {
+        bool lastChild = (i == children.size() - 1);
+        std::string nextPrefix = prefix + (isLast ? "    " : "│   ");
+        printNodeRecursive(children[i], nextPrefix, lastChild);
+    }
+}
+
+// 外部调用接口
+void printPlaylistTree(const std::shared_ptr<PlaylistNode> &root)
+{
+    if (!root)
+    {
+        std::println(stderr, "Root node is null.");
+        return;
+    }
+
+    std::println("\n========== Playlist Tree (C++23) ==========");
+    printNodeRecursive(root, "", true);
+    std::println("===========================================\n");
 }

@@ -5,19 +5,25 @@
 
 class MetaData
 {
+    using file_time_type = std::filesystem::file_time_type;
+
 private:
-    std::string title;     // 歌曲标题
-    std::string artist;    // 艺术家
-    std::string album;     // 专辑
-    std::string year;      // 出版年份
-    std::string filePath;  // 文件路径
-    std::string parentDir; // 上级目录
-    std::string coverPath; // 封面路径
-    int64_t duration;      // 歌曲时长(单位微秒)
-    int64_t offset;        // [新增] 起始播放偏移量(单位微秒)，默认为0
+    std::string title;            // 歌曲标题
+    std::string artist;           // 艺术家
+    std::string album;            // 专辑
+    std::string year;             // 出版年份
+    std::string filePath;         // 文件路径
+    std::string parentDir;        // 上级目录
+    std::string coverPath;        // 封面路径
+    int64_t duration;             // 歌曲时长(单位微秒)
+    int64_t offset;               // 起始播放偏移量(单位微秒)，默认为0
+    file_time_type lastWriteTime; // 最后修改时间
+    std::uint32_t sampleRate;     // 采样率
+    std::uint16_t bitDepth;       // 采样深度
+    std::string formatType;       // 文件格式类型
 
 public:
-    MetaData() : duration(0), offset(0)
+    MetaData() : duration(0), offset(0), sampleRate(0), bitDepth(0)
     {
     } // 初始化
 
@@ -29,7 +35,11 @@ public:
              const std::string &parentDir,
              const std::string &coverPath,
              int64_t duration,
-             int64_t offset = 0) : // 新增参数
+             int64_t offset = 0,
+             file_time_type lastWriteTime = file_time_type::min(),
+             std::uint32_t sampleRate = 0,
+             std::uint16_t bitDepth = 0,
+             const std::string &formatType = "") :
         title(title),
         artist(artist),
         album(album),
@@ -38,7 +48,11 @@ public:
         parentDir(parentDir),
         coverPath(coverPath),
         duration(duration),
-        offset(offset)
+        offset(offset),
+        lastWriteTime(lastWriteTime),
+        sampleRate(sampleRate),
+        bitDepth(bitDepth),
+        formatType(formatType)
     {
     }
 
@@ -56,8 +70,13 @@ public:
            << "Year: " << year << "\n"
            << "File Path: " << filePath << "\n"
            << "Parent Directory: " << parentDir << "\n"
+           << "Cover Path: " << coverPath << "\n"
            << "Duration: " << duration << "\n"
-           << "Offset: " << offset << "\n";
+           << "Offset: " << offset << "\n"
+           << "Last Write Time: " << std::chrono::duration_cast<std::chrono::seconds>(lastWriteTime.time_since_epoch()).count() << " seconds since epoch\n"
+           << "Sample Rate: " << sampleRate << "\n"
+           << "Bit Depth: " << bitDepth << "\n"
+           << "Format Type: " << formatType << "\n";
         return os;
     }
 
@@ -123,7 +142,23 @@ public:
     int64_t getOffset() const
     {
         return offset;
-    } // [新增]
+    }
+    file_time_type getLastWriteTime() const
+    {
+        return lastWriteTime;
+    }
+    std::uint32_t getSampleRate() const
+    {
+        return sampleRate;
+    }
+    std::uint16_t getBitDepth() const
+    {
+        return bitDepth;
+    }
+    const std::string &getFormatType() const
+    {
+        return formatType;
+    }
 
     // setter
     void setTitle(const std::string &title)
@@ -161,7 +196,23 @@ public:
     void setOffset(int64_t offset)
     {
         this->offset = offset;
-    } // [新增]
+    }
+    void setLastWriteTime(file_time_type lastWriteTime)
+    {
+        this->lastWriteTime = lastWriteTime;
+    }
+    void setSampleRate(std::uint32_t sampleRate)
+    {
+        this->sampleRate = sampleRate;
+    }
+    void setBitDepth(std::uint16_t bitDepth)
+    {
+        this->bitDepth = bitDepth;
+    }
+    void setFormatType(const std::string &formatType)
+    {
+        this->formatType = formatType;
+    }
 };
 
 #endif

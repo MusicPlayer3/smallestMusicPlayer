@@ -16,7 +16,6 @@
 #include "CoverImageProvider.hpp"
 // 引入后端逻辑控制器
 #include "MediaController.hpp"
-#include "ColorExtractor.hpp"
 #include "CoverCache.hpp"
 
 // --- Linux Terminal Control Section ---

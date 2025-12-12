@@ -5,43 +5,15 @@ import Qt5Compat.GraphicalEffects
 
 Rectangle {
     id: listViewRect
-    
-    // (修复 1 & 2) 重新使用 Gradient，保证侧边栏是不透明的 (Opaque)
-    // 这样在悬浮模式下，它会遮挡住下面的播放器。
-    // 同时通过 Behavior 保证颜色变化与主界面同步。
-    gradient: Gradient {
-        GradientStop { 
-            position: 0.0; 
-            color: playerController.gradientColor1 
-            Behavior on color { ColorAnimation { duration: 500; easing.type: Easing.Linear } }
-        } 
-        GradientStop { 
-            position: 0.5; 
-            color: playerController.gradientColor2 
-            Behavior on color { ColorAnimation { duration: 500; easing.type: Easing.Linear } }
-        } 
-        GradientStop { 
-            position: 1.0; 
-            color: playerController.gradientColor3 
-            Behavior on color { ColorAnimation { duration: 500; easing.type: Easing.Linear } }
-        } 
-    }
-    
-    // 背景光晕
-    RectangularGlow {
-        anchors.fill: listViewRect
-        glowRadius: 10
-        spread: 0.1
-        color: "#80000000"
-        cornerRadius: 20
-        z:-1
-    }
+    color: "transparent"
 
     signal closeRequested
     property string iconFamily: ""
+    property alias sortPopup: header.sortPopup
 
     MouseArea {
         anchors.fill: parent
+        // 拦截点击，防止穿透
     }
 
     ColumnLayout {
@@ -53,12 +25,10 @@ Rectangle {
             id: header
             iconFontFamily: listViewRect.iconFamily
             Layout.fillWidth: true
-            
-            Layout.preferredHeight: height 
-            z: 2 
-
+            Layout.preferredHeight: height
+            z: 2
             onCloseRequested: {
-                listViewRect.closeRequested() 
+                listViewRect.closeRequested();
             }
         }
 
@@ -66,25 +36,66 @@ Rectangle {
         ListView {
             id: musicListView
             Layout.fillWidth: true
-            Layout.fillHeight: true 
-            
-            clip: true 
+            Layout.fillHeight: true
+            clip: true
             z: 1
-
             ScrollBar.vertical: ScrollBar {
                 policy: ScrollBar.AsNeeded
             }
-
             model: musicListModel
-
+            Connections {
+                target: musicListModel
+                function onRequestScrollTo(index) {
+                    musicListView.positionViewAtIndex(index, ListView.Beginning);
+                }
+            }
             delegate: MusicListItemDelegate {
                 itemImageSource: model.imageSource
                 itemTitle: model.title
                 itemArtist: model.artist
+                itemAlbumName: model.albumName
+                itemExtraInfo: model.extraInfo
+                itemParentDir: model.parentDirName
                 isItemPlaying: model.isPlaying
                 iconFontFamily: listViewRect.iconFamily
-                isFolder: model.isFolder 
+                isFolder: model.isFolder
             }
+        }
+    }
+
+    // 定位按钮
+    Button {
+        id: locateFab
+        width: 44
+        height: 44
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 20
+        z: 100
+        background: Rectangle {
+            color: "#30FFFFFF"
+            radius: 22
+            border.color: "#50FFFFFF"
+            border.width: 1
+            Rectangle {
+                anchors.fill: parent
+                radius: 22
+                color: parent.parent.hovered ? "#30FFFFFF" : "transparent"
+            }
+        }
+        contentItem: Text {
+            text: "my_location"
+            font.family: listViewRect.iconFamily
+            color: "white"
+            font.pixelSize: 22
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+        ToolTip.visible: hovered
+        ToolTip.text: "定位当前播放"
+        ToolTip.delay: 500
+        onClicked: {
+            musicListModel.locateCurrentPlaying();
         }
     }
 }

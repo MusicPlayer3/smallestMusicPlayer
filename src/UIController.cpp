@@ -5,8 +5,9 @@
 #include <QUrl>
 #include <algorithm>
 #include <cmath>
+#include <qcolor.h>
+#include <qimage.h>
 #include "PlaylistNode.hpp"
-#include "ColorExtractor.hpp"
 #include "AudioPlayer.hpp"
 
 UIController::UIController(QObject *parent) :
@@ -32,13 +33,18 @@ UIController::UIController(QObject *parent) :
 
     m_coverArtSource = "";
 
-    // [新增] 连接异步监听器
+    // 连接异步监听器
     connect(&m_waveformWatcher, &QFutureWatcher<AsyncWaveformResult>::finished,
             this, &UIController::onWaveformCalculationFinished);
-    m_currentWaveformGeneration = 0; // 初始化 ID
+    m_currentWaveformGeneration = 0;
 
     // 初始化 OutputMode
     m_outputMode = static_cast<int>(m_mediaController.getOUTPUTMode());
+
+    // 初始化默认的深色背景
+    m_gradientColor1 = "#232323";
+    m_gradientColor2 = "#1a1a1a";
+    m_gradientColor3 = "#121212";
 }
 
 // [新增] 析构清理
@@ -78,21 +84,115 @@ QString formatTime(qint64 microsecs)
     return QString("%1:%2").arg(minutes, 2, 10, QChar('0')).arg(seconds, 2, 10, QChar('0'));
 }
 
+// 计算两个颜色的差异 (欧氏距离近似)
+double colorDistance(const QColor &c1, const QColor &c2)
+{
+    long rmean = ((long)c1.red() + (long)c2.red()) / 2;
+    long r = (long)c1.red() - (long)c2.red();
+    long g = (long)c1.green() - (long)c2.green();
+    long b = (long)c1.blue() - (long)c2.blue();
+    return std::sqrt((((512 + rmean) * r * r) >> 8) + 4 * g * g + (((767 - rmean) * b * b) >> 8));
+}
+
 void UIController::updateGradientColors(const QString &imagePath)
 {
-    QList<QColor> colors = ColorExtractor::getAdaptiveGradientColors(imagePath);
-    if (colors.size() >= 3)
+    QImage image(imagePath);
+
+    // 默认备用色
+    QList<QColor> palette = {QColor("#2d2d2d"), QColor("#353535"), QColor("#404040")};
+
+    if (!image.isNull())
     {
-        QString newColor1 = colors[0].name();
-        QString newColor2 = colors[1].name();
-        QString newColor3 = colors[2].name();
-        if (m_gradientColor1 != newColor1 || m_gradientColor2 != newColor2 || m_gradientColor3 != newColor3)
+        // 1. 缩小图片 (20x20) 以快速分析
+        QImage small = image.scaled(20, 20, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+
+        struct ColorScore
         {
-            m_gradientColor1 = newColor1;
-            m_gradientColor2 = newColor2;
-            m_gradientColor3 = newColor3;
-            emit gradientColorsChanged();
+            QColor color;
+            double score;
+        };
+        std::vector<ColorScore> candidates;
+
+        // 2. 遍历像素评分，寻找"活力色"作为基础
+        for (int y = 0; y < small.height(); ++y)
+        {
+            for (int x = 0; x < small.width(); ++x)
+            {
+                QColor c = small.pixelColor(x, y);
+                // 剔除过黑过白
+                if (c.lightness() < 20 || c.lightness() > 240)
+                    continue;
+
+                // 评分：优先选择高饱和度颜色（这样能抓到封面的主色调）
+                // 稍后我们会统一降低饱和度，但这里需要先选出有代表性的颜色
+                double score = c.saturationF() * 2.0 + (1.0 - std::abs(c.lightnessF() - 0.5));
+                candidates.push_back({c, score});
+            }
         }
+
+        // 3. 排序：分数高的在前
+        std::sort(candidates.begin(), candidates.end(), [](const ColorScore &a, const ColorScore &b)
+                  { return a.score > b.score; });
+
+        // 4. 挑选差异较大的 3 个颜色
+        palette.clear();
+        for (const auto &item : candidates)
+        {
+            bool isDistinct = true;
+            for (const auto &selected : palette)
+            {
+                if (colorDistance(item.color, selected) < 80.0)
+                { // 稍微降低阈值以允许近似色
+                    isDistinct = false;
+                    break;
+                }
+            }
+            if (isDistinct)
+            {
+                palette.append(item.color);
+                if (palette.size() >= 3)
+                    break;
+            }
+        }
+
+        // 补齐不足的颜色
+        while (palette.size() < 3)
+        {
+            if (!palette.isEmpty())
+                palette.append(palette.last().darker(110));
+            else
+                palette.append(QColor("#2d2d2d"));
+        }
+    }
+
+    // [关键修改] 5. 后处理：限制饱和度和亮度范围
+    // 这一步确保了背景不会因为封面颜色过于鲜艳而显得刺眼或"花哨"
+    for (auto &color : palette)
+    {
+        float h, s, l;
+        color.getHslF(&h, &s, &l);
+
+        // 限制饱和度最大为 0.5 (50%)
+        // 这样既保留了色相(Hue)，又让颜色看起来更柔和、高级
+        if (s > 0.5)
+            s = 0.5;
+
+        // 也可以稍微限制亮度，防止背景太亮影响白字阅读
+        // if (l > 0.6) l = 0.6;
+
+        color = QColor::fromHslF(h, s, l);
+    }
+
+    QString newColor1 = palette[0].name();
+    QString newColor2 = palette[1].name();
+    QString newColor3 = palette[2].name();
+
+    if (m_gradientColor1 != newColor1 || m_gradientColor2 != newColor2 || m_gradientColor3 != newColor3)
+    {
+        m_gradientColor1 = newColor1;
+        m_gradientColor2 = newColor2;
+        m_gradientColor3 = newColor3;
+        emit gradientColorsChanged();
     }
 }
 
