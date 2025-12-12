@@ -35,7 +35,7 @@
 #### 编译步骤
 ``` bash
 # 1. 安装依赖
-sudo pacman -S qt6-base qt6-declarative qt6-multimedia qt6-tools ffmpeg sdl2 taglib sdbus-cpp pkgconf
+sudo pacman -S qt6-base qt6-declarative qt6-multimedia qt6-tools ffmpeg sdl2 taglib sdbus-cpp pkgconf uchardet
 
 # 2. 克隆项目
 git clone https://github.com/MusicPlayer3/smallestMusicPlayer.git
