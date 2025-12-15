@@ -3,6 +3,7 @@
 
 #include "CoverCache.hpp" // 包含您的缓存头文件
 #include "PCH.h"
+#include <QtQuick/QQuickImageProvider>
 
 class CoverImageProvider : public QQuickImageProvider
 {

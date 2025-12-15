@@ -1,5 +1,3 @@
-#define MINIAUDIO_IMPLEMENTATION
-#include "miniaudio.h"
 #include "AudioPlayer.hpp"
 #include "SimpleThreadPool.hpp"
 

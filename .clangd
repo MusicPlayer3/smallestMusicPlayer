@@ -1,16 +1,47 @@
 CompileFlags:
-  Add: [-Wno-unknown-warning-option]
-  Remove: [-mno-direct-extern-access]
-
+  Add: 
+    - -Wno-unknown-warning-option
+    - -std=c++23 
+    - -Wall    
+  Remove: 
+    - -mno-direct-extern-access
+    - -std=c++17
 
 Diagnostics:
+  Suppress:
+    - "unused-function"
+
   ClangTidy:
     Add:
       - performance-*
       - bugprone-*
+      - modernize-*       # 建议开启，帮助你发现可以现代化的代码
+      - misc-*            # 杂项检查
+      - readability-*     # 可读性检查
     Remove:
-      # 如果想排除某些检查
-      - modernize-use-trailing-return-type
+      - modernize-use-trailing-return-type  
+      - modernize-use-auto                  
+      - readability-identifier-length       
+      - readability-function-cognitive-complexity 
     CheckOptions:
       readability-identifier-naming.VariableCase: CamelCase
-    FastCheckFilter: Strict  # 可选
+
+# 开启嵌入提示 (Inlay Hints)
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes # 显示函数调用的参数名
+  DeducedTypes: Yes   # 显示 auto 推导出的具体类型
+  Designators: Yes    # 显示结构体初始化的字段名
+
+---
+
+If:
+  PathMatch: .*/SingleheaderLibrary/.*
+
+Index:
+  Background: Skip  # 禁止后台建立庞大的索引
+
+Diagnostics:
+  Suppress: "*"     # 彻底在该目录下禁用所有警告和错误提示
+  ClangTidy:
+    Remove: ["*"]   # 移除该目录下所有的 Tidy 检查

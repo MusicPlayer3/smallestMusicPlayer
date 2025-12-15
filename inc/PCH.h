@@ -77,7 +77,6 @@ extern "C"
 
 #ifdef USE_QT_
 
-#include <QQuickImageProvider>
 #include <QImage>
 #include <QSize>
 #include <QDebug>

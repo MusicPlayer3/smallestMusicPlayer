@@ -9,18 +9,17 @@ option(ENABLE_COMPILER_CACHE "Enable compiler cache (ccache/sccache)" ON)
 
 if(ENABLE_COMPILER_CACHE)
     find_program(COMPILER_CACHE NAMES ccache sccache)
+
     if(COMPILER_CACHE)
         set(CMAKE_CXX_COMPILER_LAUNCHER ${COMPILER_CACHE})
         message(STATUS "Compiler cache enabled: ${COMPILER_CACHE}")
     endif()
 endif()
 
-
 # ------------------------------
 # Qt 依赖查找
 # ------------------------------
 # QML 项目需要 Quick，保留 Multimedia 和 LinguistTools (用于翻译)
-
 find_package(Qt6 REQUIRED COMPONENTS Quick Multimedia LinguistTools QuickControls2 Widgets Concurrent)
 qt_standard_project_setup(REQUIRES 6.8)
 qt_policy(SET QTP0004 NEW) # 优化 QML 模块的隐式导入行为
@@ -60,6 +59,7 @@ if(WIN32)
     if(NOT FFMPEG_FOUND OR NOT SDL2_FOUND OR NOT TAGLIB_FOUND)
         message(FATAL_ERROR "FFmpeg, SDL2 or TagLib not found. Please check paths and library names.")
     endif()
+
     message(STATUS "Windows mode: FFMPEG, SDL2 and TagLib configured with hardcoded paths.")
 
 else()
@@ -73,8 +73,6 @@ else()
     pkg_check_modules(UCHARDET REQUIRED uchardet)
 endif()
 
-
-
 # ------------------------------
 # 通用 Include 配置
 # ------------------------------
@@ -85,9 +83,12 @@ include_directories(
     ${TAGLIB_INCLUDE_DIRS}
     ${UCHARDET_INCLUDE_DIRS}
 )
+
 if(SDBUSCPP_FOUND)
     include_directories(${SDBUSCPP_INCLUDE_DIRS})
 endif()
+
+add_subdirectory(SingleheaderLibrary)
 
 qt_add_resources(RES qrc/img.qrc)
 
@@ -95,6 +96,7 @@ qt_add_resources(RES qrc/img.qrc)
 # 定义目标 (Executable)
 # ------------------------------
 qt_add_executable(appMusicPlayer
+
     # C++ Sources
     inc/AudioPlayer.hpp
     inc/CoverCache.hpp
@@ -103,14 +105,9 @@ qt_add_executable(appMusicPlayer
     inc/FileScanner.hpp
     inc/MediaController.hpp
     inc/MetaData.hpp
-    inc/miniaudio.h
-    inc/mpris_server.hpp
     inc/musiclistmodel.h
     inc/PCH.h
     inc/SimpleThreadPool.hpp
-    inc/stb_image_resize2.h
-    inc/stb_image_write.h
-    inc/stb_image.h
     inc/SysMediaService.hpp
     inc/uicontroller.h
 
@@ -121,21 +118,14 @@ qt_add_executable(appMusicPlayer
     src/main.cpp
     src/MediaController.cpp
     src/musiclistmodel.cpp
-    src/StbImpl.cpp
     src/SysMediaService.cpp
     src/UIController.cpp
-
-)
-
-target_precompile_headers(appMusicPlayer
-    PRIVATE
-        inc/PCH.h
 )
 
 target_compile_definitions(appMusicPlayer
     PRIVATE
-        $<$<CONFIG:Debug>:DEBUG>
-        $<$<CONFIG:Release>:RELEASE>
+    $<$<CONFIG:Debug>:DEBUG>
+    $<$<CONFIG:Release>:RELEASE>
 )
 
 # ------------------------------
@@ -146,28 +136,28 @@ qt_add_qml_module(appMusicPlayer
     VERSION 1.0
     SOURCES ${RES}
     QML_FILES
-        qml/Background.qml
-        qml/BubblePopup.qml
-        qml/ListView.qml
-        qml/Main.qml
-        qml/MarqueeText.qml
-        qml/MusicListHeader.qml
-        qml/MusicListItemDelegate.qml
-        qml/MusicListView.qml
-        qml/OutputSettingsWindow.qml
-        qml/StyleButton.qml
-        qml/WaveformProgressBar.qml
-        SOURCES inc/CoverImageProvider.hpp
-        SOURCES src/CoverImageProvider.cpp
-        SOURCES inc/uicontroller.h
-        SOURCES src/UIController.cpp
+    qml/Background.qml
+    qml/BubblePopup.qml
+    qml/ListView.qml
+    qml/Main.qml
+    qml/MarqueeText.qml
+    qml/MusicListHeader.qml
+    qml/MusicListItemDelegate.qml
+    qml/MusicListView.qml
+    qml/OutputSettingsWindow.qml
+    qml/StyleButton.qml
+    qml/WaveformProgressBar.qml
+    SOURCES inc/CoverImageProvider.hpp
+    SOURCES src/CoverImageProvider.cpp
+    SOURCES inc/uicontroller.h
+    SOURCES src/UIController.cpp
 )
 
 # ------------------------------
 # 目标属性设置
 # ------------------------------
 if(WIN32)
-        set_target_properties(appMusicPlayer PROPERTIES
+    set_target_properties(appMusicPlayer PROPERTIES
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
         MACOSX_BUNDLE TRUE
@@ -178,6 +168,7 @@ else()
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
         MACOSX_BUNDLE TRUE
+
         # WIN32_EXECUTABLE TRUE
         # 开启 IPO/LTO (链接时优化) - 这一步对 C++23 音视频项目很重要
         INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
@@ -195,9 +186,10 @@ if(MSVC)
         $<$<CONFIG:Debug>:/Od /Zi>
         $<$<CONFIG:Release>:/O2 /Ob2>
     )
+
     # [关键] 必须指定库目录，否则 linker 找不到 .lib 文件
-    target_link_directories(appMusicPlayer PRIVATE 
-        ${FFMPEG_LIBRARY_DIRS} 
+    target_link_directories(appMusicPlayer PRIVATE
+        ${FFMPEG_LIBRARY_DIRS}
         ${SDL2_LIBRARY_DIRS}
         ${TAGLIB_LIBRARY_DIRS}
     )
@@ -207,10 +199,11 @@ else()
         $<$<CONFIG:Debug>:-Og -g>
         $<$<CONFIG:Release>:-O3 -DNDEBUG>
     )
+
     # MinGW 也需要指定目录
     if(WIN32)
-        target_link_directories(appMusicPlayer PRIVATE 
-            ${FFMPEG_LIBRARY_DIRS} 
+        target_link_directories(appMusicPlayer PRIVATE
+            ${FFMPEG_LIBRARY_DIRS}
             ${SDL2_LIBRARY_DIRS}
             ${TAGLIB_LIBRARY_DIRS}
         )
@@ -236,14 +229,15 @@ endif()
 # ------------------------------
 target_link_libraries(appMusicPlayer
     PRIVATE
-        Qt6::Quick
-        Qt6::QuickControls2
-        Qt6::Widgets
-        ${FFMPEG_LIBRARIES}
-        ${SDL2_LIBRARIES}
-        ${TAGLIB_LIBRARIES}
-        z
-        ${UCHARDET_LIBRARIES}
+    Qt6::Quick
+    Qt6::QuickControls2
+    Qt6::Widgets
+    ${FFMPEG_LIBRARIES}
+    ${SDL2_LIBRARIES}
+    ${TAGLIB_LIBRARIES}
+    z
+    ${UCHARDET_LIBRARIES}
+    MyThirdPartyLibs
 )
 
 # 仅在 SDBUSCPP 被找到时才链接它 (Linux)
@@ -251,12 +245,17 @@ if(SDBUSCPP_FOUND)
     target_link_libraries(appMusicPlayer PRIVATE ${SDBUSCPP_LIBRARIES})
 endif()
 
+target_precompile_headers(appMusicPlayer
+    PRIVATE
+    inc/PCH.h
+)
+
 # ------------------------------
 # 翻译文件 (移植自原项目)
 # ------------------------------
 # 确保你的 .ts 文件名正确
 # qt_add_translations(appMusicPlayer
-#     TS_FILES smallestMusicPlayer_zh_CN.ts
+# TS_FILES smallestMusicPlayer_zh_CN.ts
 # )
 
 # ------------------------------
@@ -286,9 +285,11 @@ message(STATUS "Build Config Summary:")
 message(STATUS "FFmpeg libraries: ${FFMPEG_LIBRARIES}")
 message(STATUS "SDL2 libraries: ${SDL2_LIBRARIES}")
 message(STATUS "TagLib libraries: ${TAGLIB_LIBRARIES}")
+
 if(SDBUSCPP_FOUND)
     message(STATUS "SDBUSCPP: Included")
 else()
     message(STATUS "SDBUSCPP: Excluded (Windows or not found)")
 endif()
+
 message(STATUS "------------------------------------------------")
