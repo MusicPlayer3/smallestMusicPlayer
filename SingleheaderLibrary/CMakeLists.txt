@@ -9,7 +9,7 @@ target_include_directories(MyThirdPartyLibs PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/stb
     ${CMAKE_CURRENT_SOURCE_DIR}/miniaudio
-    ${CMAKE_CURRENT_SOURCE_DIR}BS_thread_pool
+    ${CMAKE_CURRENT_SOURCE_DIR}/BS_thread_pool
     ${CMAKE_CURRENT_SOURCE_DIR}/mpris_server
 )
 
