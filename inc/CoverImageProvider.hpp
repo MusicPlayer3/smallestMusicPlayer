@@ -1,17 +1,16 @@
 #ifndef COVERIMAGEPROVIDER_H
 #define COVERIMAGEPROVIDER_H
 
-#include <QQuickImageProvider>
-#include <QImage>
-#include <QSize>
-#include <QDebug>
 #include "CoverCache.hpp" // 包含您的缓存头文件
+#include "PCH.h"
 
 class CoverImageProvider : public QQuickImageProvider
 {
 public:
     // 告知 QML 引擎：我们提供的是 QImage 格式的数据
-    CoverImageProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
+    CoverImageProvider() : QQuickImageProvider(QQuickImageProvider::Image)
+    {
+    }
 
     // Tipssssssssssssssss：当你想要使用我们的Image服务的时候，
     // 请记住这个格式哟“image://[provider_id]/[image_id]"
@@ -27,6 +26,5 @@ public:
      */
     QImage requestImage(const QString &id, QSize *size, const QSize &requestedSize) override;
 };
-
 
 #endif // COVERIMAGEPROVIDER_H

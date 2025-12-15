@@ -1,12 +1,7 @@
-#ifndef COVER_HPP
-#define COVER_HPP
-#include "Precompiled.h"
+#ifndef __COVER_CACHE_HPP__
+#define __COVER_CACHE_HPP__
+#include "PCH.h"
 #include "CoverImage.hpp"
-#include <mutex>
-#include <unordered_map>
-#include <memory>
-#include <string>
-#include <array>
 
 class CoverCache
 {

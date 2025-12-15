@@ -1,5 +1,4 @@
 #include "CoverImageProvider.hpp"
-#include <QImage>
 
 QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
 {

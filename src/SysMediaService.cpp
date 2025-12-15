@@ -1,6 +1,5 @@
 #include "SysMediaService.hpp"
 #include "MediaController.hpp"
-#include <functional> // for std::hash
 
 #ifdef __linux__
 SysMediaService::SysMediaService(MediaController &controller_) : controller(controller_)

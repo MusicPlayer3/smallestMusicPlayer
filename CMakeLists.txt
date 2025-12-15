@@ -5,6 +5,16 @@ project(MusicPlayer VERSION 0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+option(ENABLE_COMPILER_CACHE "Enable compiler cache (ccache/sccache)" ON)
+
+if(ENABLE_COMPILER_CACHE)
+    find_program(COMPILER_CACHE NAMES ccache sccache)
+    if(COMPILER_CACHE)
+        set(CMAKE_CXX_COMPILER_LAUNCHER ${COMPILER_CACHE})
+        message(STATUS "Compiler cache enabled: ${COMPILER_CACHE}")
+    endif()
+endif()
+
 
 # ------------------------------
 # Qt 依赖查找
@@ -96,7 +106,7 @@ qt_add_executable(appMusicPlayer
     inc/miniaudio.h
     inc/mpris_server.hpp
     inc/musiclistmodel.h
-    inc/Precompiled.h
+    inc/PCH.h
     inc/SimpleThreadPool.hpp
     inc/stb_image_resize2.h
     inc/stb_image_write.h
@@ -115,6 +125,11 @@ qt_add_executable(appMusicPlayer
     src/SysMediaService.cpp
     src/UIController.cpp
 
+)
+
+target_precompile_headers(appMusicPlayer
+    PRIVATE
+        inc/PCH.h
 )
 
 target_compile_definitions(appMusicPlayer

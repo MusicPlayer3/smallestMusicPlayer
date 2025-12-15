@@ -1,45 +1,8 @@
 #include "FileScanner.hpp"
 #include "CoverCache.hpp"
 #include "MetaData.hpp"
-#include "Precompiled.h"
-#include <print>
-#include <chrono>
-#include <filesystem>
-#include <format>
-
-// ================= TagLib Headers =================
-#include <taglib/fileref.h>
-#include <taglib/tag.h>
-#include <taglib/tfile.h>
-#include <taglib/mpegfile.h>
-#include <taglib/id3v2tag.h>
-#include <taglib/attachedpictureframe.h>
-#include <taglib/flacfile.h>
-#include <taglib/mp4file.h>
-#include <taglib/mp4tag.h>
-#include <taglib/mp4coverart.h>
-#include <taglib/asffile.h>
-#include <taglib/asftag.h>
-#include <taglib/asfpicture.h>
-#include <taglib/wavfile.h>
-#include <taglib/aifffile.h>
-#include <taglib/dsffile.h>
-
-#include <queue>
-#include <condition_variable>
-#include <functional>
-#include <vector>
-#include <string>
-#include <memory>
-#include <sstream> // 确保引入 stringstream
+#include "PCH.h"
 #include "SimpleThreadPool.hpp"
-
-// 引入 uchardet
-#include <uchardet.h>
-
-// 引入 SDL 用于字符编码转换
-#include <SDL.h>
-
 namespace fs = std::filesystem;
 
 // ==========================================
@@ -670,7 +633,6 @@ static AudioTechInfo getAudioTechInfo(const std::string &filePath)
                     info.bitDepth = bytes * 8;
                 }
             }
-            
         }
     }
 

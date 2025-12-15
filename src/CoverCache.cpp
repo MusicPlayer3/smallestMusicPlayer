@@ -1,5 +1,4 @@
 #include "CoverCache.hpp"
-#include <QDebug>
 #include "CoverImage.hpp"
 
 namespace fs = std::filesystem;

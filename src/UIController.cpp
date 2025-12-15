@@ -1,12 +1,6 @@
 #include "uicontroller.h"
 #include "FileScanner.hpp"
 #include "MediaController.hpp"
-#include <QDebug>
-#include <QUrl>
-#include <algorithm>
-#include <cmath>
-#include <qcolor.h>
-#include <qimage.h>
 #include "PlaylistNode.hpp"
 #include "AudioPlayer.hpp"
 

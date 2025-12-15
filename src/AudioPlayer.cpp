@@ -1,8 +1,6 @@
 #define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
 #include "AudioPlayer.hpp"
-#include <iostream>
-#include <algorithm>
-#include <cmath>
 #include "SimpleThreadPool.hpp"
 
 // --- Helper Functions ---

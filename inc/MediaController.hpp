@@ -4,7 +4,7 @@
 #include "AudioPlayer.hpp"
 #include "FileScanner.hpp"
 #include "PlaylistNode.hpp"
-#include "Precompiled.h"
+#include "PCH.h"
 
 namespace fs = std::filesystem;
 

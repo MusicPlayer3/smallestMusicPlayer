@@ -3,11 +3,7 @@
 
 #include "MetaData.hpp"
 #include "PlaylistNode.hpp"
-#include <future>
-#include <vector>
-#include <atomic>
-#include <thread>
-#include <mutex>
+#include "PCH.h"
 
 class FileScanner
 {

@@ -1,15 +1,3 @@
-#include <QGuiApplication>
-#include <QApplication>
-#include <QQmlApplicationEngine>
-#include <QQmlContext>
-#include <QtQuickControls2/QQuickStyle>
-#include <QtGlobal>
-#include <QCommandLineParser>
-#include <QDebug>
-#include <thread>
-#include <iostream>
-#include <atomic>
-
 #include "AudioPlayer.hpp"
 #include "musiclistmodel.h"
 #include "uicontroller.h"

@@ -1,13 +1,7 @@
 #ifndef MUSICLISTMODEL_H
 #define MUSICLISTMODEL_H
 
-#include <QAbstractListModel>
-#include <QList>
-#include <QString>
-#include <QUrl>
-#include <QMap>
-#include <memory>
-#include <vector>
+#include "PCH.h"
 
 class PlaylistNode;
 

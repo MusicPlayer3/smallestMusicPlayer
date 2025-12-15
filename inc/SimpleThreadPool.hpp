@@ -1,9 +1,7 @@
 #ifndef SIMPLETHREADPOOL_HPP
 #define SIMPLETHREADPOOL_HPP
 
-#include "Precompiled.h"
-#include <future>
-#include <functional>
+#include "PCH.h"
 
 class SimpleThreadPool
 {
