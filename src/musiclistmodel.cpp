@@ -171,14 +171,13 @@ MusicItem MusicListModel::createItemFromNode(PlaylistNode *node, int id)
         // [新增] 歌曲额外信息
         item.extraInfo = formatSongInfo(node);
 
-        std::string coverPath = meta.getAlbum();
-        if (!coverPath.empty())
+        if (!item.album.isEmpty())
         {
-            item.imageSource = "image://covercache/" + QString::fromStdString(coverPath);
+            item.imageSource = "image://covercache/" + item.album;
         }
         else
         {
-            item.imageSource = "";
+            item.imageSource = "image://covercache/" + item.title;
         }
         item.isPlaying = false;
     }
@@ -344,7 +343,6 @@ void MusicListModel::applySort()
         // 注意：reorderChildren 接收的是 shared_ptr，我们需要适配一下 comparator
         m_currentDirectoryNode->reorderChildren([&](const std::shared_ptr<PlaylistNode> &a, const std::shared_ptr<PlaylistNode> &b)
                                                 { return comparator(a.get(), b.get()); });
-
     }
 }
 

@@ -16,7 +16,7 @@ public:
     // Tipssssssssssssssss：当你想要使用我们的Image服务的时候，
     // 请记住这个格式哟“image://[provider_id]/[image_id]"
     // [provider_id] -> covercache   [image_id] -> 你的专辑名称哦
-    // EG:image://covercache/Thriller 或者 source: "image://covercache/" + currentAlbumName(这个是你外部修改的专辑名称)
+    // EG:image://covercache/Thriller 或者 source: "image://covercache/" + currentAlbumName/currentTitle(这个是你外部修改的专辑名称)
 
     /**
      * @brief 响应 QML 的图片请求

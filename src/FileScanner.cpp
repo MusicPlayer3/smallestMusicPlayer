@@ -841,7 +841,7 @@ static std::shared_ptr<PlaylistNode> processSingleFile(const std::string &filePa
         auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
         MetaData md = FileScanner::getMetaData(filePath);
 
-        std::string albumKey = md.getAlbum().empty() ? "Unknown" : md.getAlbum();
+        std::string albumKey = md.getAlbum().empty() ? md.getTitle() : md.getAlbum();
         fileNode->setCoverKey(albumKey);
         processTrackCover(filePath, albumKey);
         fileNode->setMetaData(md);
