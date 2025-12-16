@@ -30,7 +30,7 @@ include(CheckCXXCompilerFlag)
 include(FindPackageHandleStandardArgs)
 
 # ------------------------------
-# FFMPEG、SDL2 和 TagLib 查找
+# FFMPEG 和 TagLib 查找
 # ------------------------------
 if(WIN32)
     # --- Windows 平台配置 ---
@@ -38,11 +38,6 @@ if(WIN32)
     set(FFMPEG_INCLUDE_DIRS ${FFMPEG_ROOT}/include)
     set(FFMPEG_LIBRARY_DIRS ${FFMPEG_ROOT}/lib)
     set(FFMPEG_LIBRARIES avformat avcodec avutil swscale swresample avfilter)
-
-    set(SDL2_ROOT "C:/sdl2/SDL2_2.32.2" CACHE PATH "Path to SDL2 install directory on Windows.")
-    set(SDL2_INCLUDE_DIRS ${SDL2_ROOT}/include)
-    set(SDL2_LIBRARY_DIRS ${SDL2_ROOT}/lib)
-    set(SDL2_LIBRARIES SDL2)
 
     set(TAGLIB_ROOT "C:/msys64/mingw64" CACHE PATH "Path to TagLib install directory on Windows.")
     set(TAGLIB_INCLUDE_DIRS ${TAGLIB_ROOT}/include)
@@ -52,24 +47,23 @@ if(WIN32)
     set(SDBUSCPP_FOUND FALSE)
 
     find_package_handle_standard_args(FFMPEG DEFAULT_MSG FFMPEG_INCLUDE_DIRS FFMPEG_LIBRARIES)
-    find_package_handle_standard_args(SDL2 DEFAULT_MSG SDL2_INCLUDE_DIRS SDL2_LIBRARIES)
     find_package_handle_standard_args(TAGLIB DEFAULT_MSG TAGLIB_INCLUDE_DIRS TAGLIB_LIBRARIES)
 
-    if(NOT FFMPEG_FOUND OR NOT SDL2_FOUND OR NOT TAGLIB_FOUND)
-        message(FATAL_ERROR "FFmpeg, SDL2 or TagLib not found. Please check paths and library names.")
+    if(NOT FFMPEG_FOUND OR NOT TAGLIB_FOUND)
+        message(FATAL_ERROR "FFmpeg or TagLib not found. Please check paths and library names.")
     endif()
 
-    message(STATUS "Windows mode: FFMPEG, SDL2 and TagLib configured with hardcoded paths.")
+    message(STATUS "Windows mode: FFMPEG and TagLib configured with hardcoded paths.")
 
 else()
     # --- Linux / POSIX ---
     message(STATUS "Linux/POSIX mode: Using PkgConfig to find dependencies.")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libavutil libswscale libswresample libavfilter)
-    pkg_check_modules(SDL2 REQUIRED sdl2)
     pkg_check_modules(TAGLIB REQUIRED taglib)
     pkg_check_modules(SDBUSCPP REQUIRED sdbus-c++)
     pkg_check_modules(UCHARDET REQUIRED uchardet)
+    pkg_check_modules(SPDLOG REQUIRED spdlog)
 endif()
 
 # ------------------------------
@@ -78,9 +72,9 @@ endif()
 include_directories(
     ${CMAKE_SOURCE_DIR}/inc
     ${FFMPEG_INCLUDE_DIRS}
-    ${SDL2_INCLUDE_DIRS}
     ${TAGLIB_INCLUDE_DIRS}
     ${UCHARDET_INCLUDE_DIRS}
+    ${SPDLOG_INCLUDE_DIRS}
 )
 
 if(SDBUSCPP_FOUND)
@@ -190,7 +184,6 @@ if(MSVC)
 
     target_link_directories(appMusicPlayer PRIVATE
         ${FFMPEG_LIBRARY_DIRS}
-        ${SDL2_LIBRARY_DIRS}
         ${TAGLIB_LIBRARY_DIRS}
     )
 else()
@@ -203,7 +196,6 @@ else()
     if(WIN32)
         target_link_directories(appMusicPlayer PRIVATE
             ${FFMPEG_LIBRARY_DIRS}
-            ${SDL2_LIBRARY_DIRS}
             ${TAGLIB_LIBRARY_DIRS}
         )
     endif()
@@ -227,11 +219,11 @@ target_link_libraries(appMusicPlayer
     Qt6::QuickControls2
     Qt6::Widgets
     ${FFMPEG_LIBRARIES}
-    ${SDL2_LIBRARIES}
     ${TAGLIB_LIBRARIES}
     z
     ${UCHARDET_LIBRARIES}
     MyThirdPartyLibs
+    ${SPDLOG_LIBRARIES}
 )
 
 if(SDBUSCPP_FOUND)
@@ -268,8 +260,8 @@ install(SCRIPT ${deploy_script})
 message(STATUS "------------------------------------------------")
 message(STATUS "Build Config Summary:")
 message(STATUS "FFmpeg libraries: ${FFMPEG_LIBRARIES}")
-message(STATUS "SDL2 libraries: ${SDL2_LIBRARIES}")
 message(STATUS "TagLib libraries: ${TAGLIB_LIBRARIES}")
+message(STATUS "SpdLog libraries: ${SPDLOG_LIBRARIES}")
 
 if(SDBUSCPP_FOUND)
     message(STATUS "SDBUSCPP: Included")

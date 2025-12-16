@@ -16,7 +16,6 @@
 #include <vector>
 #include <cstring>
 #include <unordered_set>
-#include <print>
 #include <chrono>
 #include <format>
 #include <functional>
@@ -32,22 +31,38 @@
 #include <random>
 
 // ================= TagLib Headers =================
-#include <taglib/fileref.h>
 #include <taglib/tag.h>
-#include <taglib/tfile.h>
+#include <taglib/fileref.h>
+#include <taglib/tpropertymap.h>
 #include <taglib/mpegfile.h>
 #include <taglib/id3v2tag.h>
+#include <taglib/id3v2frame.h>
 #include <taglib/attachedpictureframe.h>
 #include <taglib/flacfile.h>
 #include <taglib/mp4file.h>
-#include <taglib/mp4tag.h>
-#include <taglib/mp4coverart.h>
+#include <taglib/vorbisfile.h>
+#include <taglib/xiphcomment.h>
 #include <taglib/asffile.h>
-#include <taglib/asftag.h>
-#include <taglib/asfpicture.h>
+#include <taglib/apefile.h>
 #include <taglib/wavfile.h>
 #include <taglib/aifffile.h>
+#include <taglib/opusfile.h>
+#include <taglib/wavpackfile.h>
+#include <taglib/trueaudiofile.h>
+#include <taglib/mpcfile.h>
 #include <taglib/dsffile.h>
+#include <taglib/apefile.h>
+#include <taglib/apetag.h>
+
+// 操作系统原生字符处理头文件
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <iconv.h>
+#include <errno.h>
+#endif
+
+namespace fs = std::filesystem;
 
 // ffmpeg headers
 extern "C"
@@ -63,20 +78,20 @@ extern "C"
 #include "stb_image_resize2.h"
 #include "stb_image_write.h"
 
-// sdl2
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_audio.h>
-#include <SDL2/SDL_stdinc.h>
-
 // uchardet
 #include <uchardet.h>
 
+// miniaudio header
 #include "miniaudio.h"
 
-#define USE_QT_
+// spdlog header
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 
-#ifdef USE_QT_
+constexpr std::string_view LOG_NAME = "globalLogger";
 
+// Qt Headers
 #include <QImage>
 #include <QSize>
 #include <QDebug>
@@ -105,7 +120,4 @@ extern "C"
 #include <qdebug.h>
 #include <qcolor.h>
 #include <qimage.h>
-
-#endif
-
 #endif

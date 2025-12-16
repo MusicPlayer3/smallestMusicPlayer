@@ -20,6 +20,11 @@ public:
 
     void clear();
 
+    bool hasKey(const std::string &album)
+    {
+        return instance().get(album) != nullptr;
+    }
+
 private:
     CoverCache() = default;
 

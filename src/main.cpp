@@ -20,6 +20,32 @@
 static struct termios g_orig_termios;
 static std::atomic<bool> g_terminal_modified(false);
 
+#include <taglib/tdebuglistener.h> // 必须引入
+#include <csignal>
+
+// 1. 定义监听器类
+class TrapDebugListener : public TagLib::DebugListener
+{
+public:
+    void printMessage(const TagLib::String &msg) override
+    {
+        // // 打印到标准错误输出
+        // std::cerr << "[TagLib Trap] " << msg << std::endl;
+
+        // // 只要出现 Invalid UTF-8 就中断
+        // if (msg.find("Invalid UTF-8") != -1)
+        // {
+        //     std::cerr << "!!! 捕捉到目标错误，触发断点 !!!" << std::endl;
+        //     std::raise(SIGTRAP); // Linux 专用中断信号
+        // }
+#ifdef DEBUG
+        spdlog::debug("[TagLib Trap] {}", msg.toCString());
+#else
+
+#endif
+    }
+};
+
 // 恢复终端设置
 void resetTerminalMode()
 {
@@ -233,6 +259,48 @@ void runTerminalMode(QCoreApplication &app, const QString &rootDir)
 }
 #endif
 
+void initLogger()
+{
+    try
+    {
+        // 默认日志等级
+        spdlog::level::level_enum default_level;
+#ifdef DEBUG
+        default_level = spdlog::level::debug;
+#else
+        default_level = spdlog::level::err;
+#endif
+        // 初始化日志系统
+        auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+        console_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [thread %t] %v");
+
+        // 文件日志相关
+        const std::string log_file_name = "applog.log";
+        const size_t max_size = 1024 * 1024 * 10; // 10 MB
+        const size_t max_files = 3;
+        auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+            log_file_name, max_size, max_files);
+        file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [thread %t] %v");
+
+        std::vector<spdlog::sink_ptr> sinks{console_sink, file_sink};
+
+        // 创建并注册 logger
+        auto logger = std::make_shared<spdlog::logger>(LOG_NAME.data(), sinks.begin(), sinks.end());
+
+        // 5. 设置初始日志级别
+        logger->set_level(default_level);
+
+        // 注册全局 logger
+        spdlog::register_logger(logger);
+        spdlog::set_default_logger(logger);
+        spdlog::flush_every(std::chrono::milliseconds(100));
+    }
+    catch (const spdlog::spdlog_ex &ex)
+    {
+        std::cerr << "Global Logger initialization failed: " << ex.what() << "\n";
+    }
+}
+
 // --- Main Entry Point ---
 
 #if defined(Q_OS_WIN)
@@ -241,6 +309,7 @@ Q_DECL_EXPORT int qMain(int argc, char *argv[])
 int main(int argc, char *argv[])
 #endif
 {
+    TagLib::setDebugListener(new TrapDebugListener());
 #ifdef DEBUG
     av_log_set_level(AV_LOG_INFO);
 #endif
@@ -250,14 +319,6 @@ int main(int argc, char *argv[])
 #endif
     // qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
 #ifdef __linux__
-    // qputenv("SDL_AUDIODRIVER", "pulseaudio");
-    // 2. 【新增】设置 SDL 应用程序名称
-    // 这会让 pactl list sink-inputs 显示 "MusicPlayer" 而不是 "SDL Application"
-    SDL_SetHint(SDL_HINT_APP_NAME, "MusicPlayer");
-
-    // 3. 【新增】明确告诉 Linux 这是一个媒体播放器流
-    // 这有助于系统进行策略管理（比如电话进来自动暂停音乐）
-    SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
     setenv("PULSE_PROP", "media.role=music", 0); // 0 表示不覆盖，如果已设置则保持
 #endif
 
@@ -286,6 +347,8 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    // 创建logger
+    initLogger();
     // 2. 分支处理：无 GUI 模式
     if (!useGui)
     {
