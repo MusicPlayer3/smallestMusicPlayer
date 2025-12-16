@@ -53,6 +53,10 @@
 #include <taglib/dsffile.h>
 #include <taglib/apefile.h>
 #include <taglib/apetag.h>
+#include "unsynchronizedlyricsframe.h"
+#ifdef TAGLIB_DSF_FILE_H
+#include <taglib/dsffile.h>
+#endif
 
 // 操作系统原生字符处理头文件
 #ifdef _WIN32
