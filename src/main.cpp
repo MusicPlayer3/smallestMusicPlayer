@@ -5,6 +5,7 @@
 // 引入后端逻辑控制器
 #include "MediaController.hpp"
 #include "CoverCache.hpp"
+#include "PCH.h"
 
 // --- Linux Terminal Control Section ---
 #if defined(Q_OS_LINUX)

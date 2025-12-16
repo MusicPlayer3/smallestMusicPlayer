@@ -95,7 +95,7 @@ extern "C"
 #include <QtConcurrent/QtConcurrent>
 #include <QFutureWatcher>
 #include <QGuiApplication>
-#include <QApplication>
+#include <QtWidgets/QApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QtQuickControls2/QQuickStyle>

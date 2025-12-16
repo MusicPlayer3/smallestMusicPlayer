@@ -1,0 +1,10 @@
+# SingleheaderLibrary/.clangd
+
+# 禁止为这个目录建立索引
+# 这会阻止 Clangd 将这里的文件选为 headers 的“宿主”
+Index:
+  Background: Skip
+
+# 再次确保这里的代码不会被 Tidy 检查打扰
+Diagnostics:
+  Suppress: "*"
