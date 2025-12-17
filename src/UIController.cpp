@@ -432,51 +432,6 @@ void UIController::checkAndUpdateOutputMode()
     }
 }
 
-void UIController::search(const QString &query)
-{
-    QVariantList results;
-    QString trimmedQuery = query.trimmed();
-    if (trimmedQuery.isEmpty())
-        return;
-
-    auto root = m_mediaController.getRootNode();
-    if (root)
-    {
-        doSearchRecursive(root.get(), trimmedQuery, results);
-    }
-    emit searchResultFound(results);
-}
-
-void UIController::doSearchRecursive(PlaylistNode *node, const QString &query, QVariantList &results)
-{
-    if (!node)
-        return;
-    for (const auto &child : node->getChildren())
-    {
-        if (child->isDir())
-        {
-            doSearchRecursive(child.get(), query, results);
-        }
-        else
-        {
-            QString title = QString::fromStdString(child->getMetaData().getTitle());
-            QString artist = QString::fromStdString(child->getMetaData().getArtist());
-            QString fileName = QString::fromStdString(child->getPath());
-            if (title.contains(query, Qt::CaseInsensitive) || artist.contains(query, Qt::CaseInsensitive) || fileName.contains(query, Qt::CaseInsensitive))
-            {
-                QVariantMap item;
-                item["itemTitle"] = title.isEmpty() ? "Unknown Title" : title;
-                item["itemArtist"] = artist.isEmpty() ? "Unknown Artist" : artist;
-                item["itemPath"] = QString::fromStdString(child->getPath());
-                item["isFolder"] = false;
-                item["itemImageSource"] = child->getMetaData().getCoverPath().empty() ?
-                                              "" :
-                                              QString::fromStdString(child->getMetaData().getCoverPath());
-                results.append(item);
-            }
-        }
-    }
-}
 
 // [生成波形] 改为异步
 void UIController::generateWaveformForNode(PlaylistNode *node)

@@ -78,9 +78,6 @@ private:
     // 检查路径归属
     bool isPathUnderRoot(const fs::path &nodePath) const;
 
-    // 递归搜索辅助函数
-    void searchRecursive(PlaylistNode *scope, const std::string &query, std::vector<PlaylistNode *> &results);
-
 public:
     static MediaController &getInstance()
     {
@@ -144,8 +141,6 @@ public:
     bool isScanCplt();
     std::shared_ptr<PlaylistNode> getRootNode();
 
-    // 输入字符串，返回匹配的歌曲节点列表
-    std::vector<PlaylistNode *> searchSongs(const std::string &query);
 };
 
 #endif
