@@ -112,8 +112,14 @@ private:
     // 递归搜索辅助函数
     void recursiveSearch(PlaylistNode *node, const QString &query, QList<MusicItem> &results, int &idCounter);
 
-    // [新增] 应用排序
+    // [修改] 应用排序 (对外接口，发送信号)
     void applySort();
+
+    // [新增] 执行排序逻辑 (内部函数，不发送信号)
+    void performSort(bool syncBackend);
+
+    // [新增] 比较逻辑提取
+    bool lessThan(PlaylistNode *nodeA, PlaylistNode *nodeB) const;
 
     // [新增] 格式化辅助函数
     QString formatDuration(int64_t microsec);
@@ -135,6 +141,9 @@ private:
     // 排序状态
     int m_sortType = SortByTitle;
     bool m_sortReverse = false;
+
+    // [新增] 标记当前是否处于搜索模式
+    bool m_isSearching = false;
 
     enum MusicRoles
     {

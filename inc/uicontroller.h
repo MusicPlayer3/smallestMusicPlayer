@@ -73,7 +73,6 @@ public:
     }
     int outputMode() const;
 
-    Q_INVOKABLE void search(const QString &query);
 
     // [修改] 应用混音参数 (QML 调用)
     Q_INVOKABLE void applyMixingParams(int sampleRate, int formatIndex);
@@ -81,6 +80,8 @@ public:
     // [新增] 获取当前设备实际参数 (用于 UI 初始化)
     // 返回 Map: { "sampleRate": int, "formatIndex": int }
     Q_INVOKABLE QVariantMap getCurrentDeviceParams();
+
+    void prepareForQuit();
 
 signals:
     // ... [原有的信号保持不变] ...
@@ -100,7 +101,6 @@ signals:
     void isShuffleChanged();
     void isSeekingChanged();
     void repeatModeChanged();
-    void searchResultFound(QVariantList results);
     void waveformHeightsChanged();
     void outputModeChanged();
     void mixingParamsApplied(int actualSampleRate, int actualFormatIndex);
@@ -134,7 +134,6 @@ private:
     void checkAndUpdateRepeatModeState();
     void checkAndUpdateOutputMode();
     void generateWaveformForNode(PlaylistNode *node);
-    void doSearchRecursive(PlaylistNode *node, const QString &query, QVariantList &results);
 
     AVSampleFormat indexToAvFormat(int index);
     int avFormatToIndex(AVSampleFormat fmt);

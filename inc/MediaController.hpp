@@ -12,16 +12,20 @@ class SysMediaService;
 
 enum class RepeatMode : std::uint8_t
 {
-    None,     // 不启用重复 (播放完列表最后一首停止)
-    Playlist, // 启用播放列表重复 (播放完最后一首回到第一首)
-    Single    // 启用单曲重复 (单曲循环)
+    None,     // 不启用重复
+    Playlist, // 启用播放列表重复
+    Single    // 启用单曲重复
 };
 
 class MediaController
 {
 private:
+    // 私有构造，强制使用 init/destroy
     MediaController();
     ~MediaController();
+
+    // 静态指针，用于显式管理生命周期
+    static MediaController *s_instance;
 
     // --- 核心模块 ---
     std::shared_ptr<SysMediaService> mediaService = nullptr;
@@ -46,9 +50,9 @@ private:
     // --- 播放参数 ---
     std::atomic<double> volume{1.0};
     std::atomic<bool> isShuffle{false};
-    std::atomic<bool> isPlaying{false}; // 逻辑播放状态
+    std::atomic<bool> isPlaying{false};
 
-    std::atomic<RepeatMode> repeatMode{RepeatMode::None}; // 当前重复模式
+    std::atomic<RepeatMode> repeatMode{RepeatMode::None};
 
     // --- 监控与自动化 ---
     std::thread monitorThread;
@@ -78,26 +82,36 @@ private:
     // 检查路径归属
     bool isPathUnderRoot(const fs::path &nodePath) const;
 
-    // 递归搜索辅助函数
-    void searchRecursive(PlaylistNode *scope, const std::string &query, std::vector<PlaylistNode *> &results);
-
 public:
-    static MediaController &getInstance()
-    {
-        static MediaController instance;
-        return instance;
-    }
-
+    // 删除拷贝和赋值，保留单例访问
     MediaController(const MediaController &) = delete;
     MediaController &operator=(const MediaController &) = delete;
 
+    // [新增] 显式初始化和销毁
+    static void init();
+    static void destroy();
+
+    // [修改] 获取实例，不再创建，仅返回指针引用
+    // 如果未调用 init()，此处行为未定义（或抛出异常），由 main 保证顺序
+    static MediaController &getInstance()
+    {
+        if (!s_instance)
+        {
+            throw std::runtime_error("MediaController not initialized! Call init() first.");
+        }
+        return *s_instance;
+    }
+
+    // [新增] 之前的 cleanup 可以保留，由 destroy 调用
+    void cleanup();
+
     // --- 播放控制 ---
-    void play(); // 恢复播放 或 播放当前选定
+    void play();
     void pause();
-    void playpluse(); // 播放/暂停切换
+    void playpluse();
     void stop();
-    void next(); // 下一首 (由当前播放模式决定)
-    void prev(); // 上一首 (基于 history 队列)
+    void next();
+    void prev();
     void seek(int64_t pos_microsec);
 
     // --- 模式设置 ---
@@ -109,10 +123,8 @@ public:
     {
         return isPlaying.load();
     }
-    // 重复模式设置
     void setRepeatMode(RepeatMode mode);
     RepeatMode getRepeatMode();
-    // 输出模式设置
     void setMixingParameters(int sampleRate, AVSampleFormat smapleFormat);
     void setOUTPUTMode(outputMod mode);
     outputMod getOUTPUTMode();
@@ -120,18 +132,8 @@ public:
     AudioParams getDeviceParameters();
 
     // --- 列表与导航交互 ---
-
-    // 用户在UI列表中点击了某首歌
     void setNowPlayingSong(PlaylistNode *node);
-
     PlaylistNode *findFirstValidAudio(PlaylistNode *node);
-
-    // 目录导航：进入子目录
-    // void enterDirectory(PlaylistNode *dirNode);
-    // // 目录导航：返回上一级 (操作 currentDir)
-    // void returnParentDirectory();
-
-    // PlaylistNode *getCurrentDirectory();
     PlaylistNode *getCurrentPlayingNode();
 
     // --- 状态获取 ---
@@ -143,9 +145,6 @@ public:
     void startScan();
     bool isScanCplt();
     std::shared_ptr<PlaylistNode> getRootNode();
-
-    // 输入字符串，返回匹配的歌曲节点列表
-    std::vector<PlaylistNode *> searchSongs(const std::string &query);
 };
 
 #endif

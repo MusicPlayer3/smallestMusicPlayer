@@ -1,8 +1,32 @@
 #include "MediaController.hpp"
 #include "AudioPlayer.hpp"
-#include "SysMediaService.hpp" // 确保包含此头文件
+#include "SysMediaService.hpp"
 
-// --- 静态辅助函数：递归查找第一个有效音频 ---
+// [新增] 静态成员初始化
+MediaController *MediaController::s_instance = nullptr;
+
+// [新增] 显式初始化
+void MediaController::init()
+{
+    if (!s_instance)
+    {
+        s_instance = new MediaController();
+    }
+}
+
+// [新增] 显式销毁
+void MediaController::destroy()
+{
+    if (s_instance)
+    {
+        // 先清理内部线程
+        s_instance->cleanup();
+        // 再删除对象
+        delete s_instance;
+        s_instance = nullptr;
+    }
+}
+
 PlaylistNode *MediaController::findFirstValidAudio(PlaylistNode *node)
 {
     if (!node)
@@ -30,8 +54,6 @@ PlaylistNode *MediaController::findFirstValidAudio(PlaylistNode *node)
     return nullptr;
 }
 
-// --- 构造与析构 ---
-
 MediaController::MediaController()
 {
     player = std::make_shared<AudioPlayer>();
@@ -40,23 +62,58 @@ MediaController::MediaController()
     monitorRunning = true;
     monitorThread = std::thread(&MediaController::monitorLoop, this);
 
-    // [修改] 保持原有逻辑，Windows下不实例化真正的 Service，
-    // 但下面的所有调用都需要判空。
 #ifndef __WIN32__
     mediaService = std::make_shared<SysMediaService>(*this);
 #endif
 }
 
-MediaController::~MediaController()
+// [修改] cleanup 逻辑
+void MediaController::cleanup()
 {
+    spdlog::info("[MediaController] Cleanup started.");
+
+    // 1. 停止监控线程
     monitorRunning = false;
     if (monitorThread.joinable())
     {
         monitorThread.join();
     }
+    spdlog::info("[MediaController] Monitor thread stopped.");
+
+    // 2. 停止扫描器
+    if (scanner)
+    {
+        scanner->stopScan();
+        scanner.reset();
+    }
+
+    // 3. 停止播放器 (这是最关键的一步)
+    if (player)
+    {
+        // 先暂停，避免更多回调
+        player->pause();
+        // 销毁对象，这将触发 AudioPlayer 的析构，进而 uninit miniaudio
+        player.reset();
+    }
+
+    // 4. 服务
+    if (mediaService)
+    {
+        mediaService.reset();
+    }
+
+    spdlog::info("[MediaController] Cleanup finished.");
 }
 
-// --- 监控线程 ---
+MediaController::~MediaController()
+{
+    // 如果直接 delete 而没调 cleanup，这里做个保底
+    if (monitorThread.joinable())
+    {
+        monitorRunning = false;
+        monitorThread.join();
+    }
+}
 
 void MediaController::monitorLoop()
 {
@@ -64,14 +121,16 @@ void MediaController::monitorLoop()
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
+        // 判空保护
+        if (!player)
+            break;
+
         std::string realCurrentPath = player->getCurrentPath();
         int64_t currentAbsMicroseconds = player->getCurrentPositionMicroseconds();
 
         bool justSwitched = false;
 
-        // ---------------------------------------------------------
-        // 情况 A: 物理文件发生了切换 (外部调用 setPath 或 列表循环逻辑触发)
-        // ---------------------------------------------------------
+        // 情况 A: 物理文件切换
         if (!realCurrentPath.empty() && realCurrentPath != lastDetectedPath)
         {
             std::lock_guard<std::recursive_mutex> lock(controllerMutex);
@@ -112,9 +171,7 @@ void MediaController::monitorLoop()
 
             lastDetectedPath = realCurrentPath;
         }
-        // ---------------------------------------------------------
-        // 情况 B: 同一文件内的 CUE 分轨切换 (常规播放)
-        // ---------------------------------------------------------
+        // 情况 B: CUE 分轨切换
         else if (isPlaying.load() && !realCurrentPath.empty() && realCurrentPath == lastDetectedPath)
         {
             std::lock_guard<std::recursive_mutex> lock(controllerMutex);
@@ -149,9 +206,7 @@ void MediaController::monitorLoop()
                 }
             }
         }
-        // ---------------------------------------------------------
-        // [修复] 情况 C: 播放器底层已自然结束并清空路径 (例如 Seek 到末尾)
-        // ---------------------------------------------------------
+        // 情况 C: 播放结束
         else if (isPlaying.load() && realCurrentPath.empty() && !lastDetectedPath.empty())
         {
             // 如果 logic 是 Playing，且刚才还有路径，现在突然没了，说明底层 AudioPlayer 跑完了
@@ -178,11 +233,12 @@ void MediaController::monitorLoop()
             }
         }
 
-        // 2. 检测播放是否自然停止
-        if (isPlaying.load() && player->getNowPlayingTime() > 0 && !player->isPlaying())
+        // 自然停止检测
+        if (player && isPlaying.load() && player->getNowPlayingTime() > 0 && !player->isPlaying())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            if (!player->isPlaying() && !player->getCurrentPath().empty())
+            // 再次检查 player 是否存在
+            if (player && !player->isPlaying() && !player->getCurrentPath().empty())
             {
                 isPlaying = false;
                 if (mediaService)
@@ -190,19 +246,13 @@ void MediaController::monitorLoop()
             }
         }
 
-        // 更新播放进度
-        if (isPlaying.load())
+        if (isPlaying.load() && !justSwitched)
         {
-            if (!justSwitched)
-            {
-                if (mediaService)
-                    mediaService->setPosition(std::chrono::microseconds(getCurrentPosMicroseconds()));
-            }
+            if (mediaService)
+                mediaService->setPosition(std::chrono::microseconds(getCurrentPosMicroseconds()));
         }
     }
 }
-
-// --- 核心逻辑 ---
 
 PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current, bool ignoreSingleRepeat)
 {
@@ -262,6 +312,8 @@ PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current, bool ign
 
 void MediaController::preloadNextSong()
 {
+    if (!player)
+        return;
     PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
     if (nextNode)
     {
@@ -305,8 +357,14 @@ PlaylistNode *MediaController::pickRandomSong(PlaylistNode *scope)
 
 void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
 {
-    if (!node || node->isDir())
+    if (!player)
+    {
         return;
+    }
+    if (!node || node->isDir())
+    {
+        return;
+    }
 
     // 1. 历史记录处理
     if (currentPlayingSongs && currentPlayingSongs != node && !isAutoSwitch)
@@ -319,7 +377,7 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     std::string oldPath = player->getCurrentPath();
     std::string newPath = node->getPath();
 
-    // [修改] 确定预期状态：
+    // 确定预期状态：
     // 使用 isPlaying.load() 来判断。
     // 如果当前是播放中 (isPlaying==true)，切歌后 shouldPlay=true (继续播放)。
     // 如果当前是暂停中 (isPlaying==false)，切歌后 shouldPlay=false (保持暂停)。
@@ -385,7 +443,7 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     // 4. 更新元数据
     updateMetaData(node);
 
-    // [修改] 判空保护并设置 MPRIS 状态
+    // 判空保护并设置 MPRIS 状态
     if (mediaService)
     {
         if (shouldPlay)
@@ -404,6 +462,10 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
 void MediaController::play()
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+    if (!player)
+    {
+        return;
+    }
 
     if (!currentPlayingSongs)
     {
@@ -418,33 +480,28 @@ void MediaController::play()
         return;
     }
 
-    // 用户明确点击播放，强制播放
     player->play();
     isPlaying = true;
 
-    // [修改] 判空保护
     if (mediaService)
     {
         mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
     }
-#ifdef DEBUG
-    SDL_Log("[MediaController] play()");
-#endif
 }
 
 void MediaController::pause()
 {
+    if (!player)
+    {
+        return;
+    }
     player->pause();
     isPlaying = false;
 
-    // [修改] 判空保护
     if (mediaService)
     {
         mediaService->setPlayBackStatus(mpris::PlaybackStatus::Paused);
     }
-#ifdef DEBUG
-    SDL_Log("[MediaController] pause()");
-#endif
 }
 
 void MediaController::playpluse()
@@ -457,11 +514,14 @@ void MediaController::playpluse()
 
 void MediaController::stop()
 {
+    if (!player)
+    {
+        return;
+    }
     player->pause();
     seek(0);
     isPlaying = false;
 
-    // [修改] 判空保护
     if (mediaService)
     {
         mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
@@ -485,8 +545,12 @@ void MediaController::next()
 void MediaController::prev()
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+    if (!player)
+    {
+        return;
+    }
 
-    if (getCurrentPosMicroseconds() > 10000000) // 10秒
+    if (getCurrentPosMicroseconds() > 10000000)
     {
         seek(0);
         return;
@@ -500,14 +564,12 @@ void MediaController::prev()
         std::string oldPath = player->getCurrentPath();
         std::string newPath = prevNode->getPath();
 
-        // [修改] 状态判断逻辑：同 playNode
         bool shouldPlay = isPlaying.load();
 
         currentPlayingSongs = prevNode;
 
         if (oldPath != newPath)
         {
-            // 切换不同文件：让 AudioPlayer 处理状态保持
             player->setPath(newPath);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
@@ -520,7 +582,6 @@ void MediaController::prev()
         }
         else
         {
-            // 同文件回退
             if (shouldPlay && !player->isPlaying())
             {
                 player->play();
@@ -535,7 +596,6 @@ void MediaController::prev()
         lastDetectedPath = newPath;
         updateMetaData(prevNode);
 
-        // [修改] 判空保护
         if (mediaService)
         {
             if (shouldPlay)
@@ -560,15 +620,11 @@ void MediaController::prev()
 void MediaController::setNowPlayingSong(PlaylistNode *node)
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-    // 这里调用 playNode。根据上面 playNode 的逻辑，它会保持当前状态。
-    // 如果想要"点击歌单中的歌强制播放"，可以在这里判断：
     playNode(node);
     if (!isPlaying)
     {
         play();
     }
-    // 但根据需求"保持状态"，直接调用即可。
-    // playNode(node);
 }
 
 // --- 模式设置 ---
@@ -599,39 +655,16 @@ bool MediaController::getShuffle()
 void MediaController::setVolume(double vol)
 {
     volume = vol;
-    player->setVolume(vol);
+    if (player)
+    {
+        player->setVolume(vol);
+    }
 }
 
 double MediaController::getVolume()
 {
     return volume;
 }
-
-// --- 目录导航 ---
-
-// void MediaController::enterDirectory(PlaylistNode *dirNode)
-// {
-//     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-//     if (dirNode && dirNode->isDir())
-//     {
-//         currentDir = dirNode;
-//     }
-// }
-
-// void MediaController::returnParentDirectory()
-// {
-//     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-//     if (currentDir && currentDir->getParent())
-//     {
-//         currentDir = currentDir->getParent().get();
-//     }
-// }
-
-// PlaylistNode *MediaController::getCurrentDirectory()
-// {
-//     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-//     return currentDir;
-// }
 
 PlaylistNode *MediaController::getCurrentPlayingNode()
 {
@@ -653,7 +686,6 @@ void MediaController::updateMetaData(PlaylistNode *node)
         data.setCoverPath(FileScanner::extractCoverToTempFile(data));
     }
 
-    // [修改] 判空保护
     if (mediaService)
     {
         mediaService->setMetaData(data);
@@ -662,6 +694,10 @@ void MediaController::updateMetaData(PlaylistNode *node)
 
 int64_t MediaController::getCurrentPosMicroseconds()
 {
+    if (!player)
+    {
+        return 0;
+    }
     int64_t absPos = player->getCurrentPositionMicroseconds();
     int64_t offset = 0;
 
@@ -672,7 +708,6 @@ int64_t MediaController::getCurrentPosMicroseconds()
     }
 
     int64_t relPos = absPos - offset;
-    // SDL_Log("[MediaController]: current absPos: %ld, offset: %ld, relPos: %ld", absPos, offset, relPos);
     return (relPos < 0) ? 0 : relPos;
 }
 
@@ -683,11 +718,19 @@ int64_t MediaController::getDurationMicroseconds()
     {
         return currentPlayingSongs->getMetaData().getDuration();
     }
-    return player->getDurationMicroseconds();
+    if (player)
+    {
+        return player->getDurationMicroseconds();
+    }
+    return 0;
 }
 
 void MediaController::seek(int64_t pos_microsec)
 {
+    if (!player)
+    {
+        return;
+    }
     static std::chrono::time_point<std::chrono::steady_clock> lastSeekTime;
     if (std::chrono::steady_clock::now() - lastSeekTime < std::chrono::milliseconds(100))
     {
@@ -703,15 +746,11 @@ void MediaController::seek(int64_t pos_microsec)
     }
     player->seek(offset + pos_microsec);
 
-    // [修改] 判空保护
     if (mediaService)
     {
         mediaService->setPosition(std::chrono::microseconds(pos_microsec));
     }
     lastSeekTime = std::chrono::steady_clock::now();
-#ifdef DEBUG
-    SDL_Log("[MediaController]: seek to %ld", pos_microsec);
-#endif
 }
 
 // --- 初始化与扫描 ---
@@ -719,16 +758,26 @@ void MediaController::seek(int64_t pos_microsec)
 void MediaController::setRootPath(const std::string &path)
 {
     rootPath = path;
-    scanner->setRootDir(rootPath.string());
+    if (scanner)
+    {
+        scanner->setRootDir(rootPath.string());
+    }
 }
 
 void MediaController::startScan()
 {
-    scanner->startScan();
+    if (scanner)
+    {
+        scanner->startScan();
+    }
 }
 
 bool MediaController::isScanCplt()
 {
+    if (!scanner)
+    {
+        return false;
+    }
     bool cplt = scanner->isScanCompleted();
     if (cplt && rootNode == nullptr)
     {
@@ -748,7 +797,9 @@ bool MediaController::isPathUnderRoot(const fs::path &nodePath) const
     fs::path canonicalRoot = fs::weakly_canonical(this->rootPath);
     fs::path canonicalNode = fs::weakly_canonical(nodePath);
     if (canonicalNode == canonicalRoot)
+    {
         return false;
+    }
     fs::path relativePath = canonicalNode.lexically_relative(canonicalRoot);
     return !relativePath.empty() && relativePath.string().find("..") != 0;
 }
@@ -758,7 +809,6 @@ void MediaController::setRepeatMode(RepeatMode mode)
     bool changed = (repeatMode.load() != mode);
     repeatMode.store(mode);
 
-    // 模式改变可能会改变“下一首”的预测，更新预加载
     if (changed)
     {
         std::lock_guard<std::recursive_mutex> lock(controllerMutex);
@@ -771,180 +821,12 @@ RepeatMode MediaController::getRepeatMode()
     return repeatMode.load();
 }
 
-// ==========================================
-// 1. 定义权重常量 (你可以根据喜好调整)
-// ==========================================
-namespace SearchWeights
-{
-const int SCORE_TITLE = 100;   // 歌名最重要
-const int SCORE_ARTIST = 80;   // 歌手次之
-const int SCORE_ALBUM = 60;    // 专辑
-const int SCORE_FILENAME = 40; // 文件名保底
-
-// 匹配类型的倍率
-const double MULTIPLIER_EXACT = 3.0;    // 完全一样 (e.g. 搜"Hello" 命中 "Hello")
-const double MULTIPLIER_PREFIX = 1.5;   // 开头就是 (e.g. 搜"He" 命中 "Hello")
-const double MULTIPLIER_CONTAINS = 1.0; // 中间包含 (e.g. 搜"el" 命中 "Hello")
-} // namespace SearchWeights
-
-// ==========================================
-// 2. 辅助结构体：用于存储临时搜索结果和分数
-// ==========================================
-struct ScoredResult
-{
-    PlaylistNode *node;
-    int score;
-
-    // 用于排序：分数高的在前面
-    bool operator>(const ScoredResult &other) const
-    {
-        return score > other.score;
-    }
-};
-
-// ==========================================
-// 3. 辅助函数：计算单个字段的匹配分数
-// ==========================================
-// 参数：text(源文本), queryLower(小写的搜索词), baseWeight(该字段的基础分)
-static int calculateFieldScore(const std::string &text, const std::string &queryLower, int baseWeight)
-{
-    if (text.empty())
-        return 0;
-
-    // 为了匹配，需要将源文本转小写（注意：这里会有内存分配，追求极致性能可用 string_view + 自定义比较）
-    std::string textLower = text;
-    std::transform(textLower.begin(), textLower.end(), textLower.begin(),
-                   [](unsigned char c)
-                   { return std::tolower(c); });
-
-    size_t pos = textLower.find(queryLower);
-
-    // 1. 如果没找到，0分
-    if (pos == std::string::npos)
-    {
-        return 0;
-    }
-
-    // 2. 计算匹配质量
-    double multiplier = SearchWeights::MULTIPLIER_CONTAINS;
-
-    if (textLower == queryLower)
-    {
-        // 完全匹配：分数最高
-        multiplier = SearchWeights::MULTIPLIER_EXACT;
-    }
-    else if (pos == 0)
-    {
-        // 前缀匹配：分数较高 (比如搜 "周"，"周杰伦" 排在 "小周" 前面)
-        multiplier = SearchWeights::MULTIPLIER_PREFIX;
-    }
-
-    return static_cast<int>(baseWeight * multiplier);
-}
-
-// ==========================================
-// 4. 核心搜索逻辑实现
-// ==========================================
-
-// 声明递归函数 (修改了签名，传入 vector<ScoredResult>)
-static void searchRecursiveWithScore(PlaylistNode *scope, const std::string &queryLower, std::vector<ScoredResult> &results);
-
-std::vector<PlaylistNode *> MediaController::searchSongs(const std::string &query)
-{
-    std::vector<PlaylistNode *> finalResults;
-    if (query.empty())
-    {
-        return finalResults;
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-
-    // 1. 确定搜索根节点 (保持原有逻辑)
-    PlaylistNode *searchRoot = nullptr;
-    if (currentPlayingSongs && currentPlayingSongs->getParent())
-    {
-        searchRoot = currentPlayingSongs->getParent().get();
-    }
-    else if (currentDir)
-    {
-        searchRoot = currentDir;
-    }
-    else
-    {
-        searchRoot = rootNode.get();
-    }
-
-    if (!searchRoot)
-        return finalResults;
-
-    // 2. 预处理 query 为小写
-    std::string queryLower = query;
-    std::transform(queryLower.begin(), queryLower.end(), queryLower.begin(),
-                   [](unsigned char c)
-                   { return std::tolower(c); });
-
-    // 3. 收集带分数的结果
-    std::vector<ScoredResult> scoredResults;
-    searchRecursiveWithScore(searchRoot, queryLower, scoredResults);
-
-    // 4. 执行加权排序 (分数从高到低)
-    std::sort(scoredResults.begin(), scoredResults.end(), std::greater<ScoredResult>());
-
-    // 5. 提取 Node 指针到最终列表
-    finalResults.reserve(scoredResults.size());
-    for (const auto &res : scoredResults)
-    {
-        finalResults.push_back(res.node);
-    }
-
-    return finalResults;
-}
-
-// 递归函数的具体实现
-static void searchRecursiveWithScore(PlaylistNode *scope, const std::string &queryLower, std::vector<ScoredResult> &results)
-{
-    if (!scope)
-        return;
-
-    const auto &children = scope->getChildren();
-    for (const auto &child : children)
-    {
-        if (child->isDir())
-        {
-            // 如果是文件夹，继续递归
-            searchRecursiveWithScore(child.get(), queryLower, results);
-        }
-        else
-        {
-            // 是文件，开始多字段打分
-            const MetaData &meta = child->getMetaData();
-            int totalScore = 0;
-
-            // A. 匹配标题
-            totalScore += calculateFieldScore(meta.getTitle(), queryLower, SearchWeights::SCORE_TITLE);
-
-            // B. 匹配歌手
-            totalScore += calculateFieldScore(meta.getArtist(), queryLower, SearchWeights::SCORE_ARTIST);
-
-            // C. 匹配专辑
-            totalScore += calculateFieldScore(meta.getAlbum(), queryLower, SearchWeights::SCORE_ALBUM);
-
-            // D. 匹配文件名 (如果没有元数据，通常文件名很重要)
-            // 获取文件名 (例如 "song.mp3")
-            std::string filename = fs::path(child->getPath()).filename().string();
-            totalScore += calculateFieldScore(filename, queryLower, SearchWeights::SCORE_FILENAME);
-
-            // 如果总分大于0，说明至少有一个字段命中了
-            if (totalScore > 0)
-            {
-                results.push_back({child.get(), totalScore});
-            }
-        }
-    }
-}
-
 void MediaController::setMixingParameters(int sampleRate, AVSampleFormat smapleFormat)
 {
+    if (!player)
+    {
+        return;
+    }
     AudioParams params;
     params.sampleRate = sampleRate;
     params.sampleFormat = smapleFormat;
@@ -955,20 +837,35 @@ void MediaController::setMixingParameters(int sampleRate, AVSampleFormat smapleF
 
 void MediaController::setOUTPUTMode(outputMod mode)
 {
-    player->setOutputMode(mode);
+    if (player)
+    {
+        player->setOutputMode(mode);
+    }
 }
 
 outputMod MediaController::getOUTPUTMode()
 {
-    return player->getOutputMode();
+    if (player)
+    {
+        return player->getOutputMode();
+    }
+    return OUTPUT_MIXING;
 }
 
 AudioParams MediaController::getMixingParameters()
 {
-    return player->getMixingParameters();
+    if (player)
+    {
+        return player->getMixingParameters();
+    }
+    return AudioParams();
 }
 
 AudioParams MediaController::getDeviceParameters()
 {
-    return player->getDeviceParameters();
+    if (player)
+    {
+        return player->getDeviceParameters();
+    }
+    return AudioParams();
 }
