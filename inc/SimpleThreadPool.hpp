@@ -12,7 +12,8 @@ public:
         return pool;
     }
 
-    SimpleThreadPool(size_t threads) : stop(false)
+    SimpleThreadPool(size_t threads) :
+        stop(false)
     {
         // 限制最小线程数，防止单核机器出问题
         if (threads < 2)
@@ -59,15 +60,28 @@ public:
         return res;
     }
 
-    ~SimpleThreadPool()
+    // [修改] 增加手动关闭函数
+    void shutdown()
     {
         {
             std::unique_lock<std::mutex> lock(queue_mutex);
+            if (stop)
+                return; // 避免重复关闭
             stop = true;
         }
         condition.notify_all();
         for (std::thread &worker : workers)
-            worker.join();
+        {
+            if (worker.joinable())
+                worker.join();
+        }
+        workers.clear();
+    }
+
+    // [修改] 析构函数调用 shutdown
+    ~SimpleThreadPool()
+    {
+        shutdown();
     }
 
 private:

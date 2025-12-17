@@ -432,7 +432,6 @@ void UIController::checkAndUpdateOutputMode()
     }
 }
 
-
 // [生成波形] 改为异步
 void UIController::generateWaveformForNode(PlaylistNode *node)
 {
@@ -704,4 +703,22 @@ void UIController::updateVolumeState()
     checkAndUpdateVolumeState();
     checkAndUpdateShuffleState();
     checkAndUpdateRepeatModeState();
+}
+
+void UIController::prepareForQuit()
+{
+    qDebug() << "UIController: Stopping timers and watchers...";
+
+    // 1. 停止定时器
+    if (m_stateTimer.isActive())
+        m_stateTimer.stop();
+    if (m_volumeTimer.isActive())
+        m_volumeTimer.stop();
+
+    // 2. 取消异步任务
+    if (m_waveformWatcher.isRunning())
+    {
+        m_waveformWatcher.cancel();
+        m_waveformWatcher.waitForFinished();
+    }
 }

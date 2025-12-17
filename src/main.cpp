@@ -6,6 +6,7 @@
 #include "MediaController.hpp"
 #include "CoverCache.hpp"
 #include "PCH.h"
+#include "SimpleThreadPool.hpp"
 
 // --- Linux Terminal Control Section ---
 #if defined(Q_OS_LINUX)
@@ -309,7 +310,7 @@ Q_DECL_EXPORT int qMain(int argc, char *argv[])
 int main(int argc, char *argv[])
 #endif
 {
-    TagLib::setDebugListener(new TrapDebugListener());
+    // TagLib::setDebugListener(new TrapDebugListener());
 #ifdef DEBUG
     av_log_set_level(AV_LOG_INFO);
 #endif
@@ -367,32 +368,44 @@ int main(int argc, char *argv[])
 #endif
     }
 
-    // 3. 分支处理：GUI 模式 (原逻辑)
+    // 3. 分支处理：GUI 模式
     if (useGui)
     {
-        // QGuiApplication app(argc, argv);
         QApplication app(argc, argv);
+        // app.setQuitOnLastWindowClosed(true);
         QQuickStyle::setStyle("Basic");
-        QQmlApplicationEngine engine;
         app.setOrganizationName("MusicPlayer3");
         app.setApplicationName("MusicPlayer");
-        app.setDesktopFileName("music-player");
 
-        // 注册 Image Provider
+        // [重要] 1. 显式初始化 MediaController
+        spdlog::info("Initializing MediaController...");
+        MediaController::init();
+
+        QQmlApplicationEngine engine;
         engine.addImageProvider(QStringLiteral("covercache"), new CoverImageProvider);
 
-        // 实例化 UI 控制器
         UIController playerController;
         engine.rootContext()->setContextProperty("playerController", &playerController);
 
-        // 实例化模型并加载初始数据
         MusicListModel *musicModel = new MusicListModel(&app);
-
-        // 如果在 GUI 模式下也想利用 rootDir，可以在这里添加逻辑
-        // if (!rootDir.isEmpty()) { ... }
-
-        // musicModel->loadInitialData();
         engine.rootContext()->setContextProperty("musicListModel", musicModel);
+
+        // [重要] 2. 连接退出信号
+        QObject::connect(&app, &QCoreApplication::aboutToQuit, [&]()
+                         {
+            spdlog::info("Application about to quit. Starting cleanup...");
+            
+            // 停止 UI 定时器
+            playerController.prepareForQuit();
+            
+            // 显式销毁 MediaController (触发 AudioPlayer 析构)
+            // 此时 main 还没返回，Windows 线程环境是健康的
+            MediaController::destroy();
+            
+            // 停止线程池
+            SimpleThreadPool::instance().shutdown();
+            
+            spdlog::info("Cleanup sequence finished."); });
 
         QObject::connect(
             &engine,
@@ -403,7 +416,17 @@ int main(int argc, char *argv[])
             Qt::QueuedConnection);
 
         engine.loadFromModule("MusicPlayer", "Main");
-        return app.exec();
+
+        // 3. 进入事件循环
+        int ret = app.exec();
+
+        // 4. 双重保险：如果 aboutToQuit 没触发或有残留
+        // 在 main 返回前再次确保销毁
+        MediaController::destroy();
+        SimpleThreadPool::instance().shutdown();
+        spdlog::drop_all();
+        spdlog::shutdown();
+        return ret;
     }
 
     return 0;

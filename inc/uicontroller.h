@@ -81,6 +81,8 @@ public:
     // 返回 Map: { "sampleRate": int, "formatIndex": int }
     Q_INVOKABLE QVariantMap getCurrentDeviceParams();
 
+    void prepareForQuit();
+
 signals:
     // ... [原有的信号保持不变] ...
     void isScanningChanged(bool isScanning);

@@ -199,22 +199,38 @@ AudioPlayer::AudioPlayer()
 
 AudioPlayer::~AudioPlayer()
 {
+    spdlog::info("AudioPlayer: Destructing...");
+
+    // 1. 设置退出标志
     quitFlag.store(true);
     pathCondVar.notify_one();
     stateCondVar.notify_one();
 
-    if (decodeThread.joinable())
+    // 2. 停止设备 (确保不再有回调访问)
+    if (m_deviceInited)
     {
-        decodeThread.join();
+        ma_device_stop(&m_device);
+        // ma_device_uninit 会等待回调线程结束，确保不在持有 queueMutex 时调用它
+        ma_device_uninit(&m_device);
+        m_deviceInited = false;
     }
 
-    freeResources();
-    closeAudioDevice();
+    // 3. 停止 context
     if (m_contextInited)
     {
         ma_context_uninit(&m_context);
         m_contextInited = false;
     }
+
+    // 4. 等待解码线程
+    if (decodeThread.joinable())
+    {
+        decodeThread.join();
+    }
+
+    // 5. 释放其他资源
+    freeResources();
+    spdlog::info("AudioPlayer: Destruction complete.");
 }
 
 void AudioPlayer::freeResources()
@@ -1266,7 +1282,8 @@ struct SafePacket
     }
     SafePacket(const SafePacket &) = delete;
     SafePacket &operator=(const SafePacket &) = delete;
-    SafePacket(SafePacket &&other) noexcept : pkt(other.pkt)
+    SafePacket(SafePacket &&other) noexcept :
+        pkt(other.pkt)
     {
         other.pkt = nullptr;
     }
