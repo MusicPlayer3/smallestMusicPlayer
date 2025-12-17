@@ -1,16 +1,7 @@
 #ifndef AUDIOPLAYER_HPP
 #define AUDIOPLAYER_HPP
 
-#include "Precompiled.h"
-#include "miniaudio.h"
-#include <vector>
-#include <string>
-#include <queue>
-#include <mutex>
-#include <thread>
-#include <atomic>
-#include <condition_variable>
-#include <functional>
+#include "PCH.h"
 
 enum outputMod : std::uint8_t
 {

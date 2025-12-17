@@ -1,13 +1,14 @@
 #ifndef _SYSTEM_MEDIA_SERVICE_HPP_
 #define _SYSTEM_MEDIA_SERVICE_HPP_
 
-#include <chrono>
 #include "MediaController.hpp"
 #ifdef __linux__
 
 #include "mpris_server.hpp"
 #include <sdbus-c++/sdbus-c++.h>
 #endif
+
+#include "PCH.h"
 
 #ifdef __WIN32__
 

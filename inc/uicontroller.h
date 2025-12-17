@@ -1,16 +1,6 @@
 #ifndef UICONTROLLER_H
 #define UICONTROLLER_H
 
-#include <QObject>
-#include <QTimer>
-#include <QVariant>
-#include <QDir>
-#include <QCoreApplication>
-#include <QStandardPaths>
-#include <QDateTime>
-#include <vector>
-#include <QtConcurrent/QtConcurrent>
-#include <QFutureWatcher>
 
 #include "MediaController.hpp"
 

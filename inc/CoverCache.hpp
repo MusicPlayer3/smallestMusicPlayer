@@ -1,12 +1,7 @@
-#ifndef COVER_HPP
-#define COVER_HPP
-#include "Precompiled.h"
+#ifndef __COVER_CACHE_HPP__
+#define __COVER_CACHE_HPP__
+#include "PCH.h"
 #include "CoverImage.hpp"
-#include <mutex>
-#include <unordered_map>
-#include <memory>
-#include <string>
-#include <array>
 
 class CoverCache
 {
@@ -24,6 +19,11 @@ public:
     std::shared_ptr<CoverImage> get(const std::string &album);
 
     void clear();
+
+    bool hasKey(const std::string &album)
+    {
+        return instance().get(album) != nullptr;
+    }
 
 private:
     CoverCache() = default;

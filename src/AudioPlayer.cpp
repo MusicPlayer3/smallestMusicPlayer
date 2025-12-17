@@ -1,8 +1,4 @@
-#define MINIAUDIO_IMPLEMENTATION
 #include "AudioPlayer.hpp"
-#include <iostream>
-#include <algorithm>
-#include <cmath>
 #include "SimpleThreadPool.hpp"
 
 // --- Helper Functions ---
@@ -121,7 +117,7 @@ bool AudioPlayer::AudioStreamSource::initDecoder(const std::string &inputPath, c
 
     if (avformat_open_input(&pFormatCtx, path.c_str(), nullptr, nullptr) != 0)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Cannot open audio file: %s", path.c_str());
+        spdlog::error("Cannot open audio file: {}", path);
         return false;
     }
     if (avformat_find_stream_info(pFormatCtx, nullptr) < 0)
@@ -186,8 +182,7 @@ bool AudioPlayer::AudioStreamSource::openSwrContext(const AudioParams &devicePar
     int ret = swr_init(swrCtx);
     if (ret < 0)
     {
-        my_av_strerror(ret);
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "swr_init failed: %s", errorBuffer);
+        spdlog::error("swr_init failed: {}", my_av_strerror(ret));
         swr_free(&swrCtx);
         return false;
     }
@@ -198,12 +193,6 @@ bool AudioPlayer::AudioStreamSource::openSwrContext(const AudioParams &devicePar
 
 AudioPlayer::AudioPlayer()
 {
-    if (SDL_Init(SDL_INIT_AUDIO) != 0)
-    {
-        std::cerr << "SDL_Init Error: " << SDL_GetError() << std::endl;
-        // Consider throwing exception instead of exit
-    }
-
     av_channel_layout_default(&mixingParams.ch_layout, 2);
     decodeThread = std::thread(&AudioPlayer::mainDecodeThread, this);
 }
@@ -226,7 +215,6 @@ AudioPlayer::~AudioPlayer()
         ma_context_uninit(&m_context);
         m_contextInited = false;
     }
-    SDL_Quit();
 }
 
 void AudioPlayer::freeResources()
@@ -272,7 +260,7 @@ bool AudioPlayer::setPath(const std::string &path)
 {
     if (!isValidAudio(path))
     {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Invalid audio: %s", path.c_str());
+        spdlog::warn("Invalid audio: {}", path);
         return false;
     }
 
@@ -570,7 +558,7 @@ bool AudioPlayer::openAudioDevice()
     // 初始化 context
     if (ma_context_init(NULL, 0, &ctxConfig, &m_context) != MA_SUCCESS)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to initialize audio context");
+        spdlog::error("[AudioPlayer:569] Failed to initialize audio context");
         return false;
     }
     m_contextInited = true;
@@ -877,7 +865,7 @@ void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActiv
         }
         else
         {
-            SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Read error: %s", my_av_strerror(ret).c_str());
+            spdlog::error("Read error: {}", my_av_strerror(ret));
             isSongLoopActive = false;
         }
         return;
@@ -1014,7 +1002,7 @@ void AudioPlayer::triggerPreload(double currentPts)
         {
             m_preloadSource = std::move(src);
             hasPreloaded.store(true);
-            SDL_Log("Preloaded: %s", pPath.c_str());
+            spdlog::debug("Preloading: {}", pPath);
         }
         else
         {

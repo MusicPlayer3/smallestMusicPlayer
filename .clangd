@@ -1,16 +1,71 @@
-CompileFlags:
-  Add: [-Wno-unknown-warning-option]
-  Remove: [-mno-direct-extern-access]
+# .clangd
 
+# =========================================================
+# 1. 全局基础配置
+# =========================================================
+CompileFlags:
+  Add:
+    - -Wno-unknown-warning-option
+    - -std=c++23
+    - -Wall
+  Remove:
+    - -mno-direct-extern-access
+    - -std=c++17
+    - -include     # 移除 GCC .gch 引用
+    - -include-pch
+
+Diagnostics:
+  Suppress:
+    - "unused-function"
+    - "typecheck_invalid_operands"
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+  Designators: Yes
+
+---
+
+# =========================================================
+# 2. 核心源码配置 (注入 PCH)
+# =========================================================
+# 仅对 src, inc, qml 目录生效
+If:
+  PathMatch: .*/(src|inc|qml)/.*
+
+CompileFlags:
+  Add:
+    # 强制让这些源码包含 PCH.h
+    - -include=inc/PCH.h
 
 Diagnostics:
   ClangTidy:
     Add:
       - performance-*
       - bugprone-*
+      - modernize-*
+      - misc-*
+      - readability-*
     Remove:
-      # 如果想排除某些检查
       - modernize-use-trailing-return-type
+      - modernize-use-auto
+      - readability-identifier-length
+      - readability-function-cognitive-complexity
     CheckOptions:
       readability-identifier-naming.VariableCase: CamelCase
-    FastCheckFilter: Strict  # 可选
+
+---
+
+# =========================================================
+# 3. 第三方库配置
+# =========================================================
+# 注意：这里不能写 Index: Skip，因为 Index 不支持 If。
+# Index 的禁用必须通过在该目录下放一个单独的 .clangd 文件实现（你已经做了）。
+If:
+  PathMatch: .*/SingleheaderLibrary/.*
+
+Diagnostics:
+  Suppress: "*"
+  ClangTidy:
+    Remove: ["*"]

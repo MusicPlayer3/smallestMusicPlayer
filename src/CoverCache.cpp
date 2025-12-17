@@ -1,8 +1,6 @@
 #include "CoverCache.hpp"
-#include <QDebug>
 #include "CoverImage.hpp"
 
-namespace fs = std::filesystem;
 
 void CoverCache::putCompressedFromPixels(const std::string &album,
                                          const unsigned char *srcPixels,
@@ -12,9 +10,7 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
     {
         if (channels != 4 && channels > 0)
         {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "CoverCache: Rejecting non-4-channel image for album %s (got %d)",
-                         album.c_str(), channels);
+            spdlog::error("[CoverCache:14]: Rejecting non-4-channel image for album {} (got {})", album, channels);
         }
         return;
     }
@@ -42,7 +38,7 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
     }
     catch (const std::bad_alloc &)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "CoverCache: Out of memory resizing image for album %s", album.c_str());
+        spdlog::error("[CoverCache:42]: Out of memory resizing image for album {}", album);
         return;
     }
 
@@ -74,7 +70,7 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
     }
     catch (const std::exception &e)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "CoverCache: Failed to create CoverImage for album %s: %s", album.c_str(), e.what());
+        spdlog::error("[CoverCache:74]: Failed to create CoverImage for album {}: {}", album, e.what());
     }
 }
 

@@ -1,6 +1,5 @@
 #include "SysMediaService.hpp"
 #include "MediaController.hpp"
-#include <functional> // for std::hash
 
 #ifdef __linux__
 SysMediaService::SysMediaService(MediaController &controller_) : controller(controller_)
@@ -9,7 +8,7 @@ SysMediaService::SysMediaService(MediaController &controller_) : controller(cont
 
     if (!server)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[SysMediaService] Error: Can't create MPRIS server. MPRIS disabled.\n");
+        spdlog::error("[SysMediaService] Error: Can't create MPRIS server. MPRIS disabled.");
         return;
     }
 
@@ -65,7 +64,7 @@ void SysMediaService::setMetaData(const std::string &title, const std::vector<st
 {
     if (!server)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[SysMediaService] Error: MPRIS server not initialized.\n");
+        spdlog::error("[SysMediaService] Error: MPRIS server not initialized.\n");
         return;
     }
 
@@ -153,7 +152,7 @@ void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
 {
     if (!server)
     {
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "[SysMediaService] Error: MPRIS server not initialized.\n");
+        spdlog::error("[SysMediaService] Error: MPRIS server not initialized.");
         return;
     }
     server->set_playback_status(status);
@@ -173,48 +172,48 @@ void SysMediaService::triggerSeeked(std::chrono::microseconds position)
 
 void SysMediaService::onQuit()
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Quit signal received.\n");
+    spdlog::info("[SysMediaService] Quit signal received.");
     // TODO:quit
 }
 
 void SysMediaService::onNext()
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Next signal received.\n");
+    spdlog::info("[SysMediaService] Next signal received.");
     //  next
     controller.next();
 }
 
 void SysMediaService::onPrevious()
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Previous signal received.\n");
+    spdlog::info("[SysMediaService] Previous signal received.");
     //  previous
     controller.prev();
 }
 
 void SysMediaService::onPause()
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Pause signal received.\n");
+    spdlog::info("[SysMediaService] Pause signal received.");
     // pause
     controller.pause();
 }
 
 void SysMediaService::onPlayPause()
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] PlayPause signal received.\n");
+    spdlog::info("[SysMediaService] PlayPause signal received.");
     //  playPause
     controller.playpluse();
 }
 
 void SysMediaService::onStop()
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Stop signal received.\n");
+    spdlog::info("[SysMediaService] Stop signal received.");
     //  stop
     controller.stop();
 }
 
 void SysMediaService::onPlay()
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Play signal received.\n");
+    spdlog::info("[SysMediaService] Play signal received.");
     //  play
     controller.play();
     setPlayBackStatus(mpris::PlaybackStatus::Playing);
@@ -222,7 +221,13 @@ void SysMediaService::onPlay()
 
 void SysMediaService::onLoopStatusChanged(mpris::LoopStatus status)
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] LoopStatusChanged signal received: %d\n", status);
+    const char *statusStr =
+        (status == mpris::LoopStatus::None)     ? "None" :
+        (status == mpris::LoopStatus::Playlist) ? "Playlist" :
+        (status == mpris::LoopStatus::Track)    ? "Track" :
+                                                  "Unknown";
+    spdlog::info("[SysMediaService] LoopStatusChanged signal received. status:{}", statusStr);
+
     if (status == mpris::LoopStatus::None)
     {
         controller.setRepeatMode(RepeatMode::None);
@@ -239,20 +244,20 @@ void SysMediaService::onLoopStatusChanged(mpris::LoopStatus status)
 
 void SysMediaService::onShuffleChanged(bool shuffle)
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] ShuffleChanged signal received: %d\n", shuffle);
+    spdlog::info("[SysMediaService] ShuffleChanged signal received.,shuffle status:{}", shuffle);
     controller.setShuffle(shuffle);
 }
 
 void SysMediaService::onVolumeChanged(double volume)
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] VolumeChanged signal received: %f\n", volume);
+    spdlog::info("[SysMediaService] VolumeChanged signal received.,volume status:{}", volume);
     //  volumeChanged
     controller.setVolume(volume);
 }
 
 void SysMediaService::onSeek(std::chrono::microseconds offset)
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] Seek signal received: %lld\n", offset.count());
+    spdlog::info("[SysMediaService] Seek signal received.,offset count:{}",offset.count());
     //  seek
     int64_t currentPos = controller.getCurrentPosMicroseconds();
     int64_t duration = controller.getDurationMicroseconds();
@@ -274,7 +279,7 @@ void SysMediaService::onSeek(std::chrono::microseconds offset)
 
 void SysMediaService::onSetPosition(std::chrono::microseconds pos)
 {
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "[SysMediaService] SetPosition signal received: %lld\n", pos.count());
+    spdlog::info("[SysMediaService] SetPosition signal received.,pos count:{}",pos.count());
     // setPosition
     int64_t duration = controller.getDurationMicroseconds();
     int64_t position = pos.count();

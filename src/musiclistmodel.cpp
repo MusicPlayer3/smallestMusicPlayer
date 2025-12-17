@@ -1,11 +1,7 @@
 #include "musiclistmodel.h"
 #include "MediaController.hpp"
 #include "PlaylistNode.hpp"
-#include <QDebug>
-#include <filesystem>
-#include <qdebug.h>
-#include <QFileInfo>
-#include <QDateTime>
+
 
 // 引入封面缓存测试 (如果不需要可以移除)
 #include "CoverCache.hpp"

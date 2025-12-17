@@ -1,7 +1,7 @@
 #ifndef _COVERIMAGE_HPP_
 #define _COVERIMAGE_HPP_
 
-#include "Precompiled.h"
+#include "PCH.h"
 
 class CoverImage
 {

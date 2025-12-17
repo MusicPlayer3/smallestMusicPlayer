@@ -1,7 +1,6 @@
 #include "MediaController.hpp"
 #include "AudioPlayer.hpp"
 #include "SysMediaService.hpp" // 确保包含此头文件
-#include <random>
 
 // --- 静态辅助函数：递归查找第一个有效音频 ---
 PlaylistNode *MediaController::findFirstValidAudio(PlaylistNode *node)

@@ -2,9 +2,8 @@
 #define PLAYLISTNODE_HPP
 
 #include "MetaData.hpp"
-#include "Precompiled.h"
+#include "PCH.h"
 
-namespace fs = std::filesystem;
 
 // 播放列表节点：对应一个目录，下面挂子目录和子音频文件
 class PlaylistNode : public std::enable_shared_from_this<PlaylistNode>

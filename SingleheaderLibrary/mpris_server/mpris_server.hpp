@@ -271,7 +271,6 @@ public:
     void on_set_position(auto &&fn)
     {
         set_position_fn = fn;
-        std::cout << "set_position_fn" << std::endl;
         control_props_changed("CanSeek");
     }
     void on_open_uri(auto &&fn)
