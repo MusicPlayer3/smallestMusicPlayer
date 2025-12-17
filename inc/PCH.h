@@ -53,7 +53,7 @@
 #include <taglib/dsffile.h>
 #include <taglib/apefile.h>
 #include <taglib/apetag.h>
-#include "unsynchronizedlyricsframe.h"
+#include <taglib/unsynchronizedlyricsframe.h>
 #ifdef TAGLIB_DSF_FILE_H
 #include <taglib/dsffile.h>
 #endif
@@ -83,7 +83,7 @@ extern "C"
 #include "stb_image_write.h"
 
 // uchardet
-#include <uchardet.h>
+#include <uchardet/uchardet.h>
 
 // miniaudio header
 #include "miniaudio.h"
