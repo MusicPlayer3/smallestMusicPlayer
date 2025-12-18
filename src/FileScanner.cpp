@@ -11,11 +11,22 @@
 namespace
 {
 
+// 批量提交的任务数量，减少锁竞争并提高吞吐量
+constexpr size_t K_BATCH_SIZE = 64;
+
 // 支持的音频扩展名列表
 static const std::vector<std::string> kKnownAudioExtensions = {
     "mp3", "aac", "m4a", "ogg", "wma", "opus", "mpc", "mp+", "mpp",
     "flac", "ape", "wav", "aiff", "aif", "wv", "tta", "alac", "shn", "tak",
     "dsf", "dff", "dxd", "mka", "webm", "dts", "ac3", "truehd"};
+
+// 常见的封面文件名 (忽略大小写)
+static const std::unordered_set<std::string> kCoverFileNames = {
+    "cover", "folder", "front", "album", "art"};
+
+// 支持的图片扩展名
+static const std::unordered_set<std::string> kImageExts = {
+    ".jpg", ".jpeg", ".png", ".bmp"};
 
 static std::unordered_set<std::string> g_supportedAudioExts;
 static std::once_flag g_initFlag;
@@ -79,6 +90,14 @@ std::string getLowerExt(const std::string &path)
     std::string ext = fs::path(path).extension().string();
     std::ranges::transform(ext, ext.begin(), ::tolower);
     return ext;
+}
+
+// 辅助：检查文件名是否是常见的封面名
+bool isCoverFileName(const std::string &stem)
+{
+    std::string lowerStem = stem;
+    std::ranges::transform(lowerStem, lowerStem.begin(), ::tolower);
+    return kCoverFileNames.contains(lowerStem);
 }
 
 } // namespace
@@ -248,11 +267,6 @@ static std::string detectAndConvert(const std::string &rawData)
     }
     else if (detectedEncoding == "ASCII")
     {
-        // 如果 uchardet 认为是 ASCII，但 rawData 可能包含扩展 ASCII (0x80-0xFF)
-        // 例如 "A DECLARATION OF \xD7..." 可能会被误判。
-        // 在这种情况下，我们不转换，直接让它进入下面的 convertToUTF8 或者直接 sanitize
-        // 这里选择不做特殊处理，让 convertToUTF8("ASCII") 去处理，或者直接跳过转换
-        // 如果是 ASCII，直接 sanitize 返回即可
         return sanitizeUTF8(rawData);
     }
 
@@ -518,7 +532,6 @@ static std::string resolveSafeTag(TagLib::Tag *tag, const std::string &type)
         return "";
 
     // 1. 如果 TagLib 已经明确这是宽字符 (Unicode)，信赖它
-    // 只要有一个字符编码 > 255，说明它绝对不是简单的 Latin1/GBK 字节流
     bool hasWide = false;
     for (size_t i = 0; i < tagStr.length(); ++i)
     {
@@ -531,13 +544,10 @@ static std::string resolveSafeTag(TagLib::Tag *tag, const std::string &type)
 
     if (hasWide)
     {
-        // TagLib 内部已经是正确的 Unicode，直接转 UTF-8 并清洗
         return EncodingUtils::sanitizeUTF8(tagStr.to8Bit(true));
     }
 
-    // 2. 否则，它完全由单字节组成 (Latin1 或 被误读的 GBK/Big5)
-    // 提取原始字节流，完全交给 uchardet 去判断。
-    // 这里使用 to8Bit(false) 意味着如果是 Latin1 字符串，就按字节原样输出，不做 UTF-8 转换
+    // 2. 否则，它完全由单字节组成
     std::string raw = tagStr.to8Bit(false);
     return EncodingUtils::detectAndConvert(raw);
 }
@@ -814,238 +824,154 @@ static std::string findRealAudioFile(const fs::path &dirPath, const std::string 
 } // namespace CueUtils
 
 // ==========================================
-// 7. 目录扫描与树构建 (Directory Scanning)
+// 7. 扫描逻辑核心 (Scan Logic - Optimized)
 // ==========================================
 
-static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath, std::stop_token stoken);
-
-static std::shared_ptr<PlaylistNode> processSingleFile(const std::string &filePath)
+namespace ScannerLogic
 {
-    try
-    {
-        auto fileNode = std::make_shared<PlaylistNode>(filePath, false);
-        MetaData md = FileScanner::getMetaData(filePath);
 
-        std::string albumName = md.getAlbum();
-        std::string titleName = md.getTitle();
-        std::string albumKey = albumName.empty() ? titleName : albumName;
+// [Worker Task] 处理单个音频节点：读取元数据 + 提取封面
+static void processNodeTask(std::shared_ptr<PlaylistNode> node)
+{
+    if (!node)
+        return;
 
-        fileNode->setCoverKey(albumKey);
-        fileNode->setMetaData(md);
+    // 1. 读取基础 Metadata
+    MetaData md = FileScanner::getMetaData(node->getPath());
 
-        ImageHelpers::processTrackCover(filePath, albumKey);
-        return fileNode;
-    }
-    catch (...)
-    {
-        return nullptr;
-    }
+    // 2. 封面 Key 策略
+    std::string albumName = md.getAlbum();
+    std::string titleName = md.getTitle();
+    std::string albumKey = albumName.empty() ? titleName : albumName;
+
+    node->setCoverKey(albumKey);
+    node->setMetaData(md);
+
+    // 3. 提取嵌入封面并缓存 (CPU 密集型解压 + Resize)
+    ImageHelpers::processTrackCover(node->getPath(), albumKey);
 }
 
-static std::vector<std::shared_ptr<PlaylistNode>> processCueAndGetNodes(const fs::path &cuePath)
+// [Main Thread] CUE 文件逻辑：主线程解析结构，线程池处理元数据
+static void handleCueFile(
+    const fs::path &cuePath,
+    const std::shared_ptr<PlaylistNode> &parentNode,
+    std::vector<std::shared_ptr<PlaylistNode>> &batchBuffer)
 {
-    std::vector<std::shared_ptr<PlaylistNode>> resultNodes;
-    try
+    auto tracks = CueUtils::parseCueFile(cuePath);
+    fs::path dirPath = cuePath.parent_path();
+    auto &pool = SimpleThreadPool::instance().get_native_pool();
+
+    for (auto &track : tracks)
     {
-        fs::path dirPath = cuePath.parent_path();
-        auto tracks = CueUtils::parseCueFile(cuePath);
-
-        for (auto &track : tracks)
+        std::string realAudioPath = CueUtils::findRealAudioFile(dirPath, track.audioFile);
+        if (!realAudioPath.empty() && isffmpeg(realAudioPath))
         {
-            std::string realAudioPath = CueUtils::findRealAudioFile(dirPath, track.audioFile);
-            if (!realAudioPath.empty() && isffmpeg(realAudioPath))
-            {
-                auto trackNode = std::make_shared<PlaylistNode>(realAudioPath, false);
-                MetaData md = FileScanner::getMetaData(realAudioPath);
+            auto trackNode = std::make_shared<PlaylistNode>(realAudioPath, false);
+            parentNode->addChild(trackNode);
 
-                if (!track.title.empty())
-                    md.setTitle(track.title);
-                if (!track.performer.empty())
-                    md.setArtist(track.performer);
-                md.setOffset(track.startTime);
+            // 预设 CUE 中的信息
+            MetaData md;
+            if (!track.title.empty())
+                md.setTitle(track.title);
+            if (!track.performer.empty())
+                md.setArtist(track.performer);
+            md.setOffset(track.startTime);
+            if (track.duration > 0)
+                md.setDuration(track.duration);
 
-                if (track.duration > 0)
-                    md.setDuration(track.duration);
-                else
-                {
-                    int64_t rem = md.getDuration() - track.startTime;
-                    if (rem > 0)
-                        md.setDuration(rem);
+            md.setFilePath(realAudioPath);
+            trackNode->setMetaData(md);
+
+            // 异步任务：补充技术参数 (SampleRate/BitDepth) 和封面
+            (void)pool.submit_task([trackNode, track]()
+                                   {
+                auto tech = AudioInfoUtils::getAudioTechInfo(trackNode->getPath());
+                
+                auto currentMd = trackNode->getMetaData();
+                currentMd.setSampleRate(tech.sampleRate);
+                currentMd.setBitDepth(tech.bitDepth);
+                currentMd.setFormatType(tech.formatType);
+                currentMd.setParentDir(fs::path(trackNode->getPath()).parent_path().string());
+                
+                // 如果 CUE 没算出时长，用文件总时长-偏移
+                if (track.duration <= 0) {
+                    int64_t rem = tech.duration - track.startTime;
+                    if (rem > 0) currentMd.setDuration(rem);
                 }
-
-                std::string albumKey = md.getAlbum().empty() ? "Unknown" : md.getAlbum();
+                
+                std::string albumKey = currentMd.getAlbum().empty() ? "Unknown" : currentMd.getAlbum();
                 trackNode->setCoverKey(albumKey);
-                trackNode->setMetaData(md);
+                trackNode->setMetaData(currentMd);
 
-                ImageHelpers::processTrackCover(realAudioPath, albumKey);
-                resultNodes.push_back(trackNode);
-            }
+                ImageHelpers::processTrackCover(trackNode->getPath(), albumKey); });
         }
     }
-    catch (...)
-    {
-    }
-    return resultNodes;
 }
 
-static std::string findDirectoryCover(const fs::path &dirPath)
+// [Main Thread] 递归扫描并分发任务
+// [Optimization] 单次遍历时顺便检测封面文件，避免二次 IO
+static void scanAndDispatch(
+    const fs::path &dirPath,
+    const std::shared_ptr<PlaylistNode> &currentNode,
+    std::stop_token stoken,
+    std::vector<std::shared_ptr<PlaylistNode>> &batchBuffer)
 {
-    static const std::vector<std::string> coverNames = {"cover", "folder", "front", "album", "art"};
-    static const std::unordered_set<std::string> exts = {".jpg", ".jpeg", ".png", ".bmp"};
+    if (stoken.stop_requested())
+        return;
+    if (fs::is_symlink(dirPath))
+        return;
 
-    for (const auto &name : coverNames)
-    {
-        for (const auto &ext : exts)
-        {
-            fs::path p = dirPath / (name + ext);
-            if (fs::exists(p))
-                return p.string();
-        }
-    }
+    std::vector<fs::path> subDirs;
+    auto &pool = SimpleThreadPool::instance().get_native_pool();
+
+    // 记录本目录检测到的封面文件
+    std::string detectedDirCover;
+
     try
     {
         for (const auto &entry : fs::directory_iterator(dirPath))
         {
-            if (!entry.is_regular_file())
-                continue;
-            std::string ext = getLowerExt(entry.path().string());
-            if (exts.contains(ext))
-                return entry.path().string();
-        }
-    }
-    catch (...)
-    {
-    }
-    return "";
-}
-
-static std::string determineDirCover(const std::shared_ptr<PlaylistNode> &node, const fs::path &dirPath, bool &isAudioExtract)
-{
-    // 检查当前文件夹是否有封面图片
-    std::string cover = findDirectoryCover(dirPath);
-    if (!cover.empty())
-    {
-        isAudioExtract = false;
-        return cover;
-    }
-
-    // 深度优先搜索子文件夹中的图片文件
-    std::function<std::string(const std::shared_ptr<PlaylistNode> &)> findDeepImage =
-        [&](const std::shared_ptr<PlaylistNode> &n) -> std::string
-    {
-        // 先看下一级子目录本身是否有封面
-        for (const auto &c : n->getChildren())
-        {
-            if (c->isDir())
-            {
-                std::string res = findDirectoryCover(fs::path(c->getPath()));
-                if (!res.empty())
-                    return res;
-            }
-        }
-        // 再递归深层
-        for (const auto &c : n->getChildren())
-        {
-            if (c->isDir())
-            {
-                std::string res = findDeepImage(c);
-                if (!res.empty())
-                    return res;
-            }
-        }
-        return "";
-    };
-
-    cover = findDeepImage(node);
-    if (!cover.empty())
-    {
-        isAudioExtract = false;
-        return cover;
-    }
-    std::function<std::string(const std::shared_ptr<PlaylistNode> &)> findAudioWithCover =
-        [&](const std::shared_ptr<PlaylistNode> &n) -> std::string
-    {
-        // 优先遍历当前层级的所有文件
-        for (const auto &c : n->getChildren())
-        {
-            if (!c->isDir())
-            {
-                if (!TagLibHelpers::extractCoverDataGeneric(c->getPath()).isEmpty())
-                {
-                    return c->getPath();
-                }
-            }
-        }
-
-        // 当前层级没找到，再递归进入子文件夹寻找
-        for (const auto &c : n->getChildren())
-        {
-            if (c->isDir())
-            {
-                std::string r = findAudioWithCover(c);
-                if (!r.empty())
-                    return r;
-            }
-        }
-        return "";
-    };
-
-    cover = findAudioWithCover(node);
-    if (!cover.empty())
-    {
-        isAudioExtract = true;
-        return cover;
-    }
-
-    return "";
-}
-
-static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath, std::stop_token stoken)
-{
-    if (stoken.stop_requested())
-        return nullptr;
-    if (fs::is_symlink(dirPath))
-        return nullptr;
-
-    fs::path preferred = dirPath;
-    preferred.make_preferred();
-
-    std::string folderName = preferred.filename().string();
-    if (folderName.empty())
-        folderName = "Unknown_Folder";
-    folderName = EncodingUtils::detectAndConvert(folderName);
-
-    auto node = std::make_shared<PlaylistNode>(preferred.string(), true);
-    node->setCoverKey(folderName);
-
-    std::vector<std::future<std::shared_ptr<PlaylistNode>>> fileFutures;
-    std::vector<fs::path> subDirs;
-    std::set<std::string> processedFiles;
-
-    try
-    {
-        for (const auto &entry : fs::directory_iterator(preferred))
-        {
             if (stoken.stop_requested())
-                return nullptr;
+                return;
 
             if (entry.is_regular_file())
             {
                 std::string pathStr = entry.path().string();
+                std::string ext = getLowerExt(pathStr);
+
+                // 1. 处理音频文件
                 if (hasExtension(pathStr, ".cue"))
                 {
-                    auto nodes = processCueAndGetNodes(entry.path());
-                    for (auto &n : nodes)
-                    {
-                        node->addChild(n);
-                        processedFiles.insert(n->getPath());
-                    }
+                    handleCueFile(entry.path(), currentNode, batchBuffer);
                 }
                 else if (isffmpeg(pathStr))
                 {
-                    if (!processedFiles.contains(pathStr))
+                    auto fileNode = std::make_shared<PlaylistNode>(pathStr, false);
+                    currentNode->addChild(fileNode);
+                    batchBuffer.push_back(fileNode);
+
+                    // [Optimization] 批量提交 + 移动语义 (Zero-Copy)
+                    if (batchBuffer.size() >= K_BATCH_SIZE)
                     {
-                        fileFutures.push_back(SimpleThreadPool::instance().enqueue(processSingleFile, pathStr));
+                        // (void) 转换用于消除 nodiscard 警告
+                        (void)pool.submit_task([batch = std::move(batchBuffer)]()
+                                               {
+                            for(const auto& node : batch) {
+                                processNodeTask(node);
+                            } });
+                        // 移动后 batchBuffer 需要重新初始化
+                        batchBuffer = std::vector<std::shared_ptr<PlaylistNode>>();
+                        batchBuffer.reserve(K_BATCH_SIZE);
+                    }
+                }
+                // 2. [Optimization] 顺便检测封面图片
+                else if (detectedDirCover.empty() && kImageExts.contains(ext))
+                {
+                    std::string stem = entry.path().stem().string();
+                    if (isCoverFileName(stem))
+                    {
+                        detectedDirCover = pathStr;
+                        // 找到一个即可，不强制扫描所有图片
                     }
                 }
             }
@@ -1059,62 +985,145 @@ static std::shared_ptr<PlaylistNode> buildNodeFromDir(const fs::path &dirPath, s
     {
     }
 
+    // 如果顺路发现了封面，直接存入节点
+    if (!detectedDirCover.empty())
+    {
+        currentNode->setCoverPath(detectedDirCover);
+    }
+
+    // 递归子目录
     for (const auto &sd : subDirs)
     {
-        if (auto child = buildNodeFromDir(sd, stoken))
-            node->addChild(child);
+        if (stoken.stop_requested())
+            return;
+
+        fs::path p = sd;
+        p.make_preferred();
+        std::string folderName = p.filename().string();
+        folderName = EncodingUtils::detectAndConvert(folderName);
+
+        // 创建子目录节点，但暂时不挂载到 currentNode
+        auto childDirNode = std::make_shared<PlaylistNode>(p.string(), true);
+        childDirNode->setCoverKey(folderName);
+
+        // 先递归进入子目录进行扫描填充
+        scanAndDispatch(sd, childDirNode, stoken, batchBuffer);
+
+        // [Fix] 核心修改：扫描回来后进行判断
+        // 只有当子目录节点确实包含有效内容（文件或非空子目录）时，才将其真正添加到树中
+        if (!childDirNode->getChildren().empty())
+        {
+            currentNode->addChild(childDirNode);
+        }
     }
-    for (auto &fut : fileFutures)
+}
+
+// 递归查找深层封面 (Fallback Strategy)
+static std::string findDeepCoverRecursive(const std::shared_ptr<PlaylistNode> &node)
+{
+    // 1. 检查下一级目录是否在阶段1已经发现了封面
+    for (const auto &c : node->getChildren())
     {
-        if (auto child = fut.get())
-            node->addChild(child);
+        if (c->isDir())
+        {
+            if (!c->getCoverPath().empty())
+                return c->getCoverPath();
+        }
     }
+    // 2. 递归查找子目录
+    for (const auto &c : node->getChildren())
+    {
+        if (c->isDir())
+        {
+            std::string res = findDeepCoverRecursive(c);
+            if (!res.empty())
+                return res;
+        }
+    }
+    // 3. 检查子文件是否有已缓存的内嵌封面
+    for (const auto &c : node->getChildren())
+    {
+        if (!c->isDir())
+        {
+            if (CoverCache::instance().hasKey(c->getCoverKey()))
+                return c->getPath();
+        }
+    }
+    return "";
+}
 
-    if (node->getChildren().empty())
-        return nullptr;
-    node->sortChildren();
+// [Post Process] 后处理：聚合统计数据、确定封面
+static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_ptr<PlaylistNode> &node)
+{
+    uint64_t songs = 0;
+    uint64_t duration = 0;
 
-    uint64_t tSongs = 0;
-    uint64_t tDuration = 0;
     for (const auto &child : node->getChildren())
     {
         if (child->isDir())
         {
-            tSongs += child->getTotalSongs();
-            tDuration += child->getTotalDuration();
+            auto [s, d] = postProcessAggregation(child);
+            songs += s;
+            duration += d;
         }
         else
         {
-            tSongs++;
-            tDuration += (child->getMetaData().getDuration() / 1000000);
+            songs++;
+            duration += (child->getMetaData().getDuration() / 1000000);
         }
     }
-    node->setTotalSongs(tSongs);
-    node->setTotalDuration(tDuration);
 
-    bool isAudioExtract = false;
-    std::string coverPath = determineDirCover(node, preferred, isAudioExtract);
+    node->setTotalSongs(songs);
+    node->setTotalDuration(duration);
+    node->sortChildren();
 
-    if (!coverPath.empty())
+    // 目录封面逻辑
+    if (node->isDir())
     {
-        int w = 0, h = 0;
-        StbiPtr img(nullptr);
-        if (isAudioExtract)
+        std::string cover = node->getCoverPath(); // [Optimization] 优先使用阶段1检测到的封面
+        bool isAudioExtract = false;
+
+        // 如果阶段1没找到，尝试深层递归
+        if (cover.empty())
         {
-            auto d = TagLibHelpers::extractCoverDataGeneric(coverPath);
-            if (!d.isEmpty())
-                img = ImageHelpers::loadBufferAsRGBA((const unsigned char *)d.data(), d.size(), w, h);
+            cover = findDeepCoverRecursive(node);
+            if (!cover.empty())
+            {
+                // 如果返回的是音频文件路径，说明是内嵌封面
+                if (isffmpeg(cover))
+                    isAudioExtract = true;
+            }
         }
-        else
+
+        if (!cover.empty())
         {
-            img = ImageHelpers::loadFileAsRGBA(coverPath, w, h);
+            std::string folderName = fs::path(node->getPath()).filename().string();
+            folderName = EncodingUtils::detectAndConvert(folderName);
+
+            int w = 0, h = 0;
+            StbiPtr img(nullptr);
+            if (isAudioExtract)
+            {
+                auto d = TagLibHelpers::extractCoverDataGeneric(cover);
+                if (!d.isEmpty())
+                    img = ImageHelpers::loadBufferAsRGBA((const unsigned char *)d.data(), d.size(), w, h);
+            }
+            else
+            {
+                img = ImageHelpers::loadFileAsRGBA(cover, w, h);
+            }
+
+            if (img)
+            {
+                CoverCache::instance().putCompressedFromPixels(folderName, img.get(), w, h, 4);
+            }
         }
-        if (img)
-            CoverCache::instance().putCompressedFromPixels(folderName, img.get(), w, h, 4);
     }
 
-    return node;
+    return {songs, duration};
 }
+
+} // namespace ScannerLogic
 
 // ==========================================
 // 8. FileScanner 类实现
@@ -1128,14 +1137,17 @@ void FileScanner::setRootDir(const std::string &rootDir)
 {
     this->rootDir = rootDir;
 }
+
 const std::string FileScanner::getRootDir() const
 {
     return rootDir;
 }
+
 bool FileScanner::isScanCompleted() const
 {
     return hasScanCpld.load();
 }
+
 std::shared_ptr<PlaylistNode> FileScanner::getPlaylistTree() const
 {
     return rootNode;
@@ -1170,6 +1182,7 @@ void FileScanner::stopScan()
 
 void FileScanner::scanDir(std::stop_token stoken)
 {
+    // 0. 初始化
     initSupportedExtensions();
     fs::path rootPath(rootDir);
     rootPath.make_preferred();
@@ -1183,26 +1196,65 @@ void FileScanner::scanDir(std::stop_token stoken)
         return;
     }
 
+    // 1. 如果根路径本身就是文件
     if (fs::is_regular_file(rootPath))
     {
-        rootNode = processSingleFile(rootPath.string());
-        if (rootNode)
-        {
-            rootNode->setTotalSongs(1);
-            rootNode->setTotalDuration(rootNode->getMetaData().getDuration() / 1000000);
-        }
+        rootNode = std::make_shared<PlaylistNode>(rootPath.string(), false);
+        ScannerLogic::processNodeTask(rootNode); // 同步处理
+        rootNode->setTotalSongs(1);
+        rootNode->setTotalDuration(rootNode->getMetaData().getDuration() / 1000000);
+        hasScanCpld = true;
+        return;
     }
-    else
+
+    // 2. 初始化根节点
+    rootNode = std::make_shared<PlaylistNode>(rootPath.string(), true);
+    std::string folderName = rootPath.filename().string();
+    if (folderName.empty())
+        folderName = rootPath.string(); // Drive root case
+    rootNode->setCoverKey(EncodingUtils::detectAndConvert(folderName));
+
+    // =========================================================
+    // Phase 1: 流水线扫描 (Pipeline Scan & Dispatch)
+    // =========================================================
+    std::vector<std::shared_ptr<PlaylistNode>> batchBuffer;
+    batchBuffer.reserve(K_BATCH_SIZE);
+
+    ScannerLogic::scanAndDispatch(rootPath, rootNode, stoken, batchBuffer);
+
+    // 提交剩余的任务 (Flush buffer)
+    if (!batchBuffer.empty())
     {
-        rootNode = buildNodeFromDir(rootPath, stoken);
-        if (!rootNode)
-        {
-            rootNode = std::make_shared<PlaylistNode>(rootPath.string(), true);
-            rootNode->setTotalSongs(0);
-        }
+        auto &pool = SimpleThreadPool::instance().get_native_pool();
+        (void)pool.submit_task([batch = std::move(batchBuffer)]()
+                               {
+            for(const auto& node : batch) {
+                ScannerLogic::processNodeTask(node);
+            } });
     }
+
+    if (stoken.stop_requested())
+        return;
+
+    // =========================================================
+    // Phase 2: 等待所有任务完成 (Wait)
+    // =========================================================
+    SimpleThreadPool::instance().get_native_pool().wait();
+
+    if (stoken.stop_requested())
+        return;
+
+    // =========================================================
+    // Phase 3: 后处理聚合 (Aggregation & Clean up)
+    // =========================================================
+    ScannerLogic::postProcessAggregation(rootNode);
+
     hasScanCpld = true;
 }
+
+// ==========================================
+// 9. 静态公共工具函数实现
+// ==========================================
 
 MetaData FileScanner::getMetaData(const std::string &musicPath)
 {
@@ -1220,8 +1272,6 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
         musicData.setAlbum(TagLibHelpers::resolveSafeTag(tag, "Album"));
         if (tag->year() > 0)
             musicData.setYear(std::to_string(tag->year()));
-
-        // musicData.setLyrics(TagLibHelpers::extractLyrics(tag, f));
     }
     if (musicData.getTitle().empty())
     {
@@ -1277,7 +1327,6 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
         };
         std::string safeName = sanitize(fs::path(musicPath).stem().string());
 
-        // 简单检测图片格式
         std::string ext = ".jpg";
         if (coverData.size() >= 4 && coverData[0] == (char)0x89 && coverData[1] == 'P' && coverData[2] == 'N' && coverData[3] == 'G')
             ext = ".png";
@@ -1294,8 +1343,29 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
         }
     }
 
+    // 这里直接使用 helper 中的 findDirectoryCover
+    // 注意：这里的 scanner logic 不可见，需要把 findDirectoryCover 移出来或者重新实现
+    // 由于是静态辅助函数，这里重新简单实现一个基于文件名查找的逻辑即可，或者调用 ScannerLogic
+    // 但是 ScannerLogic 在匿名命名空间里，无法访问。
+    // 鉴于这是一个静态公用函数，通常用于单文件处理，这里保留最基本的逻辑：
     fs::path musicDir = fs::path(musicPath).parent_path();
-    auto coverPath = findDirectoryCover(musicDir);
+    // 简单的重新实现：
+    std::string coverPath;
+    for (const auto &name : kCoverFileNames)
+    {
+        for (const auto &ext : kImageExts)
+        {
+            fs::path p = musicDir / (name + ext);
+            if (fs::exists(p))
+            {
+                coverPath = p.string();
+                break;
+            }
+        }
+        if (!coverPath.empty())
+            break;
+    }
+
     if (!coverPath.empty())
     {
         metadata.setCoverPath(coverPath);
@@ -1304,7 +1374,7 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
     return "";
 }
 
-// 调试用打印
+// 调试辅助
 static void printNodeRecursive(const std::shared_ptr<PlaylistNode> &node, std::string prefix, bool isLast)
 {
     if (!node)
@@ -1323,9 +1393,16 @@ static void printNodeRecursive(const std::shared_ptr<PlaylistNode> &node, std::s
     else
     {
         const auto &md = node->getMetaData();
-        auto st = std::chrono::clock_cast<std::chrono::system_clock>(md.getLastWriteTime());
-        std::cout << std::format(" [FILE] Rate: {}Hz, Depth: {}bit, Fmt: {}, Date: {:%F}\n",
-                                 md.getSampleRate(), md.getBitDepth(), md.getFormatType(), st);
+        try
+        {
+            auto st = std::chrono::clock_cast<std::chrono::system_clock>(md.getLastWriteTime());
+            std::cout << std::format(" [FILE] Rate: {}Hz, Depth: {}bit, Fmt: {}, Date: {:%F}\n",
+                                     md.getSampleRate(), md.getBitDepth(), md.getFormatType(), st);
+        }
+        catch (...)
+        {
+            std::cout << " [FILE] (Time Error)\n";
+        }
     }
 
     const auto &children = node->getChildren();

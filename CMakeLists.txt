@@ -197,6 +197,12 @@ qt_add_qml_module(appMusicPlayer
 # 目标配置 (Include, Compile, Link)
 # ==============================================================================
 
+# 为 Debug 模式定义 DEBUG 宏
+target_compile_definitions(appMusicPlayer PRIVATE $<$<CONFIG:Debug>:DEBUG>)
+
+# 为 Release 模式定义 RELEASE 宏
+target_compile_definitions(appMusicPlayer PRIVATE $<$<CONFIG:Release>:RELEASE>)
+
 # 1. Include Directories
 target_include_directories(appMusicPlayer PRIVATE
     ${CMAKE_SOURCE_DIR}/inc
