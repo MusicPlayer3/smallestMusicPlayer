@@ -5,26 +5,90 @@
 #include "SimpleThreadPool.hpp"
 
 // ==========================================
-// 1. 内部常量与资源管理 (RAII Helpers)
+// 0. 性能分析工具 (Profiler) - [NEW]
+// ==========================================
+// #define ANALYSE
+struct Profiler
+{
+    // 累计耗时 (微秒) - 原子变量，线程安全
+    static inline std::atomic<int64_t> t_structure_scan{0}; // Phase 1: 目录结构扫描与分发
+    static inline std::atomic<int64_t> t_ffmpeg{0};         // Worker: FFmpeg 读取
+    static inline std::atomic<int64_t> t_taglib{0};         // Worker: TagLib 解析
+    static inline std::atomic<int64_t> t_cover_process{0};  // Worker: 封面提取与缩放 (含 Phase 3)
+    static inline std::atomic<int64_t> t_wait_audio{0};     // Phase 2: 等待音频任务
+    static inline std::atomic<int64_t> t_aggregation{0};    // Phase 3: 后处理聚合与封面任务分发
+    static inline std::atomic<int64_t> t_wait_cover{0};     // Phase 4: 等待封面任务
+
+    // 计数
+    static inline std::atomic<int> count_files{0};
+
+    static void reset()
+    {
+        t_structure_scan = 0;
+        t_ffmpeg = 0;
+        t_taglib = 0;
+        t_cover_process = 0;
+        t_wait_audio = 0;
+        t_aggregation = 0;
+        t_wait_cover = 0;
+        count_files = 0;
+    }
+
+    static void printReport(int64_t total_us)
+    {
+        auto fmt = [](int64_t us)
+        { return (double)us / 1000.0; };
+        std::cout << "\n========== Performance Analysis Report ==========\n";
+        std::cout << "Total Wall Time  : " << fmt(total_us) << " ms\n";
+        std::cout << "Processed Files  : " << count_files << "\n";
+        std::cout << "-----------------------------------------------\n";
+        std::cout << "[Phase 1] Dir Scan (Main Thread): " << fmt(t_structure_scan) << " ms\n";
+        std::cout << "[Phase 2] Wait Audio (Wall Time): " << fmt(t_wait_audio) << " ms\n";
+        std::cout << "[Phase 3] Aggregation           : " << fmt(t_aggregation) << " ms\n";
+        std::cout << "[Phase 4] Wait Covers (Wall Time):" << fmt(t_wait_cover) << " ms\n";
+        std::cout << "-----------------------------------------------\n";
+        std::cout << ">> Cumulative Worker CPU Time (Sum of all threads):\n";
+        std::cout << "   - FFmpeg Probe   : " << fmt(t_ffmpeg) << " ms\n";
+        std::cout << "   - TagLib Parse   : " << fmt(t_taglib) << " ms\n";
+        std::cout << "   - Cover Process  : " << fmt(t_cover_process) << " ms\n";
+        std::cout << "===============================================\n\n";
+    }
+};
+
+// RAII 计时辅助类
+struct ScopedTimer
+{
+    std::atomic<int64_t> &target;
+    std::chrono::high_resolution_clock::time_point start;
+
+    ScopedTimer(std::atomic<int64_t> &counter) : target(counter)
+    {
+        start = std::chrono::high_resolution_clock::now();
+    }
+    ~ScopedTimer()
+    {
+        auto end = std::chrono::high_resolution_clock::now();
+        target += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    }
+};
+
+// ==========================================
+// 1. 内部工具与常量 (Internal Helpers)
 // ==========================================
 
 namespace
 {
 
-// 批量提交的任务数量，减少锁竞争并提高吞吐量
 constexpr size_t K_BATCH_SIZE = 64;
 
-// 支持的音频扩展名列表
 static const std::vector<std::string> kKnownAudioExtensions = {
     "mp3", "aac", "m4a", "ogg", "wma", "opus", "mpc", "mp+", "mpp",
     "flac", "ape", "wav", "aiff", "aif", "wv", "tta", "alac", "shn", "tak",
     "dsf", "dff", "dxd", "mka", "webm", "dts", "ac3", "truehd"};
 
-// 常见的封面文件名 (忽略大小写)
 static const std::unordered_set<std::string> kCoverFileNames = {
     "cover", "folder", "front", "album", "art"};
 
-// 支持的图片扩展名
 static const std::unordered_set<std::string> kImageExts = {
     ".jpg", ".jpeg", ".png", ".bmp"};
 
@@ -103,7 +167,7 @@ bool isCoverFileName(const std::string &stem)
 } // namespace
 
 // ==========================================
-// 2. 字符编码工具 (EncodingUtils)
+// 2. 字符编码处理 (Encoding Logic)
 // ==========================================
 
 namespace EncodingUtils
@@ -182,9 +246,7 @@ static std::string convertToUTF8(const std::string &data, const char *fromEncodi
         codePage = 932;
     else if (encodingUpper == "WINDOWS-1252")
         codePage = 1252;
-    else if (encodingUpper == "UTF-8")
-        return sanitizeUTF8(data);
-    else if (encodingUpper == "ASCII")
+    else if (encodingUpper == "UTF-8" || encodingUpper == "ASCII")
         return sanitizeUTF8(data);
 
     int wLen = MultiByteToWideChar(codePage, 0, data.c_str(), (int)data.size(), nullptr, 0);
@@ -619,6 +681,11 @@ struct AudioTechInfo
 
 static AudioTechInfo getAudioTechInfo(const std::string &filePath)
 {
+#ifdef ANALYSE
+    // [Profile] 统计 FFmpeg 耗时
+    ScopedTimer timer(Profiler::t_ffmpeg);
+#endif
+
     AudioTechInfo info;
     AVFormatContext *ctxRaw = nullptr;
     if (avformat_open_input(&ctxRaw, filePath.c_str(), nullptr, nullptr) != 0)
@@ -835,8 +902,11 @@ static void processNodeTask(std::shared_ptr<PlaylistNode> node)
 {
     if (!node)
         return;
-
-    // 1. 读取基础 Metadata
+#ifdef ANALYSE
+    // [Profile] 增加文件计数
+    Profiler::count_files++;
+#endif
+    // 1. 读取基础 Metadata (内部 TagLib 计时器在 getMetaData 里)
     MetaData md = FileScanner::getMetaData(node->getPath());
 
     // 2. 封面 Key 策略
@@ -848,7 +918,13 @@ static void processNodeTask(std::shared_ptr<PlaylistNode> node)
     node->setMetaData(md);
 
     // 3. 提取嵌入封面并缓存 (CPU 密集型解压 + Resize)
-    ImageHelpers::processTrackCover(node->getPath(), albumKey);
+    {
+        // [Profile] 统计 Phase 1/2 的封面处理
+#ifdef ANALYSE
+        ScopedTimer timer(Profiler::t_cover_process);
+#endif
+        ImageHelpers::processTrackCover(node->getPath(), albumKey);
+    }
 }
 
 // [Main Thread] CUE 文件逻辑：主线程解析结构，线程池处理元数据
@@ -885,6 +961,7 @@ static void handleCueFile(
             // 异步任务：补充技术参数 (SampleRate/BitDepth) 和封面
             (void)pool.submit_task([trackNode, track]()
                                    {
+                // 注意：这里也涉及 FFmpeg 探测，会由 getAudioTechInfo 内部的 timer 统计
                 auto tech = AudioInfoUtils::getAudioTechInfo(trackNode->getPath());
                 
                 auto currentMd = trackNode->getMetaData();
@@ -903,13 +980,20 @@ static void handleCueFile(
                 trackNode->setCoverKey(albumKey);
                 trackNode->setMetaData(currentMd);
 
-                ImageHelpers::processTrackCover(trackNode->getPath(), albumKey); });
+                {
+                    // [Profile] 统计 CUE 任务中的封面处理
+#ifdef ANALYSE
+                    ScopedTimer timer(Profiler::t_cover_process);
+#endif
+                     ImageHelpers::processTrackCover(trackNode->getPath(), albumKey); 
+                } });
         }
     }
 }
 
 // [Main Thread] 递归扫描并分发任务
 // [Optimization] 单次遍历时顺便检测封面文件，避免二次 IO
+// [Fix] 修复空目录问题：只有当子目录包含有效内容时才添加到树中
 static void scanAndDispatch(
     const fs::path &dirPath,
     const std::shared_ptr<PlaylistNode> &currentNode,
@@ -953,7 +1037,6 @@ static void scanAndDispatch(
                     // [Optimization] 批量提交 + 移动语义 (Zero-Copy)
                     if (batchBuffer.size() >= K_BATCH_SIZE)
                     {
-                        // (void) 转换用于消除 nodiscard 警告
                         (void)pool.submit_task([batch = std::move(batchBuffer)]()
                                                {
                             for(const auto& node : batch) {
@@ -1009,8 +1092,7 @@ static void scanAndDispatch(
         // 先递归进入子目录进行扫描填充
         scanAndDispatch(sd, childDirNode, stoken, batchBuffer);
 
-        // [Fix] 核心修改：扫描回来后进行判断
-        // 只有当子目录节点确实包含有效内容（文件或非空子目录）时，才将其真正添加到树中
+        // [Fix] 只有当子目录节点确实包含有效内容（文件或非空子目录）时，才将其真正添加到树中
         if (!childDirNode->getChildren().empty())
         {
             currentNode->addChild(childDirNode);
@@ -1053,6 +1135,7 @@ static std::string findDeepCoverRecursive(const std::shared_ptr<PlaylistNode> &n
 }
 
 // [Post Process] 后处理：聚合统计数据、确定封面
+// [Optimization] 将目录封面的加载与解码提交到线程池并行处理
 static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_ptr<PlaylistNode> &node)
 {
     uint64_t songs = 0;
@@ -1077,7 +1160,7 @@ static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_pt
     node->setTotalDuration(duration);
     node->sortChildren();
 
-    // 目录封面逻辑
+    // 目录封面逻辑 (Phase 3 中的并行优化)
     if (node->isDir())
     {
         std::string cover = node->getCoverPath(); // [Optimization] 优先使用阶段1检测到的封面
@@ -1100,23 +1183,35 @@ static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_pt
             std::string folderName = fs::path(node->getPath()).filename().string();
             folderName = EncodingUtils::detectAndConvert(folderName);
 
-            int w = 0, h = 0;
-            StbiPtr img(nullptr);
-            if (isAudioExtract)
-            {
-                auto d = TagLibHelpers::extractCoverDataGeneric(cover);
-                if (!d.isEmpty())
-                    img = ImageHelpers::loadBufferAsRGBA((const unsigned char *)d.data(), d.size(), w, h);
-            }
-            else
-            {
-                img = ImageHelpers::loadFileAsRGBA(cover, w, h);
-            }
+            // [Parallel Optimization] 将封面的 IO 解码和 Resize 提交给线程池
+            // 这消除了 Phase 3 中的主线程阻塞，极大提高了大目录扫描速度
+            (void)SimpleThreadPool::instance().get_native_pool().submit_task(
+                [cover, folderName, isAudioExtract]()
+                {
+            // [Profile] 统计 Phase 3 的并行封面处理耗时
+#ifdef ANALYSE
+                    ScopedTimer timer(Profiler::t_cover_process);
+#endif
 
-            if (img)
-            {
-                CoverCache::instance().putCompressedFromPixels(folderName, img.get(), w, h, 4);
-            }
+                    int w = 0, h = 0;
+                    StbiPtr img(nullptr);
+                    if (isAudioExtract)
+                    {
+                        auto d = TagLibHelpers::extractCoverDataGeneric(cover);
+                        if (!d.isEmpty())
+                            img = ImageHelpers::loadBufferAsRGBA((const unsigned char *)d.data(), d.size(), w, h);
+                    }
+                    else
+                    {
+                        img = ImageHelpers::loadFileAsRGBA(cover, w, h);
+                    }
+
+                    if (img)
+                    {
+                        // CoverCache 内部已经做了分段锁优化，并行调用是安全的
+                        CoverCache::instance().putCompressedFromPixels(folderName, img.get(), w, h, 4);
+                    }
+                });
         }
     }
 
@@ -1137,17 +1232,14 @@ void FileScanner::setRootDir(const std::string &rootDir)
 {
     this->rootDir = rootDir;
 }
-
 const std::string FileScanner::getRootDir() const
 {
     return rootDir;
 }
-
 bool FileScanner::isScanCompleted() const
 {
     return hasScanCpld.load();
 }
-
 std::shared_ptr<PlaylistNode> FileScanner::getPlaylistTree() const
 {
     return rootNode;
@@ -1182,6 +1274,12 @@ void FileScanner::stopScan()
 
 void FileScanner::scanDir(std::stop_token stoken)
 {
+    // [Profile] 重置计数
+#ifdef ANALYSE
+    Profiler::reset();
+    auto start_total = std::chrono::high_resolution_clock::now();
+#endif
+
     // 0. 初始化
     initSupportedExtensions();
     fs::path rootPath(rootDir);
@@ -1211,45 +1309,81 @@ void FileScanner::scanDir(std::stop_token stoken)
     rootNode = std::make_shared<PlaylistNode>(rootPath.string(), true);
     std::string folderName = rootPath.filename().string();
     if (folderName.empty())
-        folderName = rootPath.string(); // Drive root case
+        folderName = rootPath.string();
     rootNode->setCoverKey(EncodingUtils::detectAndConvert(folderName));
 
     // =========================================================
     // Phase 1: 流水线扫描 (Pipeline Scan & Dispatch)
     // =========================================================
-    std::vector<std::shared_ptr<PlaylistNode>> batchBuffer;
-    batchBuffer.reserve(K_BATCH_SIZE);
-
-    ScannerLogic::scanAndDispatch(rootPath, rootNode, stoken, batchBuffer);
-
-    // 提交剩余的任务 (Flush buffer)
-    if (!batchBuffer.empty())
     {
-        auto &pool = SimpleThreadPool::instance().get_native_pool();
-        (void)pool.submit_task([batch = std::move(batchBuffer)]()
-                               {
-            for(const auto& node : batch) {
-                ScannerLogic::processNodeTask(node);
-            } });
+        // [Profile] Phase 1 耗时
+#ifdef ANALYSE
+        ScopedTimer t1(Profiler::t_structure_scan);
+#endif
+        std::vector<std::shared_ptr<PlaylistNode>> batchBuffer;
+        batchBuffer.reserve(K_BATCH_SIZE);
+
+        ScannerLogic::scanAndDispatch(rootPath, rootNode, stoken, batchBuffer);
+
+        // 提交剩余的任务 (Flush buffer)
+        if (!batchBuffer.empty())
+        {
+            auto &pool = SimpleThreadPool::instance().get_native_pool();
+            (void)pool.submit_task([batch = std::move(batchBuffer)]()
+                                   {
+                for(const auto& node : batch) {
+                    ScannerLogic::processNodeTask(node);
+                } });
+        }
     }
 
     if (stoken.stop_requested())
         return;
 
     // =========================================================
-    // Phase 2: 等待所有任务完成 (Wait)
+    // Phase 2: 等待所有音频分析任务完成 (Wait for Audio Tasks)
     // =========================================================
-    SimpleThreadPool::instance().get_native_pool().wait();
+    {
+        // [Profile] Phase 2 耗时
+#ifdef ANALYSE
+        ScopedTimer t2(Profiler::t_wait_audio);
+#endif
+        SimpleThreadPool::instance().get_native_pool().wait();
+    }
 
     if (stoken.stop_requested())
         return;
 
     // =========================================================
-    // Phase 3: 后处理聚合 (Aggregation & Clean up)
+    // Phase 3: 后处理聚合与封面提取 (Aggregation & Dispatch Cover Tasks)
     // =========================================================
-    ScannerLogic::postProcessAggregation(rootNode);
+    {
+        // [Profile] Phase 3 耗时
+#ifdef ANALYSE
+        ScopedTimer t3(Profiler::t_aggregation);
+#endif
+        ScannerLogic::postProcessAggregation(rootNode);
+    }
+
+    // =========================================================
+    // Phase 4: 等待所有封面提取任务完成 (Wait for Cover Tasks)
+    // 注意：因为 Phase 3 向线程池提交了新的任务，必须再次等待
+    // =========================================================
+    {
+        // [Profile] Phase 4 耗时
+#ifdef ANALYSE
+        ScopedTimer t4(Profiler::t_wait_cover);
+#endif
+        SimpleThreadPool::instance().get_native_pool().wait();
+    }
 
     hasScanCpld = true;
+#ifdef ANALYSE
+    // [Profile] 打印报告
+    auto end_total = std::chrono::high_resolution_clock::now();
+    int64_t total_us = std::chrono::duration_cast<std::chrono::microseconds>(end_total - start_total).count();
+    Profiler::printReport(total_us);
+#endif
 }
 
 // ==========================================
@@ -1263,16 +1397,23 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
     if (!fs::exists(p))
         return musicData;
 
-    TagLib::FileRef f(p.c_str());
-    if (!f.isNull() && f.tag())
     {
-        auto tag = f.tag();
-        musicData.setTitle(TagLibHelpers::resolveSafeTag(tag, "Title"));
-        musicData.setArtist(TagLibHelpers::resolveSafeTag(tag, "Artist"));
-        musicData.setAlbum(TagLibHelpers::resolveSafeTag(tag, "Album"));
-        if (tag->year() > 0)
-            musicData.setYear(std::to_string(tag->year()));
-    }
+        // [Profile] TagLib 耗时
+#ifdef ANALYSE
+        ScopedTimer timer(Profiler::t_taglib);
+#endif
+        TagLib::FileRef f(p.c_str());
+        if (!f.isNull() && f.tag())
+        {
+            auto tag = f.tag();
+            musicData.setTitle(TagLibHelpers::resolveSafeTag(tag, "Title"));
+            musicData.setArtist(TagLibHelpers::resolveSafeTag(tag, "Artist"));
+            musicData.setAlbum(TagLibHelpers::resolveSafeTag(tag, "Album"));
+            if (tag->year() > 0)
+                musicData.setYear(std::to_string(tag->year()));
+        }
+    } // TagLib timer destructed
+
     if (musicData.getTitle().empty())
     {
         std::string filename = p.stem().string();
@@ -1282,6 +1423,7 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
     musicData.setFilePath(p.string());
     musicData.setParentDir(p.parent_path().string());
 
+    // FFmpeg 耗时已经在 getAudioTechInfo 内部统计了
     auto tech = AudioInfoUtils::getAudioTechInfo(p.string());
     musicData.setDuration(tech.duration);
     musicData.setSampleRate(tech.sampleRate);
@@ -1343,13 +1485,8 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
         }
     }
 
-    // 这里直接使用 helper 中的 findDirectoryCover
-    // 注意：这里的 scanner logic 不可见，需要把 findDirectoryCover 移出来或者重新实现
-    // 由于是静态辅助函数，这里重新简单实现一个基于文件名查找的逻辑即可，或者调用 ScannerLogic
-    // 但是 ScannerLogic 在匿名命名空间里，无法访问。
-    // 鉴于这是一个静态公用函数，通常用于单文件处理，这里保留最基本的逻辑：
     fs::path musicDir = fs::path(musicPath).parent_path();
-    // 简单的重新实现：
+    // 简单的重新实现目录封面查找逻辑
     std::string coverPath;
     for (const auto &name : kCoverFileNames)
     {
