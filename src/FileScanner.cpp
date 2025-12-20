@@ -4,10 +4,13 @@
 #include "PCH.h"
 #include "SimpleThreadPool.hpp"
 
+// [Modified] 引入 OpenCV 库，用于替代 stb_image 进行高性能解码
+#include <opencv2/opencv.hpp>
+
 // ==========================================
-// 0. 性能分析工具 (Profiler) - [NEW]
+// 0. 性能分析工具 (Profiler)
 // ==========================================
-// #define ANALYSE
+#define ANALYSE
 struct Profiler
 {
     // 累计耗时 (微秒) - 原子变量，线程安全
@@ -95,15 +98,7 @@ static const std::unordered_set<std::string> kImageExts = {
 static std::unordered_set<std::string> g_supportedAudioExts;
 static std::once_flag g_initFlag;
 
-struct StbiDeleter
-{
-    void operator()(unsigned char *data) const
-    {
-        if (data)
-            stbi_image_free(data);
-    }
-};
-using StbiPtr = std::unique_ptr<unsigned char, StbiDeleter>;
+// [Modified] 移除 StbiDeleter，不再使用
 
 struct AVFormatContextDeleter
 {
@@ -617,33 +612,71 @@ static std::string resolveSafeTag(TagLib::Tag *tag, const std::string &type)
 } // namespace TagLibHelpers
 
 // ==========================================
-// 4. 图片加载工具 (Image Helpers)
+// 4. 图片加载工具 (Image Helpers) - [Optimized]
 // ==========================================
 
 namespace ImageHelpers
 {
 
-static StbiPtr loadBufferAsRGBA(const unsigned char *data, int size, int &w, int &h)
-{
-    if (!data || size <= 0)
-        return nullptr;
-    int c = 0;
-    return StbiPtr(stbi_load_from_memory(data, size, &w, &h, &c, 4));
-}
+// [Modified] 移除 stb_image 相关函数，替换为 OpenCV 实现
 
-static StbiPtr loadFileAsRGBA(const std::string &path, int &w, int &h)
+/**
+ * @brief 内部通用解码函数
+ * @param buffer 内存数据指针，如果是文件模式则为 nullptr
+ * @param size 内存数据长度，文件模式忽略
+ * @param filePath 文件路径，内存模式传空字符串
+ * @param albumKey 缓存 key
+ *
+ * 核心优化策略：Scale-on-Load
+ * 使用 cv::IMREAD_REDUCED_COLOR_2 标志，指示 JPEG 解码器直接输出 1/2 宽高的图像。
+ * 这会跳过大量像素的 IDCT 计算，极大提升速度并降低内存。
+ */
+static void decodeAndCache(const void *buffer, size_t size, const std::string &filePath, const std::string &albumKey)
 {
-    if (path.empty())
-        return nullptr;
-    std::ifstream file(fs::path(path), std::ios::binary | std::ios::ate);
-    if (!file.good())
-        return nullptr;
-    auto size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    std::vector<unsigned char> buffer(size);
-    if (!file.read(reinterpret_cast<char *>(buffer.data()), size))
-        return nullptr;
-    return loadBufferAsRGBA(buffer.data(), (int)size, w, h);
+    try
+    {
+        cv::Mat decodedImage;
+
+        // 标志解析：
+        // IMREAD_COLOR: 强制转为彩色 (OpenCV 默认为 BGR)
+        // IMREAD_REDUCED_COLOR_2: 核心优化！输出尺寸为原图的 1/2。
+        // IMREAD_IGNORE_ORIENTATION: 忽略 EXIF 旋转 (通常封面不需要，能省一点时间)
+        int flags = cv::IMREAD_COLOR | cv::IMREAD_REDUCED_COLOR_2 | cv::IMREAD_IGNORE_ORIENTATION;
+
+        if (buffer)
+        {
+            // 内存解码
+            // 注意：OpenCV 的 imdecode 需要一个 Mat 头来包装内存 buffer
+            cv::Mat rawData(1, (int)size, CV_8UC1, const_cast<void *>(buffer));
+            decodedImage = cv::imdecode(rawData, flags);
+        }
+        else
+        {
+            // 文件解码
+            decodedImage = cv::imread(filePath, flags);
+        }
+
+        if (!decodedImage.empty())
+        {
+            // OpenCV 解码出来默认是 BGR，我们需要 RGBA
+            cv::Mat rgbaImage;
+            cv::cvtColor(decodedImage, rgbaImage, cv::COLOR_BGR2RGBA);
+
+            // 存入缓存
+            // 此时的 rgbaImage 已经是缩小过一次的图 (例如 1000x1000 -> 500x500)
+            // CoverCache::putCompressedFromPixels 会负责将其进一步 resize 到 256x256
+            CoverCache::instance().putCompressedFromPixels(
+                albumKey,
+                rgbaImage.data,
+                rgbaImage.cols,
+                rgbaImage.rows,
+                4);
+        }
+    }
+    catch (const cv::Exception &e)
+    {
+        spdlog::warn("OpenCV decode error for key '{}': {}", albumKey, e.what());
+    }
 }
 
 static void processTrackCover(const std::string &musicPath, const std::string &albumKey)
@@ -654,12 +687,19 @@ static void processTrackCover(const std::string &musicPath, const std::string &a
     TagLib::ByteVector data = TagLibHelpers::extractCoverDataGeneric(musicPath);
     if (!data.isEmpty())
     {
-        int w = 0, h = 0;
-        if (auto img = loadBufferAsRGBA(reinterpret_cast<const unsigned char *>(data.data()), (int)data.size(), w, h))
-        {
-            CoverCache::instance().putCompressedFromPixels(albumKey, img.get(), w, h, 4);
-        }
+        // 内存模式
+        decodeAndCache(data.data(), data.size(), "", albumKey);
     }
+}
+
+// [New] 专门处理外部图片文件的版本 (用于目录封面)
+static void processImageFile(const std::string &imagePath, const std::string &albumKey)
+{
+    if (albumKey.empty() || imagePath.empty() || CoverCache::instance().hasKey(albumKey))
+        return;
+
+    // 文件模式
+    decodeAndCache(nullptr, 0, imagePath, albumKey);
 }
 
 } // namespace ImageHelpers
@@ -903,13 +943,15 @@ static void processNodeTask(std::shared_ptr<PlaylistNode> node)
     if (!node)
         return;
 #ifdef ANALYSE
-    // [Profile] 增加文件计数
     Profiler::count_files++;
 #endif
-    // 1. 读取基础 Metadata (内部 TagLib 计时器在 getMetaData 里)
+
+    // 1. 读取 MetaData (I/O 密集型)
+    // 这一步是必须的，我们需要 Album Name 来确定 Key
     MetaData md = FileScanner::getMetaData(node->getPath());
 
-    // 2. 封面 Key 策略
+    // 2. 确定封面 Key
+    // 优先使用专辑名，如果没有则使用标题
     std::string albumName = md.getAlbum();
     std::string titleName = md.getTitle();
     std::string albumKey = albumName.empty() ? titleName : albumName;
@@ -917,9 +959,18 @@ static void processNodeTask(std::shared_ptr<PlaylistNode> node)
     node->setCoverKey(albumKey);
     node->setMetaData(md);
 
-    // 3. 提取嵌入封面并缓存 (CPU 密集型解压 + Resize)
+    // 3. [Optimization] 检查缓存
+    // 如果该专辑的封面已经在缓存中（由之前的任务提取过），直接跳过
+    if (CoverCache::instance().hasKey(albumKey))
     {
-        // [Profile] 统计 Phase 1/2 的封面处理
+        // 命中缓存，无需做任何图像处理
+        return;
+    }
+
+    // 4. 未命中缓存，执行提取与解码 (CPU 密集型)
+    // processTrackCover 内部通常也会再做一次 hasKey 检查，
+    // 但在这里提前判断可以省去函数调用和参数准备的开销
+    {
 #ifdef ANALYSE
         ScopedTimer timer(Profiler::t_cover_process);
 #endif
@@ -927,7 +978,7 @@ static void processNodeTask(std::shared_ptr<PlaylistNode> node)
     }
 }
 
-// [Main Thread] CUE 文件逻辑：主线程解析结构，线程池处理元数据
+// [Main Thread] CUE 文件逻辑
 static void handleCueFile(
     const fs::path &cuePath,
     const std::shared_ptr<PlaylistNode> &parentNode,
@@ -985,6 +1036,7 @@ static void handleCueFile(
 #ifdef ANALYSE
                     ScopedTimer timer(Profiler::t_cover_process);
 #endif
+                     // [Modified] 使用新的优化函数
                      ImageHelpers::processTrackCover(trackNode->getPath(), albumKey); 
                 } });
         }
@@ -992,13 +1044,11 @@ static void handleCueFile(
 }
 
 // [Main Thread] 递归扫描并分发任务
-// [Optimization] 单次遍历时顺便检测封面文件，避免二次 IO
-// [Fix] 修复空目录问题：只有当子目录包含有效内容时才添加到树中
 static void scanAndDispatch(
     const fs::path &dirPath,
     const std::shared_ptr<PlaylistNode> &currentNode,
     std::stop_token stoken,
-    std::vector<std::shared_ptr<PlaylistNode>> &batchBuffer)
+    std::vector<std::shared_ptr<PlaylistNode>> &batchBuffer) 
 {
     if (stoken.stop_requested())
         return;
@@ -1034,7 +1084,7 @@ static void scanAndDispatch(
                     currentNode->addChild(fileNode);
                     batchBuffer.push_back(fileNode);
 
-                    // [Optimization] 批量提交 + 移动语义 (Zero-Copy)
+                    // 批量提交
                     if (batchBuffer.size() >= K_BATCH_SIZE)
                     {
                         (void)pool.submit_task([batch = std::move(batchBuffer)]()
@@ -1042,7 +1092,6 @@ static void scanAndDispatch(
                             for(const auto& node : batch) {
                                 processNodeTask(node);
                             } });
-                        // 移动后 batchBuffer 需要重新初始化
                         batchBuffer = std::vector<std::shared_ptr<PlaylistNode>>();
                         batchBuffer.reserve(K_BATCH_SIZE);
                     }
@@ -1085,14 +1134,11 @@ static void scanAndDispatch(
         std::string folderName = p.filename().string();
         folderName = EncodingUtils::detectAndConvert(folderName);
 
-        // 创建子目录节点，但暂时不挂载到 currentNode
         auto childDirNode = std::make_shared<PlaylistNode>(p.string(), true);
         childDirNode->setCoverKey(folderName);
 
-        // 先递归进入子目录进行扫描填充
         scanAndDispatch(sd, childDirNode, stoken, batchBuffer);
 
-        // [Fix] 只有当子目录节点确实包含有效内容（文件或非空子目录）时，才将其真正添加到树中
         if (!childDirNode->getChildren().empty())
         {
             currentNode->addChild(childDirNode);
@@ -1135,7 +1181,6 @@ static std::string findDeepCoverRecursive(const std::shared_ptr<PlaylistNode> &n
 }
 
 // [Post Process] 后处理：聚合统计数据、确定封面
-// [Optimization] 将目录封面的加载与解码提交到线程池并行处理
 static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_ptr<PlaylistNode> &node)
 {
     uint64_t songs = 0;
@@ -1160,7 +1205,7 @@ static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_pt
     node->setTotalDuration(duration);
     node->sortChildren();
 
-    // 目录封面逻辑 (Phase 3 中的并行优化)
+    // 目录封面逻辑
     if (node->isDir())
     {
         std::string cover = node->getCoverPath(); // [Optimization] 优先使用阶段1检测到的封面
@@ -1184,7 +1229,7 @@ static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_pt
             folderName = EncodingUtils::detectAndConvert(folderName);
 
             // [Parallel Optimization] 将封面的 IO 解码和 Resize 提交给线程池
-            // 这消除了 Phase 3 中的主线程阻塞，极大提高了大目录扫描速度
+            // 这消除了 Phase 3 中的主线程阻塞
             (void)SimpleThreadPool::instance().get_native_pool().submit_task(
                 [cover, folderName, isAudioExtract]()
                 {
@@ -1192,24 +1237,15 @@ static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_pt
 #ifdef ANALYSE
                     ScopedTimer timer(Profiler::t_cover_process);
 #endif
-
-                    int w = 0, h = 0;
-                    StbiPtr img(nullptr);
+                    // [Modified] 适配新的 ImageHelpers 接口
                     if (isAudioExtract)
                     {
-                        auto d = TagLibHelpers::extractCoverDataGeneric(cover);
-                        if (!d.isEmpty())
-                            img = ImageHelpers::loadBufferAsRGBA((const unsigned char *)d.data(), d.size(), w, h);
+                        ImageHelpers::processTrackCover(cover, folderName);
                     }
                     else
                     {
-                        img = ImageHelpers::loadFileAsRGBA(cover, w, h);
-                    }
-
-                    if (img)
-                    {
-                        // CoverCache 内部已经做了分段锁优化，并行调用是安全的
-                        CoverCache::instance().putCompressedFromPixels(folderName, img.get(), w, h, 4);
+                        // 这是一个单纯的图片文件
+                        ImageHelpers::processImageFile(cover, folderName);
                     }
                 });
         }
@@ -1316,7 +1352,6 @@ void FileScanner::scanDir(std::stop_token stoken)
     // Phase 1: 流水线扫描 (Pipeline Scan & Dispatch)
     // =========================================================
     {
-        // [Profile] Phase 1 耗时
 #ifdef ANALYSE
         ScopedTimer t1(Profiler::t_structure_scan);
 #endif
@@ -1341,10 +1376,9 @@ void FileScanner::scanDir(std::stop_token stoken)
         return;
 
     // =========================================================
-    // Phase 2: 等待所有音频分析任务完成 (Wait for Audio Tasks)
+    // Phase 2: 等待所有音频分析任务完成
     // =========================================================
     {
-        // [Profile] Phase 2 耗时
 #ifdef ANALYSE
         ScopedTimer t2(Profiler::t_wait_audio);
 #endif
@@ -1355,10 +1389,9 @@ void FileScanner::scanDir(std::stop_token stoken)
         return;
 
     // =========================================================
-    // Phase 3: 后处理聚合与封面提取 (Aggregation & Dispatch Cover Tasks)
+    // Phase 3: 后处理聚合与封面提取
     // =========================================================
     {
-        // [Profile] Phase 3 耗时
 #ifdef ANALYSE
         ScopedTimer t3(Profiler::t_aggregation);
 #endif
@@ -1366,11 +1399,9 @@ void FileScanner::scanDir(std::stop_token stoken)
     }
 
     // =========================================================
-    // Phase 4: 等待所有封面提取任务完成 (Wait for Cover Tasks)
-    // 注意：因为 Phase 3 向线程池提交了新的任务，必须再次等待
+    // Phase 4: 等待所有封面提取任务完成
     // =========================================================
     {
-        // [Profile] Phase 4 耗时
 #ifdef ANALYSE
         ScopedTimer t4(Profiler::t_wait_cover);
 #endif

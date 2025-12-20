@@ -1,17 +1,18 @@
 #include "CoverCache.hpp"
 #include "CoverImage.hpp"
 
+// [Modified] 引入 OpenCV 核心与图像处理模块
+// 移除 opencv2/core/ocl.hpp，不再使用 GPU，避免小图传输的性能惩罚
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+
 void CoverCache::putCompressedFromPixels(const std::string &album,
                                          const unsigned char *srcPixels,
                                          int srcW, int srcH, int channels)
 {
     // 参数基本校验
-    if (album.empty() || !srcPixels || srcW <= 0 || srcH <= 0 || channels != 4)
+    if (album.empty() || !srcPixels || srcW <= 0 || srcH <= 0)
     {
-        if (channels != 4 && channels > 0)
-        {
-            spdlog::error("[CoverCache] Rejecting non-4-channel image for album '{}' (got {})", album, channels);
-        }
         return;
     }
 
@@ -26,35 +27,55 @@ void CoverCache::putCompressedFromPixels(const std::string &album,
             return;
     }
 
-    // 3. 执行耗时的 Resize 操作 (无锁状态！)
-    // 这是多线程优化的关键，多个线程可以并发执行 stbir_resize，互不阻塞
+    // 3. 执行 Resize 操作 (无锁状态)
+    // [Modified] 纯 CPU 处理。
+    // OpenCV 的 resize 底层会自动使用 AVX2/SSE 指令集优化，
+    // 对于 256x256 这种小图，CPU 处理仅需微秒级，远快于 GPU 的内存往返传输。
     const int targetW = 256;
     const int targetH = 256;
+
     std::vector<uint8_t> resizedPixels;
 
     try
     {
-        resizedPixels.resize(targetW * targetH * 4);
+        // 构建 OpenCV Mat 包装原始数据 (不进行拷贝，只是引用指针)
+        // 这里的 srcPixels 通常来自 FileScanner 的解码结果，已经是 RGBA 格式
+        int type = (channels == 4) ? CV_8UC4 : CV_8UC3;
+        cv::Mat srcMat(srcH, srcW, type, const_cast<unsigned char *>(srcPixels));
+        cv::Mat dstMat;
+
+        // [Modified] 使用 INTER_AREA (区域重采样)
+        // 这是缩小图片时效果最好的插值算法，能有效避免摩尔纹，虽然计算量稍大，但在 CPU 上处理小图依然极快。
+        cv::resize(srcMat, dstMat, cv::Size(targetW, targetH), 0, 0, cv::INTER_AREA);
+
+        // 如果输入是 3 通道，转为 4 通道 (RGBA) 以便统一存储
+        // 注意：FileScanner 现在通过 OpenCV 解码并转为 RGBA 传入，所以这里通常已经是 4 通道
+        if (dstMat.channels() == 3)
+        {
+            cv::cvtColor(dstMat, dstMat, cv::COLOR_RGB2RGBA);
+        }
+
+        // 导出数据
+        if (dstMat.isContinuous())
+        {
+            size_t dataSize = dstMat.total() * dstMat.elemSize();
+            resizedPixels.resize(dataSize);
+            std::memcpy(resizedPixels.data(), dstMat.data, dataSize);
+        }
+        else
+        {
+            // 防御性代码：如果不连续，克隆一份连续的
+            cv::Mat cont = dstMat.clone();
+            size_t dataSize = cont.total() * cont.elemSize();
+            resizedPixels.resize(dataSize);
+            std::memcpy(resizedPixels.data(), cont.data, dataSize);
+        }
     }
-    catch (const std::bad_alloc &)
+    catch (const std::exception &e)
     {
-        spdlog::error("[CoverCache] Out of memory resizing image for album '{}'", album);
+        spdlog::error("[CoverCache] Error resizing album '{}': {}", album, e.what());
         return;
     }
-
-    int srcStride = srcW * 4;
-    int dstStride = targetW * 4;
-
-    // 使用 stb_image_resize 进行缩放
-    auto res = stbir_resize_uint8_srgb(
-        srcPixels,
-        srcW, srcH, srcStride,
-        resizedPixels.data(),
-        targetW, targetH, dstStride,
-        STBIR_RGBA);
-
-    if (!res)
-        return;
 
     // 4. 再次加锁，将结果写入缓存
     try
