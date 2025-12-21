@@ -11,39 +11,37 @@ UIController::UIController(QObject *parent) :
     m_defaultPath = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
     if (m_defaultPath.isEmpty())
         m_defaultPath = QCoreApplication::applicationDirPath();
-#elif defined(Q_OS_LINUX)
-    m_defaultPath = QDir::homePath();
 #else
     m_defaultPath = QDir::homePath();
 #endif
 
+    // 状态轮询：100ms 更新一次 UI 状态
     m_stateTimer.setInterval(100);
     connect(&m_stateTimer, &QTimer::timeout, this, &UIController::updateStateFromController);
     m_stateTimer.start();
 
+    // 音量轮询：500ms (降低频率)
     m_volumeTimer.setInterval(500);
     connect(&m_volumeTimer, &QTimer::timeout, this, &UIController::updateVolumeState);
     m_volumeTimer.start();
 
-    m_coverArtSource = "";
-
-    // 连接异步监听器
     connect(&m_waveformWatcher, &QFutureWatcher<AsyncWaveformResult>::finished,
             this, &UIController::onWaveformCalculationFinished);
-    m_currentWaveformGeneration = 0;
 
-    // 初始化 OutputMode
     m_outputMode = static_cast<int>(m_mediaController.getOUTPUTMode());
-
-    // 初始化默认的深色背景
-    m_gradientColor1 = "#232323";
-    m_gradientColor2 = "#1a1a1a";
-    m_gradientColor3 = "#121212";
 }
 
-// [新增] 析构清理
 UIController::~UIController()
 {
+    prepareForQuit();
+}
+
+void UIController::prepareForQuit()
+{
+    if (m_stateTimer.isActive())
+        m_stateTimer.stop();
+    if (m_volumeTimer.isActive())
+        m_volumeTimer.stop();
     if (m_waveformWatcher.isRunning())
     {
         m_waveformWatcher.cancel();
@@ -55,10 +53,7 @@ void UIController::startMediaScan(const QString &path)
 {
     QDir dir(path);
     if (!dir.exists())
-    {
-        qWarning() << "Scan aborted: Directory does not exist:" << path;
         return;
-    }
     m_mediaController.setRootPath(path.toStdString());
     m_mediaController.startScan();
     if (!m_isScanning)
@@ -68,7 +63,7 @@ void UIController::startMediaScan(const QString &path)
     }
 }
 
-QString formatTime(qint64 microsecs)
+static QString formatTime(qint64 microsecs)
 {
     if (microsecs < 0)
         microsecs = 0;
@@ -78,8 +73,7 @@ QString formatTime(qint64 microsecs)
     return QString("%1:%2").arg(minutes, 2, 10, QChar('0')).arg(seconds, 2, 10, QChar('0'));
 }
 
-// 计算两个颜色的差异 (欧氏距离近似)
-double colorDistance(const QColor &c1, const QColor &c2)
+static double colorDistance(const QColor &c1, const QColor &c2)
 {
     long rmean = ((long)c1.red() + (long)c2.red()) / 2;
     long r = (long)c1.red() - (long)c2.red();
@@ -91,13 +85,12 @@ double colorDistance(const QColor &c1, const QColor &c2)
 void UIController::updateGradientColors(const QString &imagePath)
 {
     QImage image(imagePath);
-
-    // 默认备用色
-    QList<QColor> palette = {QColor("#2d2d2d"), QColor("#353535"), QColor("#404040")};
+    // 默认深色系背景
+    QList<QColor> palette = {QColor("#232323"), QColor("#1a1a1a"), QColor("#121212")};
 
     if (!image.isNull())
     {
-        // 1. 缩小图片 (20x20) 以快速分析
+        // 缩小采样以提高性能 (20x20)
         QImage small = image.scaled(20, 20, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 
         struct ColorScore
@@ -106,29 +99,26 @@ void UIController::updateGradientColors(const QString &imagePath)
             double score;
         };
         std::vector<ColorScore> candidates;
+        candidates.reserve(400);
 
-        // 2. 遍历像素评分，寻找"活力色"作为基础
         for (int y = 0; y < small.height(); ++y)
         {
             for (int x = 0; x < small.width(); ++x)
             {
                 QColor c = small.pixelColor(x, y);
-                // 剔除过黑过白
+                // 过滤极暗和极亮的颜色
                 if (c.lightness() < 20 || c.lightness() > 240)
                     continue;
 
-                // 评分：优先选择高饱和度颜色（这样能抓到封面的主色调）
-                // 稍后我们会统一降低饱和度，但这里需要先选出有代表性的颜色
+                // 评分算法：偏好高饱和度
                 double score = c.saturationF() * 2.0 + (1.0 - std::abs(c.lightnessF() - 0.5));
                 candidates.push_back({c, score});
             }
         }
 
-        // 3. 排序：分数高的在前
-        std::sort(candidates.begin(), candidates.end(), [](const ColorScore &a, const ColorScore &b)
+        std::sort(candidates.begin(), candidates.end(), [](const auto &a, const auto &b)
                   { return a.score > b.score; });
 
-        // 4. 挑选差异较大的 3 个颜色
         palette.clear();
         for (const auto &item : candidates)
         {
@@ -136,7 +126,7 @@ void UIController::updateGradientColors(const QString &imagePath)
             for (const auto &selected : palette)
             {
                 if (colorDistance(item.color, selected) < 80.0)
-                { // 稍微降低阈值以允许近似色
+                {
                     isDistinct = false;
                     break;
                 }
@@ -149,7 +139,7 @@ void UIController::updateGradientColors(const QString &imagePath)
             }
         }
 
-        // 补齐不足的颜色
+        // 补足3色
         while (palette.size() < 3)
         {
             if (!palette.isEmpty())
@@ -159,33 +149,27 @@ void UIController::updateGradientColors(const QString &imagePath)
         }
     }
 
-    // [关键修改] 5. 后处理：限制饱和度和亮度范围
-    // 这一步确保了背景不会因为封面颜色过于鲜艳而显得刺眼或"花哨"
+    // 颜色归一化：限制饱和度，防止背景过于刺眼
     for (auto &color : palette)
     {
         float h, s, l;
         color.getHslF(&h, &s, &l);
-
-        // 限制饱和度最大为 0.5 (50%)
-        // 这样既保留了色相(Hue)，又让颜色看起来更柔和、高级
-        if (s > 0.5)
-            s = 0.5;
-
-        // 也可以稍微限制亮度，防止背景太亮影响白字阅读
-        // if (l > 0.6) l = 0.6;
-
+        if (s > 0.4)
+            s = 0.4; // 稍微降低饱和度上限
+        if (l > 0.5)
+            l = 0.5; // 限制亮度
         color = QColor::fromHslF(h, s, l);
     }
 
-    QString newColor1 = palette[0].name();
-    QString newColor2 = palette[1].name();
-    QString newColor3 = palette[2].name();
+    QString c1 = palette.value(0).name();
+    QString c2 = palette.value(1).name();
+    QString c3 = palette.value(2).name();
 
-    if (m_gradientColor1 != newColor1 || m_gradientColor2 != newColor2 || m_gradientColor3 != newColor3)
+    if (m_gradientColor1 != c1 || m_gradientColor2 != c2 || m_gradientColor3 != c3)
     {
-        m_gradientColor1 = newColor1;
-        m_gradientColor2 = newColor2;
-        m_gradientColor3 = newColor3;
+        m_gradientColor1 = c1;
+        m_gradientColor2 = c2;
+        m_gradientColor3 = c3;
         emit gradientColorsChanged();
     }
 }
@@ -217,24 +201,17 @@ void UIController::seek(qint64 pos_microsec)
     m_lastSeekRequestTime = QDateTime::currentMSecsSinceEpoch();
     m_mediaController.seek(pos_microsec);
 
+    // 立即更新 UI 状态，防止进度条跳回
     if (m_currentPosMicrosec != pos_microsec)
     {
         m_currentPosMicrosec = pos_microsec;
         emit currentPosMicrosecChanged();
 
-        QString newCurrentPosText = formatTime(m_currentPosMicrosec);
-        if (m_currentPosText != newCurrentPosText)
+        QString txt = formatTime(pos_microsec);
+        if (m_currentPosText != txt)
         {
-            m_currentPosText = newCurrentPosText;
+            m_currentPosText = txt;
             emit currentPosTextChanged();
-        }
-
-        qint64 remainingMicrosecs = std::max((qint64)0, m_totalDurationMicrosec - m_currentPosMicrosec);
-        QString newRemainingTimeText = formatTime(remainingMicrosecs);
-        if (m_remainingTimeText != newRemainingTimeText)
-        {
-            m_remainingTimeText = newRemainingTimeText;
-            emit remainingTimeTextChanged();
         }
     }
 }
@@ -250,17 +227,7 @@ void UIController::toggleRepeatMode()
     }
 }
 
-void UIController::checkAndUpdateRepeatModeState()
-{
-    RepeatMode currentModeEnum = m_mediaController.getRepeatMode();
-    int currentMode = static_cast<int>(currentModeEnum);
-    if (m_repeatMode != currentMode)
-    {
-        m_repeatMode = currentMode;
-        emit repeatModeChanged();
-    }
-}
-
+// Getters implementation
 QString UIController::defaultMusicPath() const
 {
     return m_defaultPath;
@@ -325,6 +292,10 @@ int UIController::getRepeatMode() const
 {
     return m_repeatMode;
 }
+int UIController::outputMode() const
+{
+    return m_outputMode;
+}
 
 void UIController::setVolume(double volume)
 {
@@ -342,21 +313,13 @@ void UIController::setShuffle(bool newShuffle)
     }
 }
 
-// [新增] Output Mode 相关实现
-int UIController::outputMode() const
-{
-    return m_outputMode;
-}
-
 void UIController::setOutputMode(int mode)
 {
     if (mode < 0 || mode > 1)
         return;
-
-    outputMod newMode = (mode == 0) ? OUTPUT_DIRECT : OUTPUT_MIXING;
+    OutputMode newMode = (mode == 0) ? OutputMode::Direct : OutputMode::Mixing;
     m_mediaController.setOUTPUTMode(newMode);
 
-    // 更新本地缓存
     if (m_outputMode != mode)
     {
         m_outputMode = mode;
@@ -364,7 +327,6 @@ void UIController::setOutputMode(int mode)
     }
 }
 
-// 辅助函数：Index <-> AVSampleFormat
 AVSampleFormat UIController::indexToAvFormat(int index)
 {
     switch (index)
@@ -372,14 +334,12 @@ AVSampleFormat UIController::indexToAvFormat(int index)
     case 0: return AV_SAMPLE_FMT_S16;
     case 1: return AV_SAMPLE_FMT_S32;
     case 2: return AV_SAMPLE_FMT_FLT;
-    case 3: return AV_SAMPLE_FMT_DBL;
     default: return AV_SAMPLE_FMT_FLT;
     }
 }
 
 int UIController::avFormatToIndex(AVSampleFormat fmt)
 {
-    // 简化匹配，忽略 planar 区别
     switch (fmt)
     {
     case AV_SAMPLE_FMT_S16:
@@ -388,182 +348,114 @@ int UIController::avFormatToIndex(AVSampleFormat fmt)
     case AV_SAMPLE_FMT_S32P: return 1;
     case AV_SAMPLE_FMT_FLT:
     case AV_SAMPLE_FMT_FLTP: return 2;
-    case AV_SAMPLE_FMT_DBL:
-    case AV_SAMPLE_FMT_DBLP: return 3;
-    default: return 3;
+    default: return 2; // Default to float
     }
 }
 
 void UIController::applyMixingParams(int sampleRate, int formatIndex)
 {
-    // 1. 设置参数
     AVSampleFormat fmt = indexToAvFormat(formatIndex);
     m_mediaController.setMixingParameters(sampleRate, fmt);
-
-    // 2. [修改] 等待 500ms 后读取 (符合需求)
     QTimer::singleShot(500, this, [=, this]()
                        {
-        AudioParams currentParams = m_mediaController.getDeviceParameters();
-        
-        int actualRate = currentParams.sampleRate;
-        int actualFmtIndex = avFormatToIndex(currentParams.sampleFormat);
-        
-        emit mixingParamsApplied(actualRate, actualFmtIndex); });
+        AudioParams p = m_mediaController.getDeviceParameters();
+        emit mixingParamsApplied(p.sampleRate, avFormatToIndex(p.sampleFormat)); });
 }
 
 QVariantMap UIController::getCurrentDeviceParams()
 {
-    AudioParams params = m_mediaController.getDeviceParameters();
-
-    QVariantMap result;
-    result["sampleRate"] = params.sampleRate;
-    result["formatIndex"] = avFormatToIndex(params.sampleFormat);
-
-    return result;
+    AudioParams p = m_mediaController.getDeviceParameters();
+    QVariantMap map;
+    map["sampleRate"] = p.sampleRate;
+    map["formatIndex"] = avFormatToIndex(p.sampleFormat);
+    return map;
 }
 
-void UIController::checkAndUpdateOutputMode()
-{
-    int current = static_cast<int>(m_mediaController.getOUTPUTMode());
-    if (m_outputMode != current)
-    {
-        m_outputMode = current;
-        emit outputModeChanged();
-    }
-}
-
-// [生成波形] 改为异步
 void UIController::generateWaveformForNode(PlaylistNode *node)
 {
-    // 1. 立即清空当前波形，触发 UI 的“收缩”归零动画
     m_waveformHeights.clear();
     emit waveformHeightsChanged();
 
     m_currentWaveformGeneration++;
-    quint64 thisRequestId = m_currentWaveformGeneration;
+    quint64 genId = m_currentWaveformGeneration;
 
-    if (!node && node->isDir())
-    {
+    if (!node || node->isDir())
         return;
-    }
 
-    std::string stdFilePath = node->getMetaData().getFilePath();
-    if (stdFilePath.empty())
-    {
+    std::string pathStr = node->getMetaData().getFilePath();
+    if (pathStr.empty())
         return;
-    }
 
-    // 准备数据 (在主线程栈上)
-    QString filePath = QString::fromStdString(stdFilePath);
-    auto startTime = node->getMetaData().getOffset();
-    auto endTime = node->getMetaData().getOffset() + node->getMetaData().getDuration(); // 注意：这里通常是 Start + Duration = End
+    QString filePath = QString::fromStdString(pathStr);
+    int64_t start = node->getMetaData().getOffset();
+    int64_t end = start + node->getMetaData().getDuration();
 
-    // 3. 在后台线程执行计算
-    // 使用 QtConcurrent::run 运行 lambda
+    // 异步计算
     QFuture<AsyncWaveformResult> future = QtConcurrent::run([=]()
                                                             {
-        AsyncWaveformResult result;
-        result.generationId = thisRequestId; // 携带 ID 回来
-        result.filePath = filePath;
+        AsyncWaveformResult res;
+        res.generationId = genId;
+        res.filePath = filePath;
         
-        int barCount = 70;
-        int totalWidth = 320; 
-        int calculatedBarWidth = 0;
-        int maxHeight = 60; 
+        int barWidth = 0;
+        // 生成 70 个柱子，宽 320px
+        res.heights = AudioPlayer::buildAudioWaveform(
+            filePath.toStdString(), 70, 320, barWidth, 60, start, end);
+        res.barWidth = barWidth;
+        return res; });
 
-        // 这是一个耗时操作
-        result.heights = AudioPlayer::buildAudioWaveform(
-            filePath.toStdString(),
-            barCount,
-            totalWidth,
-            calculatedBarWidth,
-            maxHeight,
-            startTime,
-            endTime); // 传入正确的时间片段
-
-        result.barWidth = calculatedBarWidth;
-        return result; });
-
-    // 4. 设置 Watcher 监听这个 Future
     m_waveformWatcher.setFuture(future);
 }
 
-// [新增] 异步回调
 void UIController::onWaveformCalculationFinished()
 {
-    // 获取结果
-    AsyncWaveformResult result = m_waveformWatcher.result();
-
-    // [关键] 检查结果是否过时
-    // 如果在计算过程中用户又切了一首歌，m_currentWaveformPath 会变成新歌的路径
-    // 此时 result.filePath 是旧歌的路径，不匹配，则丢弃，防止 UI 闪烁
-    if (result.generationId != m_currentWaveformGeneration)
-    {
-        // qDebug() << "Discarding expired waveform result. Got ID:" << result.generationId << " Expected:" << m_currentWaveformGeneration;
+    AsyncWaveformResult res = m_waveformWatcher.result();
+    if (res.generationId != m_currentWaveformGeneration)
         return;
-    }
 
-    // 更新 UI 数据
-    QVariantList newList;
-    for (int h : result.heights)
-    {
-        newList.append(h);
-    }
+    QVariantList list;
+    for (int h : res.heights)
+        list.append(h);
 
-    m_waveformHeights = newList;
-    m_waveformBarWidth = result.barWidth;
-
-    // 触发 UI 的“展开”动画
+    m_waveformHeights = list;
+    m_waveformBarWidth = res.barWidth;
     emit waveformHeightsChanged();
 }
 
 void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
 {
-    QString newCoverPath = "";
-    QString newTitle = "";
-    QString newArtist = "";
-    QString newAlbum = "";
-
-    if (currentNode != nullptr)
+    QString newCover = "", newTitle = "", newArtist = "", newAlbum = "";
+    if (currentNode)
     {
-        auto metadata = currentNode->getMetaData();
-        std::string pathStr = metadata.getCoverPath();
-        if (pathStr == "")
+        auto meta = currentNode->getMetaData();
+        if (meta.getCoverPath().empty())
         {
-            pathStr = FileScanner::extractCoverToTempFile(metadata);
-            metadata.setCoverPath(pathStr);
-            currentNode->setMetaData(metadata);
+            meta.setCoverPath(FileScanner::extractCoverToTempFile(meta));
+            currentNode->setMetaData(meta);
         }
-        QString rawPath = QString::fromStdString(pathStr);
-        if (!rawPath.isEmpty())
-        {
-            newCoverPath = QUrl::fromLocalFile(rawPath).toString();
-        }
+        QString raw = QString::fromStdString(meta.getCoverPath());
+        if (!raw.isEmpty())
+            newCover = QUrl::fromLocalFile(raw).toString();
 
-        auto &metaData = currentNode->getMetaData();
-        newTitle = QString::fromStdString(metaData.getTitle());
-        newArtist = QString::fromStdString(metaData.getArtist());
-        newAlbum = QString::fromStdString(metaData.getAlbum());
+        newTitle = QString::fromStdString(meta.getTitle());
+        newArtist = QString::fromStdString(meta.getArtist());
+        newAlbum = QString::fromStdString(meta.getAlbum());
 
-        qint64 newDuration = m_mediaController.getDurationMicroseconds();
-        if (m_totalDurationMicrosec != newDuration)
+        qint64 dur = m_mediaController.getDurationMicroseconds();
+        if (m_totalDurationMicrosec != dur)
         {
-            m_totalDurationMicrosec = newDuration;
+            m_totalDurationMicrosec = dur;
             emit totalDurationMicrosecChanged();
         }
     }
 
-    if (m_coverArtSource != newCoverPath)
+    if (m_coverArtSource != newCover)
     {
-        m_coverArtSource = newCoverPath;
+        m_coverArtSource = newCover;
         emit coverArtSourceChanged();
         if (currentNode)
-        {
-            std::string pathStr = currentNode->getMetaData().getCoverPath();
-            updateGradientColors(QString::fromStdString(pathStr));
-        }
+            updateGradientColors(QString::fromStdString(currentNode->getMetaData().getCoverPath()));
     }
-
     if (m_songTitle != newTitle)
     {
         m_songTitle = newTitle;
@@ -581,21 +473,19 @@ void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
     }
 }
 
-bool m_hasLoadedInitialData = false;
 void UIController::checkAndUpdateScanState()
 {
     if (!m_isScanning)
         return;
-    bool scanCplt = m_mediaController.isScanCplt();
-    if (scanCplt && !m_hasLoadedInitialData)
+    if (m_mediaController.isScanCplt() && !m_hasLoadedInitialData)
     {
         emit scanCompleted();
         m_hasLoadedInitialData = true;
         m_isScanning = false;
-        auto firstSong = m_mediaController.findFirstValidAudio(m_mediaController.getRootNode().get());
-        m_mediaController.setNowPlayingSong(firstSong);
+        // 自动加载第一首歌但不播放
+        auto first = m_mediaController.findFirstValidAudio(m_mediaController.getRootNode().get());
+        m_mediaController.setNowPlayingSong(first);
         m_mediaController.pause();
-        // m_mediaController.play();
     }
 }
 
@@ -603,99 +493,107 @@ void UIController::checkAndUpdateTimeState()
 {
     if (m_isSeeking)
         return;
-    qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_lastSeekRequestTime < 300)
+    if (QDateTime::currentMSecsSinceEpoch() - m_lastSeekRequestTime < 300)
         return;
 
-    qint64 activePos = m_mediaController.getCurrentPosMicroseconds();
-    qint64 totalDuration = m_mediaController.getDurationMicroseconds();
-    qint64 remainingMicrosecs = std::max((qint64)0, totalDuration - activePos);
+    qint64 pos = m_mediaController.getCurrentPosMicroseconds();
+    qint64 dur = m_mediaController.getDurationMicroseconds();
 
-    QString newCurrentPosText = formatTime(activePos);
-    QString newRemainingTimeText = formatTime(remainingMicrosecs);
-
-    if (m_currentPosText != newCurrentPosText)
+    if (m_currentPosMicrosec != pos)
     {
-        m_currentPosText = newCurrentPosText;
+        m_currentPosMicrosec = pos;
+        emit currentPosMicrosecChanged();
+    }
+
+    QString tPos = formatTime(pos);
+    if (m_currentPosText != tPos)
+    {
+        m_currentPosText = tPos;
         emit currentPosTextChanged();
     }
-    if (m_remainingTimeText != newRemainingTimeText)
+
+    QString tRem = formatTime(std::max((qint64)0, dur - pos));
+    if (m_remainingTimeText != tRem)
     {
-        m_remainingTimeText = newRemainingTimeText;
+        m_remainingTimeText = tRem;
         emit remainingTimeTextChanged();
-    }
-    if (m_currentPosMicrosec != activePos)
-    {
-        m_currentPosMicrosec = activePos;
-        emit currentPosMicrosecChanged();
     }
 }
 
 void UIController::checkAndUpdatePlayState()
 {
-    bool currentIsPlaying = m_mediaController.getIsPlaying();
-    if (m_isPlaying != currentIsPlaying)
+    bool playing = m_mediaController.getIsPlaying();
+    if (m_isPlaying != playing)
     {
-        m_isPlaying = currentIsPlaying;
+        m_isPlaying = playing;
         emit isPlayingChanged();
     }
 }
 
 void UIController::checkAndUpdateVolumeState()
 {
-    double currentVolume = m_mediaController.getVolume();
-    if (std::abs(m_volume - currentVolume) > 0.001)
+    double vol = m_mediaController.getVolume();
+    if (std::abs(m_volume - vol) > 0.001)
     {
-        m_volume = currentVolume;
+        m_volume = vol;
         emit volumeChanged();
     }
 }
 
 void UIController::checkAndUpdateShuffleState()
 {
-    bool currentShuffle = m_mediaController.getShuffle();
-    if (m_isShuffle != currentShuffle)
+    bool shuf = m_mediaController.getShuffle();
+    if (m_isShuffle != shuf)
     {
-        m_isShuffle = currentShuffle;
+        m_isShuffle = shuf;
         emit isShuffleChanged();
+    }
+}
+
+void UIController::checkAndUpdateRepeatModeState()
+{
+    int mode = static_cast<int>(m_mediaController.getRepeatMode());
+    if (m_repeatMode != mode)
+    {
+        m_repeatMode = mode;
+        emit repeatModeChanged();
+    }
+}
+
+void UIController::checkAndUpdateOutputMode()
+{
+    int mode = static_cast<int>(m_mediaController.getOUTPUTMode());
+    if (m_outputMode != mode)
+    {
+        m_outputMode = mode;
+        emit outputModeChanged();
     }
 }
 
 void UIController::updateStateFromController()
 {
     checkAndUpdateScanState();
-
-    // [新增] 检查输出模式
     checkAndUpdateOutputMode();
 
-    PlaylistNode *currentNode = m_mediaController.getCurrentPlayingNode();
-    bool isSongChanged = false;
+    PlaylistNode *curr = m_mediaController.getCurrentPlayingNode();
+    bool songChanged = (curr != m_lastPlayingNode);
 
-    if (currentNode != m_lastPlayingNode)
+    if (songChanged)
     {
-        m_lastPlayingNode = currentNode;
-        isSongChanged = true;
-
+        m_lastPlayingNode = curr;
         m_currentPosMicrosec = 0;
         emit currentPosMicrosecChanged();
 
-        QString zeroTime = "00:00";
-        if (m_currentPosText != zeroTime)
-        {
-            m_currentPosText = zeroTime;
-            emit currentPosTextChanged();
-        }
+        m_currentPosText = "00:00";
+        emit currentPosTextChanged();
 
-        checkAndUpdateCoverArt(currentNode);
-        generateWaveformForNode(currentNode);
+        checkAndUpdateCoverArt(curr);
+        generateWaveformForNode(curr);
     }
 
     checkAndUpdatePlayState();
-
-    if (!isSongChanged)
-    {
+    if (!songChanged)
         checkAndUpdateTimeState();
-    }
 }
 
 void UIController::updateVolumeState()
@@ -703,22 +601,4 @@ void UIController::updateVolumeState()
     checkAndUpdateVolumeState();
     checkAndUpdateShuffleState();
     checkAndUpdateRepeatModeState();
-}
-
-void UIController::prepareForQuit()
-{
-    qDebug() << "UIController: Stopping timers and watchers...";
-
-    // 1. 停止定时器
-    if (m_stateTimer.isActive())
-        m_stateTimer.stop();
-    if (m_volumeTimer.isActive())
-        m_volumeTimer.stop();
-
-    // 2. 取消异步任务
-    if (m_waveformWatcher.isRunning())
-    {
-        m_waveformWatcher.cancel();
-        m_waveformWatcher.waitForFinished();
-    }
 }

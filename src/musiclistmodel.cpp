@@ -1,15 +1,12 @@
 #include "musiclistmodel.h"
 #include "MediaController.hpp"
 #include "PlaylistNode.hpp"
-#include <algorithm> // for std::sort, std::transform
-#include <cctype>    // for std::tolower
-
-// 引入封面缓存测试 (如果不需要可以移除)
-#include "CoverCache.hpp"
-extern void run_cover_test();
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 
 // ==========================================
-// [新增] 移植自 MediaController 的搜索算法辅助结构
+// 搜索辅助逻辑
 // ==========================================
 
 namespace
@@ -29,7 +26,6 @@ struct ScoredResult
 {
     PlaylistNode *node;
     int score;
-
     // 用于排序：分数高的在前
     bool operator>(const ScoredResult &other) const
     {
@@ -43,30 +39,23 @@ int calculateFieldScore(const std::string &fieldVal, const std::string &queryLow
     if (fieldVal.empty())
         return 0;
 
-    // 转小写进行比较
     std::string fieldLower = fieldVal;
+    // 转小写
     std::transform(fieldLower.begin(), fieldLower.end(), fieldLower.begin(),
                    [](unsigned char c)
                    { return std::tolower(c); });
 
     size_t pos = fieldLower.find(queryLower);
     if (pos == std::string::npos)
-    {
         return 0;
-    }
 
-    // 策略：
-    // 1. 完全匹配：最高分
+    // 完全匹配
     if (fieldLower == queryLower)
-    {
         return weight * 10;
-    }
-    // 2. 前缀匹配（从头开始）：中等分
+    // 前缀匹配
     if (pos == 0)
-    {
         return weight * 5;
-    }
-    // 3. 包含匹配：基础分
+    // 包含匹配
     return weight * 1;
 }
 
@@ -76,8 +65,7 @@ int calculateFieldScore(const std::string &fieldVal, const std::string &queryLow
 // MusicListModel 实现
 // ==========================================
 
-MusicListModel::MusicListModel(QObject *parent) :
-    QAbstractListModel(parent)
+MusicListModel::MusicListModel(QObject *parent) : QAbstractListModel(parent)
 {
 }
 
@@ -124,6 +112,7 @@ QHash<int, QByteArray> MusicListModel::roleNames() const
 }
 
 // --- 格式化辅助函数 ---
+
 QString MusicListModel::formatDuration(int64_t microsec)
 {
     qint64 secs = microsec / 1000000;
@@ -218,10 +207,6 @@ MusicItem MusicListModel::createItemFromNode(PlaylistNode *node, int id)
 
 void MusicListModel::loadRoot()
 {
-#ifdef DEBUG
-    run_cover_test();
-#endif
-
     auto &controller = MediaController::getInstance();
     auto rootNode = controller.getRootNode();
 
@@ -235,6 +220,10 @@ void MusicListModel::loadRoot()
     setCurrentDirectoryNode(m_currentDirectoryNode);
     repopulateList(rootNode->getChildren());
 }
+
+// --------------------------------------------------------------------------
+// 排序逻辑
+// --------------------------------------------------------------------------
 
 void MusicListModel::setSortMode(int type, bool reverse)
 {
@@ -252,9 +241,11 @@ void MusicListModel::setSortMode(int type, bool reverse)
 
 bool MusicListModel::lessThan(PlaylistNode *nodeA, PlaylistNode *nodeB) const
 {
+    // 1. 文件夹永远置顶
+    // 如果 A 是文件夹，B 不是，A 在前 (True)
     if (nodeA->isDir() != nodeB->isDir())
     {
-        return nodeA->isDir() > nodeB->isDir();
+        return nodeA->isDir();
     }
 
     int compareResult = 0;
@@ -322,6 +313,7 @@ bool MusicListModel::lessThan(PlaylistNode *nodeA, PlaylistNode *nodeB) const
             compareResult = 1;
         break;
     default:
+        // 默认按标题
         QString tA = QString::fromStdString(metaA.getTitle());
         QString tB = QString::fromStdString(metaB.getTitle());
         compareResult = tA.compare(tB, Qt::CaseInsensitive);
@@ -330,6 +322,7 @@ bool MusicListModel::lessThan(PlaylistNode *nodeA, PlaylistNode *nodeB) const
     if (compareResult == 0)
         return false;
 
+    // 根据是否倒序返回结果
     if (m_sortReverse)
         return compareResult > 0;
     else
@@ -338,15 +331,18 @@ bool MusicListModel::lessThan(PlaylistNode *nodeA, PlaylistNode *nodeB) const
 
 void MusicListModel::performSort(bool syncBackend)
 {
+    // [新增功能] 搜索模式下禁用自定义排序，严格保持搜索结果的相关度顺序
+    if (m_isSearching)
+    {
+        return;
+    }
+
+    // 1. 对 m_displayList 进行排序
     std::sort(m_displayList.begin(), m_displayList.end(), [&](const MusicItem &a, const MusicItem &b)
               { return lessThan(a.nodePtr, b.nodePtr); });
 
-    m_nodeMap.clear();
-    for (const auto &item : m_displayList)
-    {
-        m_nodeMap[item.id] = item.nodePtr;
-    }
-
+    // 2. 同步后端顺序 (这对 MediaController 的 Next/Prev 逻辑很重要)
+    //    只有在浏览模式(非搜索)且 syncBackend 为 true 时才执行
     if (syncBackend && m_currentDirectoryNode)
     {
         m_currentDirectoryNode->reorderChildren([&](const std::shared_ptr<PlaylistNode> &a, const std::shared_ptr<PlaylistNode> &b)
@@ -366,7 +362,8 @@ void MusicListModel::repopulateList(const std::vector<std::shared_ptr<PlaylistNo
     beginResetModel();
     m_isSearching = false;
     m_displayList.clear();
-    m_nodeMap.clear();
+
+    m_displayList.reserve(nodes.size());
 
     PlaylistNode *playingNode = MediaController::getInstance().getCurrentPlayingNode();
     int idCounter = 0;
@@ -383,32 +380,25 @@ void MusicListModel::repopulateList(const std::vector<std::shared_ptr<PlaylistNo
         idCounter++;
     }
 
+    // 初始化时应用当前排序，并同步后端
     performSort(true);
+
     m_fullList = m_displayList;
     endResetModel();
 }
 
-// --------------------------------------------------------------------------
-// [修改] 搜索功能：使用加权打分算法 (移植自 MediaController)
-// --------------------------------------------------------------------------
 void MusicListModel::search(const QString &query)
 {
     QString trimmed = query.trimmed();
 
-    // 1. 如果查询为空，恢复全量列表
     if (trimmed.isEmpty())
     {
-        if (m_displayList.size() != m_fullList.size() || m_isSearching)
+        if (m_isSearching)
         {
             beginResetModel();
             m_displayList = m_fullList;
             m_isSearching = false;
-
-            m_nodeMap.clear();
-            for (const auto &item : m_displayList)
-            {
-                m_nodeMap[item.id] = item.nodePtr;
-            }
+            // 取消搜索时恢复排序 (同步后端)
             performSort(true);
             endResetModel();
             refreshPlayingState();
@@ -416,64 +406,57 @@ void MusicListModel::search(const QString &query)
         return;
     }
 
-    // 2. 准备搜索
     m_isSearching = true;
 
-    // 将查询转为小写 std::string，供算法使用
     std::string queryLower = trimmed.toStdString();
     std::transform(queryLower.begin(), queryLower.end(), queryLower.begin(),
                    [](unsigned char c)
                    { return std::tolower(c); });
 
     std::vector<ScoredResult> scoredResults;
+    scoredResults.reserve(100);
 
-    // 3. 执行递归搜索并打分
-    if (m_currentDirectoryNode)
+    // 递归搜索辅助 lambda
+    std::function<void(PlaylistNode *)> recursiveScoreSearch =
+        [&](PlaylistNode *node)
     {
-        // 这里的递归函数需要稍微调整逻辑以支持打分收集，
-        // 或者我们为了不修改头文件，在 .cpp 里单独定义一个递归 lambda 或 helper。
-        // 为了方便，这里直接定义一个 lambda 递归。
-
-        std::function<void(PlaylistNode *)> recursiveScoreSearch =
-            [&](PlaylistNode *node)
+        if (!node)
+            return;
+        for (const auto &childPtr : node->getChildren())
         {
-            if (!node)
-                return;
-            for (const auto &childPtr : node->getChildren())
+            PlaylistNode *child = childPtr.get();
+            if (child->isDir())
             {
-                PlaylistNode *child = childPtr.get();
-                if (child->isDir())
+                recursiveScoreSearch(child);
+            }
+            else
+            {
+                const auto &meta = child->getMetaData();
+                int totalScore = 0;
+
+                totalScore += calculateFieldScore(meta.getTitle(), queryLower, SCORE_TITLE);
+                totalScore += calculateFieldScore(meta.getArtist(), queryLower, SCORE_ARTIST);
+                totalScore += calculateFieldScore(meta.getAlbum(), queryLower, SCORE_ALBUM);
+
+                std::string filename = std::filesystem::path(child->getPath()).filename().string();
+                totalScore += calculateFieldScore(filename, queryLower, SCORE_FILENAME);
+
+                if (totalScore > 0)
                 {
-                    recursiveScoreSearch(child);
-                }
-                else
-                {
-                    const auto &meta = child->getMetaData();
-                    int totalScore = 0;
-
-                    // 应用 MediaController 的打分逻辑
-                    totalScore += calculateFieldScore(meta.getTitle(), queryLower, SCORE_TITLE);
-                    totalScore += calculateFieldScore(meta.getArtist(), queryLower, SCORE_ARTIST);
-                    totalScore += calculateFieldScore(meta.getAlbum(), queryLower, SCORE_ALBUM);
-
-                    std::string filename = std::filesystem::path(child->getPath()).filename().string();
-                    totalScore += calculateFieldScore(filename, queryLower, SCORE_FILENAME);
-
-                    if (totalScore > 0)
-                    {
-                        scoredResults.push_back({child, totalScore});
-                    }
+                    scoredResults.push_back({child, totalScore});
                 }
             }
-        };
+        }
+    };
 
+    if (m_currentDirectoryNode)
+    {
         recursiveScoreSearch(m_currentDirectoryNode);
     }
 
-    // 4. 对结果按分数排序 (分数高的在前)
+    // 按分数排序 (分数高的在前)
     std::sort(scoredResults.begin(), scoredResults.end(), std::greater<ScoredResult>());
 
-    // 5. 更新 View
     beginResetModel();
     m_displayList.clear();
 
@@ -491,38 +474,17 @@ void MusicListModel::search(const QString &query)
         idCounter++;
     }
 
-    // 注意：搜索结果是按相关度排序的，这里不应该再调用 performSort
-    // 除非用户强制要求按“标题”排序覆盖“相关度”。
-    // 通常搜索结果按相关度展示最好。
-    // 但为了保证数据完整性（如 m_nodeMap），我们手动建立映射，不调用 performSort。
-    m_nodeMap.clear();
-    for (const auto &item : m_displayList)
-    {
-        m_nodeMap[item.id] = item.nodePtr;
-    }
-
     endResetModel();
-}
-
-// 移除旧的 recursiveSearch 实现（如果头文件里声明了 private，可以留着空函数体或者在头文件里删掉）
-// 为了保证编译通过，这里保留旧函数的实现，但实际上 search 函数已经不再调用它了。
-void MusicListModel::recursiveSearch(PlaylistNode *node, const QString &query, QList<MusicItem> &results, int &idCounter)
-{
-    // 此函数已被新的 search 逻辑内部的 lambda 替代，保留它是为了不修改头文件的声明。
-    Q_UNUSED(node);
-    Q_UNUSED(query);
-    Q_UNUSED(results);
-    Q_UNUSED(idCounter);
 }
 
 void MusicListModel::handleClick(int index)
 {
     if (index < 0 || index >= m_displayList.size())
     {
-        qWarning() << "Clicked invalid index:" << index << "List size:" << m_displayList.size();
         return;
     }
 
+    // 直接通过索引访问，无需 map
     const MusicItem &item = m_displayList.at(index);
     PlaylistNode *clickedNode = item.nodePtr;
 
@@ -575,8 +537,8 @@ void MusicListModel::setCurrentDirectoryNode(PlaylistNode *node)
     }
 
     QString newPath = QString::fromStdString(node->getPath());
-    QFileInfo info(newPath);
-    QString newDirName = info.fileName();
+    std::filesystem::path p(node->getPath());
+    QString newDirName = QString::fromStdString(p.filename().string());
     if (newDirName.isEmpty() || newDirName == ".")
         newDirName = "音乐库";
 
@@ -601,17 +563,14 @@ void MusicListModel::goBack()
         setCurrentDirectoryNode(m_currentDirectoryNode);
         repopulateList(parentNode->getChildren());
 
-        int targetIndex = -1;
         for (int i = 0; i < m_displayList.size(); ++i)
         {
             if (m_displayList[i].nodePtr == oldDirNode)
             {
-                targetIndex = i;
+                emit requestScrollTo(i);
                 break;
             }
         }
-        if (targetIndex != -1)
-            emit requestScrollTo(targetIndex);
     }
 }
 
