@@ -164,6 +164,10 @@ public:
     void startScan();
     bool isScanCplt();
     std::shared_ptr<PlaylistNode> getRootNode();
+    void setRootNode(std::shared_ptr<PlaylistNode> node)
+    {
+        rootNode = node;
+    }
 };
 
 #endif

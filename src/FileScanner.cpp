@@ -1021,6 +1021,15 @@ static void handleCueFile(
                 currentMd.setFormatType(tech.formatType);
                 currentMd.setParentDir(fs::path(trackNode->getPath()).parent_path().string());
                 
+                // [Fixed] 补充读取文件的最后修改时间
+                // 之前漏了这一步，导致 CUE 文件的 metadata 时间戳为 0，
+                // 每次重启程序都会被误判为"文件已修改"
+                std::error_code ec;
+                auto lwt = fs::last_write_time(trackNode->getPath(), ec);
+                if (!ec) {
+                    currentMd.setLastWriteTime(lwt);
+                }
+
                 // 如果 CUE 没算出时长，用文件总时长-偏移
                 if (track.duration <= 0) {
                     int64_t rem = tech.duration - track.startTime;
@@ -1048,7 +1057,7 @@ static void scanAndDispatch(
     const fs::path &dirPath,
     const std::shared_ptr<PlaylistNode> &currentNode,
     std::stop_token stoken,
-    std::vector<std::shared_ptr<PlaylistNode>> &batchBuffer) 
+    std::vector<std::shared_ptr<PlaylistNode>> &batchBuffer)
 {
     if (stoken.stop_requested())
         return;

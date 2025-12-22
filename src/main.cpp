@@ -1,4 +1,5 @@
 #include "AudioPlayer.hpp"
+#include "DatabaseService.hpp"
 #include "musiclistmodel.h"
 #include "uicontroller.h"
 #include "CoverImageProvider.hpp"
@@ -99,33 +100,49 @@ void runTerminalMode(QCoreApplication &app, const QString &rootDir)
 
     // 获取实例引用
     auto &mediaController = MediaController::getInstance();
-
-    // 3. 扫描逻辑
-    if (!rootDir.isEmpty())
+    auto &db = DatabaseService::instance();
+    if (db.isPopulated())
     {
-        std::cout << "Setting root directory: " << rootDir.toStdString() << '\n';
-        mediaController.setRootPath(rootDir.toStdString());
-
         auto start = std::chrono::high_resolution_clock::now();
-        mediaController.startScan();
-
-        std::cout << "Scanning...\n";
-        // 简单的自旋等待，避免完全阻塞主线程事件循环（如果需要的话）
-        while (!mediaController.isScanCplt())
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-
+        auto root = db.loadFullTree();
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        std::cout << "Scan completed in " << duration.count() << " ms\n";
+        std::cout << "Database loaded in " << duration.count() << " ms\n";
+        std::cout << "rootPath:" << root->getPath() << "\n";
 
-        std::cout << "Attempting to auto-play...\n";
+        mediaController.setRootNode(root);
         mediaController.play();
     }
     else
     {
-        std::cerr << "Warning: No rootDir provided. Use --rootDir=\"/path/to/music\"\n";
+        // 3. 扫描逻辑
+        if (!rootDir.isEmpty())
+        {
+            std::cout << "Setting root directory: " << rootDir.toStdString() << '\n';
+            mediaController.setRootPath(rootDir.toStdString());
+
+            auto start = std::chrono::high_resolution_clock::now();
+            mediaController.startScan();
+
+            std::cout << "Scanning...\n";
+            // 简单的自旋等待，避免完全阻塞主线程事件循环（如果需要的话）
+            while (!mediaController.isScanCplt())
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+
+            auto end = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            std::cout << "Scan completed in " << duration.count() << " ms\n";
+            std::cout << "rootNode:" << mediaController.getRootNode()->getPath() << "\n";
+            db.saveFullTree(mediaController.getRootNode());
+            std::cout << "Attempting to auto-play...\n";
+            mediaController.play();
+        }
+        else
+        {
+            std::cerr << "Warning: No rootDir provided. Use --rootDir=\"/path/to/music\"\n";
+        }
     }
 
     // 4. 显示菜单
@@ -208,7 +225,7 @@ void initLogger()
 {
     try
     {
-        spdlog::level::level_enum default_level = spdlog::level::err;
+        spdlog::level::level_enum default_level = spdlog::level::info;
 #ifdef DEBUG
         default_level = spdlog::level::debug;
 #endif
@@ -293,7 +310,7 @@ int main(int argc, char *argv[])
         QCoreApplication app(argc, argv); // 无 GUI 上下文
         app.setOrganizationName("MusicPlayer3");
         app.setApplicationName("MusicPlayer");
-
+        DatabaseService::instance().connect("localhost", 3306, "root", "123456", "MusicPlayerDB");
         runTerminalMode(app, rootDir);
 
         // 清理 spdlog
@@ -318,7 +335,7 @@ int main(int argc, char *argv[])
 
         spdlog::info("Initializing MediaController (GUI Mode)...");
         MediaController::init();
-
+        DatabaseService::instance().connect("localhost", 3306, "root", "123456", "MusicPlayerDB");
         QQmlApplicationEngine engine;
         engine.addImageProvider(QStringLiteral("covercache"), new CoverImageProvider);
 

@@ -1,153 +1,195 @@
 #include "CoverCache.hpp"
-#include "CoverImage.hpp"
+#include "DatabaseService.hpp"
+#include <opencv2/opencv.hpp>
+#include <spdlog/spdlog.h>
 
-// [Modified] 引入 OpenCV 核心与图像处理模块
-// 移除 opencv2/core/ocl.hpp，不再使用 GPU，避免小图传输的性能惩罚
-#include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>
-
-void CoverCache::putCompressedFromPixels(const std::string &album,
-                                         const unsigned char *srcPixels,
-                                         int srcW, int srcH, int channels)
+std::shared_ptr<CoverImage> CoverCache::decodeBlob(const std::vector<uint8_t> &blob)
 {
-    // 参数基本校验
-    if (album.empty() || !srcPixels || srcW <= 0 || srcH <= 0)
-    {
-        return;
-    }
-
-    // 1. 获取对应的分桶索引
-    size_t idx = getShardIndex(album);
-    CacheShard &shard = shards[idx];
-
-    // 2. 快速检查：如果已存在，直接返回 (持有锁)
-    {
-        std::lock_guard<std::mutex> lock(shard.mutex);
-        if (shard.map.find(album) != shard.map.end())
-            return;
-    }
-
-    // 3. 执行 Resize 操作 (无锁状态)
-    // [Modified] 纯 CPU 处理。
-    // OpenCV 的 resize 底层会自动使用 AVX2/SSE 指令集优化，
-    // 对于 256x256 这种小图，CPU 处理仅需微秒级，远快于 GPU 的内存往返传输。
-    const int targetW = 256;
-    const int targetH = 256;
-
-    std::vector<uint8_t> resizedPixels;
-
+    if (blob.empty())
+        return nullptr;
     try
     {
-        // 构建 OpenCV Mat 包装原始数据 (不进行拷贝，只是引用指针)
-        // 这里的 srcPixels 通常来自 FileScanner 的解码结果，已经是 RGBA 格式
-        int type = (channels == 4) ? CV_8UC4 : CV_8UC3;
-        cv::Mat srcMat(srcH, srcW, type, const_cast<unsigned char *>(srcPixels));
-        cv::Mat dstMat;
+        // 从 Blob 解码
+        cv::Mat rawData(1, static_cast<int>(blob.size()), CV_8UC1, const_cast<void *>(static_cast<const void *>(blob.data())));
+        cv::Mat decodedMat = cv::imdecode(rawData, cv::IMREAD_UNCHANGED);
 
-        // [Modified] 使用 INTER_AREA (区域重采样)
-        // 这是缩小图片时效果最好的插值算法，能有效避免摩尔纹，虽然计算量稍大，但在 CPU 上处理小图依然极快。
-        cv::resize(srcMat, dstMat, cv::Size(targetW, targetH), 0, 0, cv::INTER_AREA);
+        if (decodedMat.empty())
+            return nullptr;
 
-        // 如果输入是 3 通道，转为 4 通道 (RGBA) 以便统一存储
-        // 注意：FileScanner 现在通过 OpenCV 解码并转为 RGBA 传入，所以这里通常已经是 4 通道
-        if (dstMat.channels() == 3)
-        {
-            cv::cvtColor(dstMat, dstMat, cv::COLOR_RGB2RGBA);
-        }
-
-        // 导出数据
-        if (dstMat.isContinuous())
-        {
-            size_t dataSize = dstMat.total() * dstMat.elemSize();
-            resizedPixels.resize(dataSize);
-            std::memcpy(resizedPixels.data(), dstMat.data, dataSize);
-        }
+        cv::Mat rgbaMat;
+        if (decodedMat.channels() == 4)
+            rgbaMat = decodedMat;
+        else if (decodedMat.channels() == 3)
+            cv::cvtColor(decodedMat, rgbaMat, cv::COLOR_BGR2RGBA);
+        else if (decodedMat.channels() == 1)
+            cv::cvtColor(decodedMat, rgbaMat, cv::COLOR_GRAY2RGBA);
         else
-        {
-            // 防御性代码：如果不连续，克隆一份连续的
-            cv::Mat cont = dstMat.clone();
-            size_t dataSize = cont.total() * cont.elemSize();
-            resizedPixels.resize(dataSize);
-            std::memcpy(resizedPixels.data(), cont.data, dataSize);
-        }
-    }
-    catch (const std::exception &e)
-    {
-        spdlog::error("[CoverCache] Error resizing album '{}': {}", album, e.what());
-        return;
-    }
+            return nullptr;
 
-    // 4. 再次加锁，将结果写入缓存
-    try
-    {
-        auto img = std::make_shared<CoverImage>(
-            targetW, targetH, 4, std::move(resizedPixels));
+        // 双重保险 Resize
+        if (rgbaMat.cols != 256 || rgbaMat.rows != 256)
+            cv::resize(rgbaMat, rgbaMat, cv::Size(256, 256), 0, 0, cv::INTER_AREA);
 
-        std::lock_guard<std::mutex> lock(shard.mutex);
-        // 双重检查，防止在 resize 期间别的线程已经写进去了
-        if (shard.map.find(album) == shard.map.end())
-        {
-            shard.map[album] = std::move(img);
-        }
+        if (!rgbaMat.isContinuous())
+            rgbaMat = rgbaMat.clone();
+
+        size_t dataSize = rgbaMat.total() * rgbaMat.elemSize();
+        std::vector<uint8_t> pixels(dataSize);
+        std::memcpy(pixels.data(), rgbaMat.data, dataSize);
+
+        return std::make_shared<CoverImage>(256, 256, 4, std::move(pixels));
     }
-    catch (const std::exception &e)
+    catch (...)
     {
-        spdlog::error("[CoverCache] Failed to create CoverImage for album '{}': {}", album, e.what());
+        return nullptr;
     }
 }
 
-std::shared_ptr<CoverImage> CoverCache::get(const std::string &album)
+std::shared_ptr<CoverImage> CoverCache::get(const std::string &albumKey)
 {
-    size_t idx = getShardIndex(album);
-    CacheShard &shard = shards[idx];
+    if (albumKey.empty())
+        return nullptr;
 
-    std::lock_guard<std::mutex> lock(shard.mutex);
-    auto it = shard.map.find(album);
-    return (it == shard.map.end()) ? nullptr : it->second;
+    // 1. RAM Hit (Critical Section)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_map.find(albumKey);
+        if (it != m_map.end())
+        {
+            m_lruList.splice(m_lruList.begin(), m_lruList, it->second.lruIt);
+            return it->second.image;
+        }
+    }
+
+    // 2. RAM Miss -> DB Query (Release Cache Lock to avoid deadlock with DB Lock)
+    std::vector<uint8_t> blob = DatabaseService::instance().getCoverBlob(albumKey);
+    if (blob.empty())
+        return nullptr;
+
+    auto image = decodeBlob(blob);
+    if (!image || !image->isValid())
+        return nullptr;
+
+    // 3. Put into RAM (Critical Section)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        // Double check
+        auto it = m_map.find(albumKey);
+        if (it != m_map.end())
+        {
+            m_lruList.splice(m_lruList.begin(), m_lruList, it->second.lruIt);
+            return it->second.image;
+        }
+
+        // Evict if needed
+        if (m_map.size() >= MAX_CAPACITY)
+        {
+            std::string keyToRemove = m_lruList.back();
+            m_lruList.pop_back();
+            m_map.erase(keyToRemove);
+        }
+
+        m_lruList.push_front(albumKey);
+        m_map[albumKey] = {image, m_lruList.begin()};
+        return image;
+    }
+}
+
+bool CoverCache::hasKey(const std::string &albumKey)
+{
+    if (albumKey.empty())
+        return false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_map.find(albumKey) != m_map.end())
+            return true;
+    }
+    // Fallback to DB check
+    return !DatabaseService::instance().getCoverBlob(albumKey).empty();
+}
+
+void CoverCache::putCompressedFromPixels(const std::string &albumKey,
+                                         const unsigned char *srcPixels,
+                                         int srcW, int srcH, int channels)
+{
+    if (albumKey.empty() || !srcPixels || srcW <= 0 || srcH <= 0)
+        return;
+
+    try
+    {
+        // --- 1. 处理图片 (无锁) ---
+        int type = (channels == 4) ? CV_8UC4 : CV_8UC3;
+        cv::Mat srcMat(srcH, srcW, type, const_cast<unsigned char *>(srcPixels));
+        cv::Mat dstMat;
+        cv::resize(srcMat, dstMat, cv::Size(256, 256), 0, 0, cv::INTER_AREA);
+        if (dstMat.channels() == 3)
+            cv::cvtColor(dstMat, dstMat, cv::COLOR_RGB2RGBA);
+        if (!dstMat.isContinuous())
+            dstMat = dstMat.clone();
+
+        // 内存对象 (RAM)
+        size_t dataSize = dstMat.total() * dstMat.elemSize();
+        std::vector<uint8_t> resizedPixels(dataSize);
+        std::memcpy(resizedPixels.data(), dstMat.data, dataSize);
+        auto image = std::make_shared<CoverImage>(256, 256, 4, std::move(resizedPixels));
+
+        // 数据库对象 (PNG压缩)
+        std::vector<uchar> pngBuf;
+        std::vector<int> params = {cv::IMWRITE_PNG_COMPRESSION, 3};
+        cv::imencode(".png", dstMat, pngBuf, params);
+
+        // --- 2. 立即写入数据库 (避免数据丢失) ---
+        // 关键点：即使稍后 Cache 满了被 Evict，DB 里已经安全了。
+        // saveCoverBlob 内部有自己的锁，不持有 Cache 锁，安全。
+        DatabaseService::instance().saveCoverBlob(albumKey, pngBuf);
+
+        // --- 3. 更新内存 LRU (持有 Cache 锁) ---
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_map.find(albumKey);
+        if (it != m_map.end())
+        {
+            // Update & Move to front
+            it->second.image = image;
+            m_lruList.splice(m_lruList.begin(), m_lruList, it->second.lruIt);
+        }
+        else
+        {
+            // Insert & Evict if needed
+            if (m_map.size() >= MAX_CAPACITY)
+            {
+                m_map.erase(m_lruList.back());
+                m_lruList.pop_back();
+            }
+            m_lruList.push_front(albumKey);
+            m_map[albumKey] = {image, m_lruList.begin()};
+        }
+    }
+    catch (const std::exception &e)
+    {
+        spdlog::error("[CoverCache] Put pixels failed: {}", e.what());
+    }
 }
 
 void CoverCache::clear()
 {
-    for (auto &shard : shards)
-    {
-        std::lock_guard<std::mutex> lock(shard.mutex);
-        shard.map.clear();
-    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_map.clear();
+    m_lruList.clear();
 }
 
-// 调试函数
-void run_cover_test()
+std::shared_ptr<CoverImage> CoverCache::getRamOnly(const std::string &albumKey)
 {
-    CoverCache &cache = CoverCache::instance();
-    // 统计总数
-    int totalKeys = 0;
-    for (const auto &shard : cache.shards)
+    if (albumKey.empty())
+        return nullptr;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_map.find(albumKey);
+    if (it != m_map.end())
     {
-        std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(shard.mutex));
-        totalKeys += shard.map.size();
+        // 命中内存：更新 LRU 并返回
+        m_lruList.splice(m_lruList.begin(), m_lruList, it->second.lruIt);
+        return it->second.image;
     }
-
-    std::cout << "========================================================\n";
-    std::cout << "--- CoverCache Debug (Total Keys: " << totalKeys << ") ---\n";
-    std::cout << "========================================================\n";
-
-    int count = 0;
-    for (const auto &shard : cache.shards)
-    {
-        // 注意：这里为了 debug 锁住了 shard，会暂时阻塞写入
-        std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(shard.mutex));
-        for (const auto &[key, imgPtr] : shard.map)
-        {
-            std::string status = "Invalid or Null";
-            if (imgPtr && imgPtr->isValid())
-            {
-                status = std::format("{}x{} ({} channels)",
-                                     imgPtr->width(), imgPtr->height(), imgPtr->channels());
-            }
-
-            // 格式化输出
-            std::cout << std::format("[{:02}] KEY: \"{}\" | SIZE: {}\n",
-                                     ++count, key, status);
-        }
-    }
+    // 内存未命中：直接返回空，绝不调用 DatabaseService
+    return nullptr;
 }

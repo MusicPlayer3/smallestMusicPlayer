@@ -1,7 +1,14 @@
 #ifndef __COVER_CACHE_HPP__
 #define __COVER_CACHE_HPP__
+
 #include "PCH.h"
 #include "CoverImage.hpp"
+#include <list>
+#include <mutex>
+#include <unordered_map>
+#include <memory>
+#include <string>
+#include <vector>
 
 class CoverCache
 {
@@ -12,38 +19,39 @@ public:
         return cache;
     }
 
-    void putCompressedFromPixels(const std::string &album,
+    std::shared_ptr<CoverImage> get(const std::string &albumKey);
+    bool hasKey(const std::string &albumKey);
+
+    /**
+     * @brief [新增] 仅从内存缓存获取，绝不回调数据库
+     * 用于打破 DatabaseService -> CoverCache -> DatabaseService 的死锁循环
+     */
+    std::shared_ptr<CoverImage> getRamOnly(const std::string &albumKey);
+
+    void putCompressedFromPixels(const std::string &albumKey,
                                  const unsigned char *srcPixels,
                                  int srcW, int srcH, int channels);
 
-    std::shared_ptr<CoverImage> get(const std::string &album);
-
     void clear();
-
-    bool hasKey(const std::string &album)
-    {
-        return instance().get(album) != nullptr;
-    }
 
 private:
     CoverCache() = default;
+    ~CoverCache() = default;
+    CoverCache(const CoverCache &) = delete;
+    CoverCache &operator=(const CoverCache &) = delete;
 
-    // 分段锁机制：使用 32 个分桶减少锁竞争
-    static const size_t SHARD_COUNT = 32;
-    struct CacheShard
+    const size_t MAX_CAPACITY = 200;
+
+    std::mutex m_mutex;
+    std::list<std::string> m_lruList;
+    struct CacheEntry
     {
-        std::mutex mutex;
-        std::unordered_map<std::string, std::shared_ptr<CoverImage>> map;
+        std::shared_ptr<CoverImage> image;
+        std::list<std::string>::iterator lruIt;
     };
+    std::unordered_map<std::string, CacheEntry> m_map;
 
-    std::array<CacheShard, SHARD_COUNT> shards;
-
-    // 辅助：根据 key 获取分桶索引
-    size_t getShardIndex(const std::string &key) const
-    {
-        return std::hash<std::string>{}(key) % SHARD_COUNT;
-    }
-
-    friend void run_cover_test();
+    std::shared_ptr<CoverImage> decodeBlob(const std::vector<uint8_t> &blob);
 };
+
 #endif

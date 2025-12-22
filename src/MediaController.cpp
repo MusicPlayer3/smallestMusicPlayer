@@ -1,5 +1,6 @@
 #include "MediaController.hpp"
 #include "AudioPlayer.hpp"
+#include "DatabaseService.hpp"
 #include "SysMediaService.hpp"
 
 // 静态成员初始化
@@ -639,6 +640,7 @@ bool MediaController::isScanCplt()
     {
         rootNode = scanner->getPlaylistTree();
         currentDir = rootNode.get();
+        DatabaseService::instance().saveFullTree(rootNode);
     }
     return cplt;
 }

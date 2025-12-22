@@ -1,4 +1,5 @@
 #include "uicontroller.h"
+#include "DatabaseService.hpp"
 #include "FileScanner.hpp"
 #include "MediaController.hpp"
 #include "PlaylistNode.hpp"
@@ -66,6 +67,26 @@ void UIController::startMediaScan(const QString &path)
 void UIController::UpdateLastFolder()
 {
     // TODO： 这里需要调用后端实例的方法，从数据库中调用最近播放的文件夹
+    auto &db = DatabaseService::instance();
+    if (db.isPopulated())
+    {
+        // 有数据，从数据库中获取最近播放的文件夹
+        auto rootNode = db.loadFullTree();
+        if (rootNode)
+        {
+            MediaController::getInstance().setRootNode(rootNode);
+            emit scanCompleted();
+            m_hasLoadedInitialData = true;
+            m_isScanning = false;
+            auto first = m_mediaController.findFirstValidAudio(m_mediaController.getRootNode().get());
+            m_mediaController.setNowPlayingSong(first);
+            m_mediaController.pause();
+        }
+    }
+    else
+    {
+        // TODO:没有数据，唤出文件夹选择器
+    }
 
     qDebug() << "UIController: UpdateLastFolder called. Ready for AudioPlayer logic.";
 }

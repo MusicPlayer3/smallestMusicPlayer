@@ -29,6 +29,7 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS
     Core Gui Quick QuickControls2 Widgets
     Multimedia Concurrent LinguistTools
+    Sql
 )
 
 qt_standard_project_setup(REQUIRES 6.8)
@@ -180,6 +181,7 @@ qt_add_qml_module(appMusicPlayer
     inc/SimpleThreadPool.hpp
     inc/SysMediaService.hpp
     inc/uicontroller.h
+    inc/DatabaseService.hpp
 
     # Sources
     src/AudioPlayer.cpp
@@ -190,6 +192,8 @@ qt_add_qml_module(appMusicPlayer
     src/musiclistmodel.cpp
     src/SysMediaService.cpp
     src/UIController.cpp
+    src/DatabaseService.cpp
+
     QML_FILES
     qml/Background.qml
     qml/BubblePopup.qml
@@ -271,6 +275,7 @@ target_link_libraries(appMusicPlayer
     Qt6::Quick
     Qt6::QuickControls2
     Qt6::Widgets
+    Qt6::Sql
     $<$<PLATFORM_ID:Windows>:Qt6::EntryPointImplementation>
     MyThirdPartyLibs
     ${PROJECT_LIBRARIES}
