@@ -202,6 +202,7 @@ qt_add_qml_module(appMusicPlayer
     qml/OutputSettingsWindow.qml
     qml/StyleButton.qml
     qml/WaveformProgressBar.qml
+    qml/StartupPage.qml
 )
 
 # ==============================================================================

@@ -164,7 +164,43 @@ ApplicationWindow {
             color: "#000000"
         }
 
-        // =========================================================================
+        
+        StackLayout {
+            id: pages
+            anchors.fill: parent
+            currentIndex: 0
+
+            // -------------------------
+            // Page 0: 启动页（窗体1）
+            // -------------------------
+            StartupPage {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                onRestorePlaylistRequested: {
+                    // 这里以后接数据库恢复逻辑
+                    pages.currentIndex = 2
+                }
+                onAddFolderRequested: {
+                    pages.currentIndex = 1
+                    folderDialog.open()
+                }
+
+                
+            }
+
+            
+
+            // -------------------------
+            // Page 2: 主播放器页（窗体2）
+            // -------------------------
+            Item {
+                id: playerPage
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                anchors.fill: parent
+
+// =========================================================================
         // 1. 全局背景 (渐变流光)
         // =========================================================================
         Background {
@@ -985,7 +1021,9 @@ ApplicationWindow {
                 }
             }
         }
-    } // End of windowContent
+            }
+        }
+} // End of windowContent
 
     // ResizeArea (保留在最外层，不被裁剪)
     Item {
@@ -1100,7 +1138,7 @@ ApplicationWindow {
         onPressed: window.startSystemResize(edgeFlag)
     }
 
-    Component.onCompleted: folderDialog.open()
+    //Component.onCompleted: folderDialog.open()
     FolderDialog {
         id: folderDialog
         title: "选择音乐文件夹"
