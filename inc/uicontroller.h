@@ -38,11 +38,16 @@ class UIController : public QObject
     Q_PROPERTY(int repeatMode READ getRepeatMode NOTIFY repeatModeChanged FINAL)
     Q_PROPERTY(int outputMode READ outputMode WRITE setOutputMode NOTIFY outputModeChanged FINAL)
 
+    // --- 数据库连接 ---
+
+
 public:
     explicit UIController(QObject *parent = nullptr);
     ~UIController();
 
     Q_INVOKABLE void startMediaScan(const QString &path);
+
+    Q_INVOKABLE void UpdateLastFolder();
 
     // Getters
     QString defaultMusicPath() const;

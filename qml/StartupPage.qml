@@ -11,6 +11,14 @@ Item {
     signal restorePlaylistRequested()
     signal addFolderRequested()
 
+    MouseArea {
+        anchors.fill: parent
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        onPressed: window.startSystemMove()
+    }
+
     Row {
         id: titleBarbuttons
         anchors.top: parent.top
@@ -187,7 +195,7 @@ Item {
             id: restorePlaylistButton
             Layout.fillWidth: true
             text: "恢复播放列表"
-            //onClicked: root.restorePlaylistRequested()
+            onClicked: root.restorePlaylistRequested()
         }
 
         Button {

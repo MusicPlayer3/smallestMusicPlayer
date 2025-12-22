@@ -63,6 +63,13 @@ void UIController::startMediaScan(const QString &path)
     }
 }
 
+void UIController::UpdateLastFolder()
+{
+    // TODO： 这里需要调用后端实例的方法，从数据库中调用最近播放的文件夹
+
+    qDebug() << "UIController: UpdateLastFolder called. Ready for AudioPlayer logic.";
+}
+
 static QString formatTime(qint64 microsecs)
 {
     if (microsecs < 0)

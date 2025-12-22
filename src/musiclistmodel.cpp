@@ -357,6 +357,7 @@ void MusicListModel::applySort()
     endResetModel();
 }
 
+// 增加一些Delegate在ListView上
 void MusicListModel::repopulateList(const std::vector<std::shared_ptr<PlaylistNode>> &nodes)
 {
     beginResetModel();

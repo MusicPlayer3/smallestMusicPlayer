@@ -179,7 +179,8 @@ ApplicationWindow {
 
                 onRestorePlaylistRequested: {
                     // 这里以后接数据库恢复逻辑
-                    pages.currentIndex = 2
+                    playerController.UpdateLastFolder()
+                    pages.currentIndex = 1
                 }
                 onAddFolderRequested: {
                     pages.currentIndex = 1
@@ -192,7 +193,7 @@ ApplicationWindow {
             
 
             // -------------------------
-            // Page 2: 主播放器页（窗体2）
+            // Page 1: 主播放器页（窗体2）
             // -------------------------
             Item {
                 id: playerPage
@@ -1023,7 +1024,7 @@ ApplicationWindow {
         }
             }
         }
-} // End of windowContent
+    } // End of windowContent
 
     // ResizeArea (保留在最外层，不被裁剪)
     Item {
