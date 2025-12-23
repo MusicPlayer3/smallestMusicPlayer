@@ -146,6 +146,12 @@ public:
     void setRepeatMode(RepeatMode mode);
     RepeatMode getRepeatMode();
 
+    int getSongsRating(PlaylistNode *node);              // 获取歌曲星级
+    void setSongsRating(PlaylistNode *node, int rating); // 设置歌曲星级
+
+    int getSongsPlayCount(PlaylistNode *node);     // 获取歌曲播放次数
+    void updateSongsPlayCount(PlaylistNode *node); // 更新歌曲播放次数（+1）
+
     // 音频输出参数设置
     void setMixingParameters(int sampleRate, AVSampleFormat smapleFormat);
     void setOUTPUTMode(OutputMode mode);

@@ -39,8 +39,9 @@ std::shared_ptr<CoverImage> CoverCache::decodeBlob(const std::vector<uint8_t> &b
 
         return std::make_shared<CoverImage>(256, 256, 4, std::move(pixels));
     }
-    catch (...)
+    catch (std::exception &e)
     {
+        spdlog::error("decodeBlob error: {}", e.what());
         return nullptr;
     }
 }

@@ -21,11 +21,15 @@ private:
     std::uint32_t sampleRate;     // 采样率
     std::uint16_t bitDepth;       // 采样深度
     std::string formatType;       // 文件格式类型
+    int playCount;                // 播放次数
+    int rating;                   // 星级 (0-5)
 
 public:
-    MetaData() : duration(0), offset(0), sampleRate(0), bitDepth(0)
+    // 初始化
+    MetaData() : duration(0), offset(0), sampleRate(0), bitDepth(0),
+                 playCount(0), rating(0)
     {
-    } // 初始化
+    }
 
     MetaData(const std::string &title,
              const std::string &artist,
@@ -39,7 +43,9 @@ public:
              file_time_type lastWriteTime = file_time_type::min(),
              std::uint32_t sampleRate = 0,
              std::uint16_t bitDepth = 0,
-             const std::string &formatType = "") :
+             const std::string &formatType = "",
+             int playCount = 0,
+             int rating = 0) :
         title(title),
         artist(artist),
         album(album),
@@ -52,7 +58,9 @@ public:
         lastWriteTime(lastWriteTime),
         sampleRate(sampleRate),
         bitDepth(bitDepth),
-        formatType(formatType)
+        formatType(formatType),
+        playCount(playCount),
+        rating(rating)
     {
     }
 
@@ -76,7 +84,9 @@ public:
            << "Last Write Time: " << std::chrono::duration_cast<std::chrono::seconds>(lastWriteTime.time_since_epoch()).count() << " seconds since epoch\n"
            << "Sample Rate: " << sampleRate << "\n"
            << "Bit Depth: " << bitDepth << "\n"
-           << "Format Type: " << formatType << "\n";
+           << "Format Type: " << formatType << "\n"
+           << "Play Count: " << playCount << "\n"
+           << "Rating: " << rating << "\n";
         return os;
     }
 
@@ -159,6 +169,14 @@ public:
     {
         return formatType;
     }
+    int getPlayCount() const
+    {
+        return playCount;
+    }
+    int getRating() const
+    {
+        return rating;
+    }
 
     // setter
     void setTitle(const std::string &title)
@@ -212,6 +230,19 @@ public:
     void setFormatType(const std::string &formatType)
     {
         this->formatType = formatType;
+    }
+    void setPlayCount(int count)
+    {
+        this->playCount = count;
+    }
+    void setRating(int rating)
+    {
+        // 简单范围限制，虽然数据库层面也有 Trigger 保护
+        if (rating < 0)
+            rating = 0;
+        if (rating > 5)
+            rating = 5;
+        this->rating = rating;
     }
 };
 

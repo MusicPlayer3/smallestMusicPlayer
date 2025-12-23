@@ -1122,8 +1122,9 @@ static void scanAndDispatch(
             }
         }
     }
-    catch (...)
+    catch (std::exception &e)
     {
+        spdlog::error("Error while scanning directory: {} error:{}", dirPath.string(), e.what());
     }
 
     // 如果顺路发现了封面，直接存入节点
@@ -1488,8 +1489,9 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
         if (!fs::exists(tmpDir))
             fs::create_directories(tmpDir);
     }
-    catch (...)
+    catch (std::exception &e)
     {
+        spdlog::error("Failed to create temp directory: {}", e.what());
         return "";
     }
 
@@ -1617,8 +1619,9 @@ static void scanDirectoryRecursive(const fs::path &dirPath, std::shared_ptr<Play
             }
         }
     }
-    catch (...)
+    catch (std::exception &e)
     {
+        spdlog::error("Failed to scan directory {}: {}", dirPath.string(), e.what());
     }
 
     // 如果扫描过程中发现了封面文件，设置给当前节点
@@ -1692,8 +1695,9 @@ static void printNodeRecursive(const std::shared_ptr<PlaylistNode> &node, std::s
             std::cout << std::format(" [FILE] Rate: {}Hz, Depth: {}bit, Fmt: {}, Date: {:%F}\n",
                                      md.getSampleRate(), md.getBitDepth(), md.getFormatType(), st);
         }
-        catch (...)
+        catch (const std::exception &e)
         {
+            spdlog::error("Failed to print file metadata: {}", e.what());
             std::cout << " [FILE] (Time Error)\n";
         }
     }

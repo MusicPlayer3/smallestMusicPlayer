@@ -3,6 +3,7 @@
 #include "DatabaseService.hpp"
 #include "PlaylistNode.hpp"
 #include "SysMediaService.hpp"
+#include <mutex>
 
 // 静态成员初始化
 MediaController *MediaController::s_instance = nullptr;
@@ -54,6 +55,7 @@ MediaController::MediaController()
 {
     player = std::make_shared<AudioPlayer>();
     scanner = std::make_unique<FileScanner>();
+    scanner->initSupportedExtensions();
 
     monitorRunning = true;
     monitorThread = std::thread(&MediaController::monitorLoop, this);
@@ -816,6 +818,11 @@ bool MediaController::addSong(const std::string &path, PlaylistNode *parent)
     int64_t durSec = newNode->getMetaData().getDuration() / 1000000;
     updateStatsUpwards(parent, 1, durSec);
 
+    // 5. [新增] 同步写入数据库
+    // 注意：DatabaseService::addSong 内部会根据文件路径自动查找父目录ID，
+    // 前提是 parent 对应的目录已经在数据库中（通常情况下是存在的）。
+    DatabaseService::instance().addSong(newNode->getMetaData());
+
     return true;
 }
 
@@ -852,16 +859,20 @@ void MediaController::removeSong(PlaylistNode *node, bool deletePhysicalFile)
     // 2. 清理历史记录
     std::erase(playHistory, node);
 
-    // 3. 获取待扣除的统计数据
+    // 3. [新增] 同步删除数据库记录
+    // 必须在节点被析构前获取路径进行删除
+    DatabaseService::instance().removeSong(node->getPath());
+
+    // 4. 获取待扣除的统计数据
     int64_t durSec = node->getMetaData().getDuration() / 1000000;
 
-    // 4. 从树结构中移除
+    // 5. 从树结构中移除
     parent->removeChild(node);
 
-    // 5. 更新统计
+    // 6. 更新统计
     updateStatsUpwards(parent, -1, -durSec);
 
-    // 6. 物理删除文件
+    // 7. 物理删除文件
     if (deletePhysicalFile)
     {
         std::error_code ec;
@@ -876,11 +887,11 @@ void MediaController::removeSong(PlaylistNode *node, bool deletePhysicalFile)
         }
     }
 }
-
+void printPlaylistTree(const std::shared_ptr<PlaylistNode> &root);
 bool MediaController::addFolder(const std::string &path, PlaylistNode *parent)
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-
+    spdlog::info("addFolder: Adding folder '{}' to parent '{}'", path, parent->getPath());
     // 1. 参数校验
     if (!parent || !parent->isDir())
     {
@@ -899,20 +910,61 @@ bool MediaController::addFolder(const std::string &path, PlaylistNode *parent)
     {
         return false;
     }
-
-    // [关键修改] 检查是否为空文件夹（或不包含有效音频）
+    printPlaylistTree(newDirNode);
+    // 检查是否为空文件夹
     if (newDirNode->getTotalSongs() == 0)
     {
         spdlog::info("addFolder: Folder '{}' contains no audio files, skipped.", path);
-        return false; // 不添加，返回失败
+        return false;
     }
 
     // 3. 添加到树中
+    // 此时 newDirNode 的 parent 指针会被设置为参数中的 parent
     parent->addChild(newDirNode);
     parent->sortChildren();
 
     // 4. 更新统计
     updateStatsUpwards(parent, newDirNode->getTotalSongs(), newDirNode->getTotalDuration());
+
+    // 由于 DatabaseService::addDirectory 只能添加单个目录，我们需要遍历新生成的子树
+    std::function<void(PlaylistNode *)> recursiveDbAdd = [&](PlaylistNode *curr)
+    {
+        if (!curr)
+            return;
+
+        if (curr->isDir())
+        {
+            // 添加目录
+            std::string pPath = "";
+            if (curr->getParent())
+            {
+                pPath = curr->getParent()->getPath();
+            }
+
+            // 这里的 name 提取文件名即可
+            std::string dirName = fs::path(curr->getPath()).filename().string();
+
+            DatabaseService::instance().addDirectory(
+                curr->getPath(),
+                dirName,
+                pPath,
+                curr->getCoverKey());
+
+            // 递归处理子节点
+            for (const auto &child : curr->getChildren())
+            {
+                recursiveDbAdd(child.get());
+            }
+        }
+        else
+        {
+            // 添加歌曲
+            DatabaseService::instance().addSong(curr->getMetaData());
+        }
+    };
+
+    // 开始递归写入
+    recursiveDbAdd(newDirNode.get());
 
     return true;
 }
@@ -939,7 +991,7 @@ void MediaController::removeFolder(PlaylistNode *node, bool deletePhysicalFile)
         currentPlayingSongs = nullptr;
     }
 
-    // 2. 清理历史记录：移除所有属于该文件夹及其子文件夹的节点
+    // 2. 清理历史记录
     std::erase_if(playHistory, [node](PlaylistNode *historyNode)
                   {
         PlaylistNode* p = historyNode;
@@ -949,18 +1001,21 @@ void MediaController::removeFolder(PlaylistNode *node, bool deletePhysicalFile)
         }
         return false; });
 
-    // 3. 获取待扣除的统计数据
+    // 3. [新增] 同步删除数据库记录
+    // 数据库表定义了 ON DELETE CASCADE，删除父目录会自动级联删除所有子目录和歌曲
+    DatabaseService::instance().removeDirectory(node->getPath());
+
+    // 4. 获取待扣除的统计数据
     int64_t totalSongs = node->getTotalSongs();
     int64_t totalDur = node->getTotalDuration();
 
-    // 4. 从树结构中移除
-    // 此时智能指针引用计数减少，整棵子树会自动析构
+    // 5. 从树结构中移除
     parent->removeChild(node);
 
-    // 5. 更新统计
+    // 6. 更新统计
     updateStatsUpwards(parent, -totalSongs, -totalDur);
 
-    // 6. 物理删除文件夹
+    // 7. 物理删除文件夹
     if (deletePhysicalFile)
     {
         std::error_code ec;
@@ -973,5 +1028,87 @@ void MediaController::removeFolder(PlaylistNode *node, bool deletePhysicalFile)
         {
             spdlog::info("removeFolder: Deleted directory {}", node->getPath());
         }
+    }
+}
+
+int MediaController::getSongsRating(PlaylistNode *node)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+    if (node == nullptr)
+    {
+        return 0;
+    }
+    else if (node->isDir())
+    {
+        return 0;
+    }
+    else
+    {
+        auto md = node->getMetaData();
+        auto rating = DatabaseService::instance().getRating(md.getFilePath());
+        md.setRating(rating);
+        node->setMetaData(md);
+        return rating;
+    }
+}
+
+void MediaController::setSongsRating(PlaylistNode *node, int rating)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+    if (node == nullptr)
+    {
+        return;
+    }
+    else if (node->isDir())
+    {
+        return;
+    }
+    else
+    {
+        auto md = node->getMetaData();
+        DatabaseService::instance().updateRating(md.getFilePath(), rating);
+        md.setRating(rating);
+        node->setMetaData(md);
+    }
+}
+
+void MediaController::updateSongsPlayCount(PlaylistNode *node)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+    if (node == nullptr)
+    {
+        return;
+    }
+    else if (node->isDir())
+    {
+        return;
+    }
+    else
+    {
+        auto md = node->getMetaData();
+        DatabaseService::instance().recordPlay(md.getFilePath());
+        md.setPlayCount(DatabaseService::instance().getPlayCount(md.getFilePath()));
+        node->setMetaData(md);
+    }
+}
+
+int MediaController::getSongsPlayCount(PlaylistNode *node)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+    if (node == nullptr)
+    {
+        return 0;
+    }
+    else if (node->isDir())
+    {
+        return 0;
+    }
+    else
+    {
+        auto md = node->getMetaData();
+        auto res = DatabaseService::instance().getPlayCount(md.getFilePath());
+        md.setPlayCount(res);
+        node->setMetaData(md);
+        return res;
     }
 }
