@@ -10,7 +10,7 @@ class PlaylistNode : public std::enable_shared_from_this<PlaylistNode>
 private:
     bool _isDir;                                         // 是否是目录
     std::string path;                                    // 完整路径（从根开始）
-    std::string _coverKey;                               // 文件夹封面的缓存Key（通常为文件夹路径或专辑名）
+    std::string _coverKey;                               // 文件夹封面的缓存Key（通常为文件夹路径）
     MetaData metaData;                                   // 音频文件元数据 (对于目录节点，利用其中的 coverPath 存储扫描到的封面路径)
     std::vector<std::shared_ptr<PlaylistNode>> children; // 这个目录下的子目录+音频文件
     std::weak_ptr<PlaylistNode> parent;                  // 父节点 (如果是根节点则为空)

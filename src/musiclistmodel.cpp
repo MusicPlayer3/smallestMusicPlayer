@@ -185,8 +185,15 @@ MusicItem MusicListModel::createItemFromNode(PlaylistNode *node, int id)
         item.isFolder = true;
         std::filesystem::path p(node->getPath());
         item.title = QString::fromStdString(p.filename().string());
-        QString coverPath = QString::fromStdString("image://covercache/" + node->getThisDirCover());
-        item.imageSource = coverPath;
+        std::string key = node->getCoverKey();
+        if (!key.empty())
+        {
+            item.imageSource = QString::fromStdString("image://covercache/" + key);
+        }
+        else
+        {
+            item.imageSource = ""; // 或留空
+        }
         item.isPlaying = false;
         item.extraInfo = formatFolderInfo(node);
 
@@ -212,10 +219,17 @@ MusicItem MusicListModel::createItemFromNode(PlaylistNode *node, int id)
         item.album = QString::fromStdString(meta.getAlbum());
         item.extraInfo = formatSongInfo(node);
 
-        if (!item.album.isEmpty())
-            item.imageSource = "image://covercache/" + item.album;
+        std::string key = node->getCoverKey();
+
+        if (!key.empty())
+        {
+            item.imageSource = QString::fromStdString("image://covercache/" + key);
+        }
         else
-            item.imageSource = "image://covercache/" + item.title;
+        {
+            // 如果确实没有封面，前端可以显示占位图
+            item.imageSource = "";
+        }
 
         item.isPlaying = false;
     }
