@@ -1547,6 +1547,125 @@ std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
     }
     return "";
 }
+// --------------------------------------------------------------------------------
+// [新增实现] 静态单独扫描功能
+// --------------------------------------------------------------------------------
+
+std::shared_ptr<PlaylistNode> FileScanner::scanFile(const std::string &path)
+{
+    // 1. 基础检查
+    if (!fs::exists(path) || !isffmpeg(path))
+    {
+        return nullptr;
+    }
+
+    auto node = std::make_shared<PlaylistNode>(path, false);
+
+    // 2. 获取元数据 (复用现有的 getMetaData)
+    MetaData md = FileScanner::getMetaData(path);
+
+    // 3. 设置封面 Key (优先专辑名)
+    std::string albumKey = md.getAlbum().empty() ? md.getTitle() : md.getAlbum();
+    node->setCoverKey(albumKey);
+    node->setMetaData(md);
+
+    // 4. 同步处理封面 (复用 ImageHelpers::processTrackCover)
+    // 注意：ImageHelpers 位于 FileScanner.cpp 的匿名空间中，可以直接访问
+    ImageHelpers::processTrackCover(path, albumKey);
+
+    return node;
+}
+
+// 内部递归辅助函数
+static void scanDirectoryRecursive(const fs::path &dirPath, std::shared_ptr<PlaylistNode> parentNode)
+{
+    if (fs::is_symlink(dirPath))
+        return;
+
+    std::vector<fs::path> subDirs;
+    std::string detectedDirCover; // 记录当前目录发现的封面文件
+
+    try
+    {
+        for (const auto &entry : fs::directory_iterator(dirPath))
+        {
+            if (entry.is_regular_file())
+            {
+                std::string pathStr = entry.path().string();
+                std::string ext = getLowerExt(pathStr);
+
+                // 处理音频
+                if (isffmpeg(pathStr))
+                {
+                    auto fileNode = FileScanner::scanFile(pathStr);
+                    if (fileNode)
+                    {
+                        parentNode->addChild(fileNode);
+                    }
+                }
+                // 处理封面
+                else if (detectedDirCover.empty() && kImageExts.contains(ext))
+                {
+                    std::string stem = entry.path().stem().string();
+                    if (isCoverFileName(stem))
+                        detectedDirCover = pathStr;
+                }
+            }
+            else if (entry.is_directory())
+            {
+                subDirs.push_back(entry.path());
+            }
+        }
+    }
+    catch (...)
+    {
+    }
+
+    // 如果扫描过程中发现了封面文件，设置给当前节点
+    if (!detectedDirCover.empty())
+    {
+        parentNode->setCoverPath(detectedDirCover);
+    }
+
+    // 递归处理子目录
+    for (const auto &sd : subDirs)
+    {
+        fs::path p = sd;
+        p.make_preferred();
+
+        // 确保中文路径能作为 Key
+        std::string fullPathKey = EncodingUtils::detectAndConvert(p.string());
+
+        auto childDir = std::make_shared<PlaylistNode>(p.string(), true);
+        childDir->setCoverKey(fullPathKey);
+
+        scanDirectoryRecursive(sd, childDir);
+
+        // 无论子目录是否为空，先添加进去，由后处理统计来决定总歌曲数
+        parentNode->addChild(childDir);
+    }
+}
+
+std::shared_ptr<PlaylistNode> FileScanner::scanDirectory(const std::string &path)
+{
+    fs::path p(path);
+    if (!fs::exists(p) || !fs::is_directory(p))
+        return nullptr;
+
+    // 1. 创建根节点
+    std::string fullPathKey = EncodingUtils::detectAndConvert(p.string());
+    auto dirNode = std::make_shared<PlaylistNode>(p.string(), true);
+    dirNode->setCoverKey(fullPathKey);
+
+    // 2. 递归扫描
+    scanDirectoryRecursive(p, dirNode);
+
+    // 3. 执行后处理聚合 (统计歌曲数、时长、提取深层封面)
+    // 复用 ScannerLogic::postProcessAggregation
+    ScannerLogic::postProcessAggregation(dirNode);
+
+    return dirNode;
+}
 
 // 调试辅助
 static void printNodeRecursive(const std::shared_ptr<PlaylistNode> &node, std::string prefix, bool isLast)

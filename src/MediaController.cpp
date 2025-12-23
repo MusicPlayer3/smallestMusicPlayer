@@ -1,6 +1,7 @@
 #include "MediaController.hpp"
 #include "AudioPlayer.hpp"
 #include "DatabaseService.hpp"
+#include "PlaylistNode.hpp"
 #include "SysMediaService.hpp"
 
 // 静态成员初始化
@@ -324,30 +325,56 @@ void MediaController::preloadNextSong()
 PlaylistNode *MediaController::pickRandomSong(PlaylistNode *scope)
 {
     if (!scope)
+    {
         return nullptr;
+    }
+
+    // 预分配空间以提高性能
     std::vector<PlaylistNode *> candidates;
+    candidates.reserve(scope->getChildren().size());
+
+    // 使用范围for循环和emplace_back提高效率
     for (auto &child : scope->getChildren())
     {
         if (!child->isDir())
-            candidates.push_back(child.get());
+        {
+            candidates.emplace_back(child.get());
+        }
     }
 
     if (candidates.empty())
-        return nullptr;
-    if (candidates.size() == 1)
-        return candidates[0];
-
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, candidates.size() - 1);
-
-    PlaylistNode *picked = candidates[dis(gen)];
-    // 如果随到了当前正在放的，再试一次 (但不强制死循环)
-    if (picked == currentPlayingSongs && candidates.size() > 1)
     {
-        picked = candidates[dis(gen)];
+        return nullptr;
     }
-    return picked;
+    if (candidates.size() == 1)
+    {
+        return candidates[0];
+    }
+
+    // 使用线程局部存储的随机数生成器
+    thread_local static std::random_device rd;
+    thread_local static std::mt19937 gen(rd());
+    std::uniform_int_distribution<size_t> dis(0, candidates.size() - 1);
+
+    // 使用unordered_set存储历史记录以提高查找效率
+    static std::unordered_set<PlaylistNode *> historySet(playHistory.begin(), playHistory.end());
+
+    // 更直接的逻辑，避免无限循环
+    size_t attempts = 0;
+    const size_t maxAttempts = candidates.size() * 2;
+
+    while (attempts++ < maxAttempts)
+    {
+        PlaylistNode *picked = candidates[dis(gen)];
+
+        if (picked != currentPlayingSongs || candidates.size() == 1 || historySet.find(picked) == historySet.end())
+        {
+            return picked;
+        }
+    }
+
+    // 如果多次尝试未找到合适的歌曲，返回第一个候选
+    return candidates[0];
 }
 
 void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
@@ -707,4 +734,244 @@ AudioParams MediaController::getMixingParameters()
 AudioParams MediaController::getDeviceParameters()
 {
     return player ? player->getDeviceParameters() : AudioParams();
+}
+
+void MediaController::updateStatsUpwards(PlaylistNode *startNode, int64_t deltaSongs, int64_t deltaDuration)
+{
+    if (deltaSongs == 0 && deltaDuration == 0)
+        return;
+
+    PlaylistNode *curr = startNode;
+    while (curr)
+    {
+        // 更新歌曲数，防止减过头
+        int64_t newSongs = (int64_t)curr->getTotalSongs() + deltaSongs;
+        curr->setTotalSongs(newSongs < 0 ? 0 : newSongs);
+
+        // 更新时长
+        int64_t newDur = (int64_t)curr->getTotalDuration() + deltaDuration;
+        curr->setTotalDuration(newDur < 0 ? 0 : newDur);
+
+        // 向上移动
+        curr = curr->getParent().get();
+    }
+}
+
+bool MediaController::isPlayingNodeOrChild(PlaylistNode *node)
+{
+    if (!currentPlayingSongs || !node)
+        return false;
+
+    // 情况1: 删除的就是当前正在播放的歌曲节点
+    if (currentPlayingSongs == node)
+        return true;
+
+    // 情况2: 删除的是目录，需要检查当前播放的歌曲是否在这个目录树下
+    if (node->isDir())
+    {
+        PlaylistNode *p = currentPlayingSongs;
+        while (p)
+        {
+            if (p == node)
+                return true;
+            p = p->getParent().get();
+        }
+    }
+    return false;
+}
+
+// ==========================================
+// 新增：增删接口实现
+// ==========================================
+
+bool MediaController::addSong(const std::string &path, PlaylistNode *parent)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+
+    // 1. 参数校验
+    if (!parent || !parent->isDir())
+    {
+        spdlog::error("addSong: Invalid parent node (null or not a directory).");
+        return false;
+    }
+    if (!fs::exists(path))
+    {
+        spdlog::error("addSong: File path does not exist: {}", path);
+        return false;
+    }
+
+    // 2. 扫描文件生成节点
+    auto newNode = FileScanner::scanFile(path);
+    if (!newNode)
+    {
+        spdlog::warn("addSong: File is not a valid audio format: {}", path);
+        return false;
+    }
+
+    // 3. 添加到播放列表树
+    parent->addChild(newNode);
+    parent->sortChildren(); // 维持排序
+
+    // 4. 更新统计数据 (duration 单位是秒)
+    int64_t durSec = newNode->getMetaData().getDuration() / 1000000;
+    updateStatsUpwards(parent, 1, durSec);
+
+    return true;
+}
+
+void MediaController::removeSong(PlaylistNode *node, bool deletePhysicalFile)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+
+    if (!node || node->isDir())
+        return;
+    auto parentShared = node->getParent();
+    PlaylistNode *parent = parentShared.get();
+
+    if (!parent)
+    {
+        spdlog::warn("removeSong: Node has no parent, cannot remove from tree.");
+        return;
+    }
+
+    // 1. 播放状态保护
+    if (currentPlayingSongs == node)
+    {
+        // 尝试自动切到下一首
+        next();
+        // 如果 next() 没起作用（例如单曲且列表中只有这一首），则强制停止
+        if (currentPlayingSongs == node)
+        {
+            stop();
+            currentPlayingSongs = nullptr;
+            if (mediaService)
+                mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+        }
+    }
+
+    // 2. 清理历史记录
+    std::erase(playHistory, node);
+
+    // 3. 获取待扣除的统计数据
+    int64_t durSec = node->getMetaData().getDuration() / 1000000;
+
+    // 4. 从树结构中移除
+    parent->removeChild(node);
+
+    // 5. 更新统计
+    updateStatsUpwards(parent, -1, -durSec);
+
+    // 6. 物理删除文件
+    if (deletePhysicalFile)
+    {
+        std::error_code ec;
+        fs::remove(node->getPath(), ec);
+        if (ec)
+        {
+            spdlog::error("removeSong: Failed to delete physical file {}: {}", node->getPath(), ec.message());
+        }
+        else
+        {
+            spdlog::info("removeSong: Deleted file {}", node->getPath());
+        }
+    }
+}
+
+bool MediaController::addFolder(const std::string &path, PlaylistNode *parent)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+
+    // 1. 参数校验
+    if (!parent || !parent->isDir())
+    {
+        spdlog::error("addFolder: Invalid parent node.");
+        return false;
+    }
+    if (!fs::exists(path) || !fs::is_directory(path))
+    {
+        spdlog::error("addFolder: Directory path does not exist: {}", path);
+        return false;
+    }
+
+    // 2. 扫描整个文件夹树
+    auto newDirNode = FileScanner::scanDirectory(path);
+    if (!newDirNode)
+    {
+        return false;
+    }
+
+    // [关键修改] 检查是否为空文件夹（或不包含有效音频）
+    if (newDirNode->getTotalSongs() == 0)
+    {
+        spdlog::info("addFolder: Folder '{}' contains no audio files, skipped.", path);
+        return false; // 不添加，返回失败
+    }
+
+    // 3. 添加到树中
+    parent->addChild(newDirNode);
+    parent->sortChildren();
+
+    // 4. 更新统计
+    updateStatsUpwards(parent, newDirNode->getTotalSongs(), newDirNode->getTotalDuration());
+
+    return true;
+}
+
+void MediaController::removeFolder(PlaylistNode *node, bool deletePhysicalFile)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+
+    if (!node || !node->isDir())
+        return;
+    auto parentShared = node->getParent();
+    PlaylistNode *parent = parentShared.get();
+
+    if (!parent)
+    {
+        spdlog::warn("removeFolder: Cannot remove root node or orphan node.");
+        return;
+    }
+
+    // 1. 播放状态保护：检查当前播放歌曲是否在待删除文件夹内
+    if (isPlayingNodeOrChild(node))
+    {
+        stop();
+        currentPlayingSongs = nullptr;
+    }
+
+    // 2. 清理历史记录：移除所有属于该文件夹及其子文件夹的节点
+    std::erase_if(playHistory, [node](PlaylistNode *historyNode)
+                  {
+        PlaylistNode* p = historyNode;
+        while (p) {
+            if (p == node) return true;
+            p = p->getParent().get();
+        }
+        return false; });
+
+    // 3. 获取待扣除的统计数据
+    int64_t totalSongs = node->getTotalSongs();
+    int64_t totalDur = node->getTotalDuration();
+
+    // 4. 从树结构中移除
+    // 此时智能指针引用计数减少，整棵子树会自动析构
+    parent->removeChild(node);
+
+    // 5. 更新统计
+    updateStatsUpwards(parent, -totalSongs, -totalDur);
+
+    // 6. 物理删除文件夹
+    if (deletePhysicalFile)
+    {
+        std::error_code ec;
+        fs::remove_all(node->getPath(), ec); // 递归删除物理文件
+        if (ec)
+        {
+            spdlog::error("removeFolder: Failed to delete directory {}: {}", node->getPath(), ec.message());
+        }
+        else
+        {
+            spdlog::info("removeFolder: Deleted directory {}", node->getPath());
+        }
+    }
 }

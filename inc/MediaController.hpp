@@ -95,6 +95,12 @@ private:
     // 检查路径是否在当前根目录下
     bool isPathUnderRoot(const fs::path &nodePath) const;
 
+    // 内部辅助：递归向上更新节点的歌曲总数和时长
+    void updateStatsUpwards(PlaylistNode *startNode, int64_t deltaSongs, int64_t deltaDuration);
+
+    // 内部辅助：检查节点是否包含当前正在播放的歌曲
+    bool isPlayingNodeOrChild(PlaylistNode *node);
+
 public:
     // 禁用拷贝
     MediaController(const MediaController &) = delete;
@@ -168,6 +174,36 @@ public:
     {
         rootNode = node;
     }
+    /**
+     * @brief 添加单首歌曲
+     * @param path 音频文件的绝对路径
+     * @param parent 要添加到的目标父节点（必须是文件夹）
+     * @return true 添加成功, false 失败（路径不存在或非音频）
+     */
+    bool addSong(const std::string &path, PlaylistNode *parent);
+
+    /**
+     * @brief 删除歌曲
+     * @param node 待删除的歌曲节点
+     * @param deletePhysicalFile true则同时删除磁盘上的物理文件
+     */
+    void removeSong(PlaylistNode *node, bool deletePhysicalFile);
+
+    /**
+     * @brief 添加文件夹
+     * @note 如果扫描后发现该文件夹下没有任何音频文件，则不会添加，并返回 false
+     * @param path 文件夹绝对路径
+     * @param parent 要添加到的目标父节点
+     * @return true 添加成功, false 失败（空文件夹或路径无效）
+     */
+    bool addFolder(const std::string &path, PlaylistNode *parent);
+
+    /**
+     * @brief 删除文件夹及其所有子内容
+     * @param node 待删除的文件夹节点
+     * @param deletePhysicalFile true则递归删除磁盘上的物理文件夹及内容
+     */
+    void removeFolder(PlaylistNode *node, bool deletePhysicalFile);
 };
 
 #endif

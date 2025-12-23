@@ -93,6 +93,19 @@ public:
         this->metaData.setCoverPath(path);
     }
 
+    /**
+     * @brief 从子节点列表中移除指定指针的节点
+     * 使用 std::erase_if (C++20) 或 remove_if 移除 shared_ptr
+     */
+    void removeChild(PlaylistNode *childPtr)
+    {
+        if (!childPtr)
+            return;
+        // 移除所有原始指针匹配的 shared_ptr
+        std::erase_if(children, [childPtr](const std::shared_ptr<PlaylistNode> &ptr)
+                      { return ptr.get() == childPtr; });
+    }
+
     const std::string &getCoverPath() const
     {
         return this->metaData.getCoverPath();

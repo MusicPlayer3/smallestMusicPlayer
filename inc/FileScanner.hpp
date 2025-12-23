@@ -113,6 +113,20 @@ public:
      * @param root 树根节点
      */
     friend void printPlaylistTree(const std::shared_ptr<PlaylistNode> &root);
+
+    /**
+     * @brief 静态方法：同步扫描单个音频文件并构建节点
+     * @param path 文件绝对路径
+     * @return 构建好的节点，如果文件无效返回 nullptr
+     */
+    static std::shared_ptr<PlaylistNode> scanFile(const std::string &path);
+
+    /**
+     * @brief 静态方法：同步递归扫描文件夹并构建树
+     * @param path 文件夹绝对路径
+     * @return 构建好的文件夹节点（包含统计数据），路径无效返回 nullptr
+     */
+    static std::shared_ptr<PlaylistNode> scanDirectory(const std::string &path);
 };
 
 #endif
