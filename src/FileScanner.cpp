@@ -1140,11 +1140,15 @@ static void scanAndDispatch(
 
         fs::path p = sd;
         p.make_preferred();
-        std::string folderName = p.filename().string();
-        folderName = EncodingUtils::detectAndConvert(folderName);
 
+        // [Modified] 以前是取文件名，现在直接取完整路径字符串作为 Key
+        // std::string folderName = p.filename().string();
+        std::string fullPathKey = p.string();
+        // 依然进行编码转换，确保路径中的中文等字符能作为合法的 key
+        fullPathKey = EncodingUtils::detectAndConvert(fullPathKey);
         auto childDirNode = std::make_shared<PlaylistNode>(p.string(), true);
-        childDirNode->setCoverKey(folderName);
+        // 设置 Key 为完整路径
+        childDirNode->setCoverKey(fullPathKey);
 
         scanAndDispatch(sd, childDirNode, stoken, batchBuffer);
 
@@ -1217,16 +1221,14 @@ static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_pt
     // 目录封面逻辑
     if (node->isDir())
     {
-        std::string cover = node->getCoverPath(); // [Optimization] 优先使用阶段1检测到的封面
+        std::string cover = node->getCoverPath();
         bool isAudioExtract = false;
 
-        // 如果阶段1没找到，尝试深层递归
         if (cover.empty())
         {
             cover = findDeepCoverRecursive(node);
             if (!cover.empty())
             {
-                // 如果返回的是音频文件路径，说明是内嵌封面
                 if (isffmpeg(cover))
                     isAudioExtract = true;
             }
@@ -1234,27 +1236,23 @@ static std::pair<uint64_t, uint64_t> postProcessAggregation(const std::shared_pt
 
         if (!cover.empty())
         {
-            std::string folderName = fs::path(node->getPath()).filename().string();
-            folderName = EncodingUtils::detectAndConvert(folderName);
+            std::string fullPathKey = node->getPath();
+            fullPathKey = EncodingUtils::detectAndConvert(fullPathKey);
 
-            // [Parallel Optimization] 将封面的 IO 解码和 Resize 提交给线程池
-            // 这消除了 Phase 3 中的主线程阻塞
+            // [Parallel Optimization]
             (void)SimpleThreadPool::instance().get_native_pool().submit_task(
-                [cover, folderName, isAudioExtract]()
+                [cover, fullPathKey, isAudioExtract]()
                 {
-            // [Profile] 统计 Phase 3 的并行封面处理耗时
 #ifdef ANALYSE
                     ScopedTimer timer(Profiler::t_cover_process);
 #endif
-                    // [Modified] 适配新的 ImageHelpers 接口
                     if (isAudioExtract)
                     {
-                        ImageHelpers::processTrackCover(cover, folderName);
+                        ImageHelpers::processTrackCover(cover, fullPathKey);
                     }
                     else
                     {
-                        // 这是一个单纯的图片文件
-                        ImageHelpers::processImageFile(cover, folderName);
+                        ImageHelpers::processImageFile(cover, fullPathKey);
                     }
                 });
         }
@@ -1353,9 +1351,8 @@ void FileScanner::scanDir(std::stop_token stoken)
     // 2. 初始化根节点
     rootNode = std::make_shared<PlaylistNode>(rootPath.string(), true);
     std::string folderName = rootPath.filename().string();
-    if (folderName.empty())
-        folderName = rootPath.string();
-    rootNode->setCoverKey(EncodingUtils::detectAndConvert(folderName));
+    std::string fullPathKey = rootPath.string();
+    rootNode->setCoverKey(EncodingUtils::detectAndConvert(fullPathKey));
 
     // =========================================================
     // Phase 1: 流水线扫描 (Pipeline Scan & Dispatch)

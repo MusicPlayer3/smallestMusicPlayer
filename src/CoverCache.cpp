@@ -57,6 +57,7 @@ std::shared_ptr<CoverImage> CoverCache::get(const std::string &albumKey)
         if (it != m_map.end())
         {
             m_lruList.splice(m_lruList.begin(), m_lruList, it->second.lruIt);
+            spdlog::debug("find image in RAM:{}", albumKey);
             return it->second.image;
         }
     }
@@ -69,6 +70,7 @@ std::shared_ptr<CoverImage> CoverCache::get(const std::string &albumKey)
     auto image = decodeBlob(blob);
     if (!image || !image->isValid())
         return nullptr;
+    spdlog::debug("find image in DataBase:{}", albumKey);
 
     // 3. Put into RAM (Critical Section)
     {
