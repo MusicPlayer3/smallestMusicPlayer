@@ -7,6 +7,7 @@ import QtQuick.Window
 Rectangle {
     id: musicListHeader
     color: '#003c3f46'
+
     property alias sortPopup: sortPopup // 添加这行
     property bool isSortPopupVisible: sortPopup.visible // 添加这行
 
@@ -21,6 +22,8 @@ Rectangle {
 
     property string iconFontFamily: ""
     signal closeRequested
+    signal addFolderClicked()
+    signal addFileClicked()
 
     property bool isSearching: false
 
@@ -225,13 +228,18 @@ Rectangle {
             Column {
                 spacing: 0
                 Repeater {
-                    model: ["排序"]
+                    model: [
+                        {
+                            name:"排序",
+                            type: 0
+                        }
+                    ]
                     delegate: Rectangle {
                         width: 170
                         height: 40
                         color: "transparent"
                         Text {
-                            text: modelData
+                            text: modelData.name
                             color: "white"
                             font.pixelSize: 14
                             anchors.left: parent.left
@@ -252,7 +260,61 @@ Rectangle {
                             hoverEnabled: true
                             onEntered: parent.color = "#30FFFFFF"
                             onExited: parent.color = "transparent"
-                            onClicked: menuStack.currentIndex = 1 // 进入二级菜单
+                            onClicked:
+                            {
+                                menuStack.currentIndex = 1 // 进入二级菜单1 排序
+                            } 
+                        }
+                    }
+                }
+                Repeater {
+                    model: [
+                        {
+                            name:"选择文件夹",
+                            type: 0
+                        },
+                        {
+                            name:"选择文件",
+                            type: 1
+                        }
+                    ]
+                    delegate: Rectangle {
+                        width: 170
+                        height: 40
+                        color: "transparent"
+                        Text {
+                            text: modelData.name
+                            color: "white"
+                            font.pixelSize: 14
+                            anchors.left: parent.left
+                            anchors.leftMargin: 15
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: "chevron_right"
+                            font.family: musicListHeader.iconFontFamily
+                            color: "#AAAAAA"
+                            font.pixelSize: 18
+                            anchors.right: parent.right
+                            anchors.rightMargin: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onEntered: parent.color = "#30FFFFFF"
+                            onExited: parent.color = "transparent"
+                            onClicked:
+                            {
+                                if(modelData.type===0)
+                                {
+                                    musicListHeader.addFolderClicked(); // 触发文件夹信号
+                                }
+                                if(modelData.type===1)
+                                {
+                                    musicListHeader.addFileClicked();   // 触发文件信号
+                                }
+                            } 
                         }
                     }
                 }

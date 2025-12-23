@@ -197,7 +197,6 @@ qt_add_qml_module(appMusicPlayer
     QML_FILES
     qml/Background.qml
     qml/BubblePopup.qml
-    qml/ListView.qml
     qml/Main.qml
     qml/MarqueeText.qml
     qml/MusicListHeader.qml
@@ -276,6 +275,7 @@ target_link_libraries(appMusicPlayer
     Qt6::QuickControls2
     Qt6::Widgets
     Qt6::Sql
+    Qt6::Concurrent
     $<$<PLATFORM_ID:Windows>:Qt6::EntryPointImplementation>
     MyThirdPartyLibs
     ${PROJECT_LIBRARIES}

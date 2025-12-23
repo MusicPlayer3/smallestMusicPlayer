@@ -8,6 +8,8 @@ Rectangle {
     color: "transparent"
 
     signal closeRequested
+    signal addFolderRequested()
+    signal addFileRequested()
     property string iconFamily: ""
     property alias sortPopup: header.sortPopup
 
@@ -30,6 +32,9 @@ Rectangle {
             onCloseRequested: {
                 listViewRect.closeRequested();
             }
+            // 2. 接收 Header 信号并向上传递
+            onAddFolderClicked: listViewRect.addFolderRequested()
+            onAddFileClicked: listViewRect.addFileRequested()
         }
 
         // --- ListView ---

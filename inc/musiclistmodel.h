@@ -27,6 +27,7 @@ class MusicListModel : public QAbstractListModel
     Q_PROPERTY(QString currentDirName READ currentDirName NOTIFY currentDirNameChanged FINAL)
     Q_PROPERTY(int sortType READ sortType NOTIFY sortTypeChanged FINAL)
     Q_PROPERTY(bool sortReverse READ sortReverse NOTIFY sortReverseChanged FINAL)
+    Q_PROPERTY(bool isAdding READ isAdding NOTIFY isAddingChanged FINAL)
 
 public:
     enum SortType
@@ -70,16 +71,27 @@ public:
     Q_INVOKABLE void search(const QString &query);
     Q_INVOKABLE void setSortMode(int type, bool reverse);
     Q_INVOKABLE void locateCurrentPlaying();
+    Q_INVOKABLE void ListViewAddNewFolder(const QString &path);
+    Q_INVOKABLE void ListViewAddNewFile(const QString &path);
+    Q_INVOKABLE void cancelAdding(); // 用于取消/重置状态
 
     void setCurrentDirectoryNode(PlaylistNode *node);
+    bool isAdding() const
+    {
+        return m_isAdding;
+    }
 
 signals:
     void currentDirNameChanged();
     void sortTypeChanged();
     void sortReverseChanged();
     void requestScrollTo(int index);
+    void isAddingChanged();
 
 private:
+    bool m_isAdding = false;
+    QFutureWatcher<bool> m_addWatcher; // 用于监视异步添加的结果
+    bool internalAddPath(const std::string &path, bool isFolder);
     void repopulateList(const std::vector<std::shared_ptr<PlaylistNode>> &nodes);
     MusicItem createItemFromNode(PlaylistNode *node, int id);
     void applySort();

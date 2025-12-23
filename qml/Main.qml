@@ -547,6 +547,8 @@ ApplicationWindow {
                         window.isSidebarOpen = false;
                         manualAnimResetTimer.restart();
                     }
+                    onAddFolderRequested: addFolderDialog.open() // 打开已有的文件夹对话框
+                    onAddFileRequested: fileDialog.open()     // 打开新添加的文件对话框
                 }
             }
         }
@@ -1152,4 +1154,32 @@ ApplicationWindow {
                 playerController.startMediaScan(folderPath);
         }
     }
+
+    FolderDialog {
+        id: addFolderDialog
+        title: "新增音乐文件夹"
+        onAccepted: {
+            var urlObject = new URL(addFolderDialog.selectedFolder);
+            var folderPath = urlObject.pathname;
+            if (Qt.platform.os === "windows" && folderPath.startsWith("/"))
+                folderPath = folderPath.substring(1);
+            if (folderPath)
+                musicListModel.ListViewAddNewFolder(folderPath);
+        }
+    }
+
+    FileDialog {
+    id: fileDialog
+    title: "选择音乐文件"
+    nameFilters: ["音频文件 (*.mp3 *.flac *.wav *.m4a *.aac *.ogg *.wma *.opus  *.mpc *.mp+ *.mpp *.ape *.aiff *.aif *.wv *.tta *.alac *.shn *.tak *.dsf *.dff *.dxd *.mka *.webm *.dts *.ac3 *.truehd)", "所有文件 (*)"]
+    onAccepted: {
+        var urlObject = new URL(fileDialog.selectedFile);
+        var filePath = urlObject.pathname;
+
+        if (Qt.platform.os === "windows" && filePath.startsWith("/"))
+            filePath = filePath.substring(1);
+        if (filePath)
+            musicListModel.ListViewAddNewFile(filePath);
+    }
+}
 }

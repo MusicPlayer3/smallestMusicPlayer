@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <QtConcurrent> // 需要包含此头文件进行异步操作
 
 // ==========================================
 // 搜索辅助逻辑
@@ -67,6 +68,23 @@ int calculateFieldScore(const std::string &fieldVal, const std::string &queryLow
 
 MusicListModel::MusicListModel(QObject *parent) : QAbstractListModel(parent)
 {
+    // 连接监听器：当异步任务完成时触发
+    connect(&m_addWatcher, &QFutureWatcher<bool>::finished, this, [this]()
+    {
+        // 如果 m_isAdding 仍然为 true，说明没有被中途取消
+        if (m_isAdding) {
+            if (m_addWatcher.result()) {
+                // 成功则刷新列表
+                if (m_currentDirectoryNode) {
+                    repopulateList(m_currentDirectoryNode->getChildren());
+                } else {
+                    loadRoot();
+                }
+            }
+            m_isAdding = false;
+            emit isAddingChanged();
+        }
+    });
 }
 
 int MusicListModel::rowCount(const QModelIndex &parent) const
@@ -605,5 +623,56 @@ void MusicListModel::locateCurrentPlaying()
                 break;
             }
         }
+    }
+}
+
+void MusicListModel::ListViewAddNewFolder(const QString &path)
+{
+    if (m_isAdding || path.isEmpty())
+        return;
+
+    m_isAdding = true;
+    emit isAddingChanged();
+
+    std::string stdPath = path.toStdString();
+    // 确定父节点，如果当前没有目录，则使用根节点
+    PlaylistNode *parentNode = m_currentDirectoryNode;
+
+    // 启动异步任务
+    auto future = QtConcurrent::run([this, stdPath, parentNode]()
+                                                                                                          {
+        auto &controller = MediaController::getInstance();
+        // 调用 MediaController 的实际接口
+        return controller.addFolder(stdPath, parentNode); });
+
+    m_addWatcher.setFuture(future);
+}
+
+void MusicListModel::ListViewAddNewFile(const QString &path)
+{
+    if (m_isAdding || path.isEmpty())
+        return;
+
+    m_isAdding = true;
+    emit isAddingChanged();
+
+    std::string stdPath = path.toStdString();
+    PlaylistNode *parentNode = m_currentDirectoryNode;
+
+    auto future = QtConcurrent::run([this, stdPath, parentNode]()
+                                    {
+        auto &controller = MediaController::getInstance();
+        // 调用 MediaController 的实际接口
+        return controller.addSong(stdPath, parentNode); });
+
+    m_addWatcher.setFuture(future);
+}
+
+void MusicListModel::cancelAdding()
+{
+    if (m_isAdding)
+    {
+        m_isAdding = false; // 重置标志位，完成时的回调将不再刷新 UI
+        emit isAddingChanged();
     }
 }
