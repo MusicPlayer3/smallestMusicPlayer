@@ -17,13 +17,13 @@ Window {
     // 0: 下方, 1: 右侧
     property int arrowDirection: 0
 
-    // [修改] 背景颜色改浅，使其不那么突兀
+    //  背景颜色改浅，使其不那么突兀
     property color backgroundColor: "#454545"
     property int borderRadius: 8
 
     readonly property int arrowSize: 12
     readonly property int arrowOffset: 12
-    // [修改] 减小内边距，让内容更贴边 (从 8 改为 4)
+    //  减小内边距，让内容更贴边 (从 8 改为 4)
     readonly property int contentPadding: 4
 
     // --- 背景绘制 ---
@@ -61,7 +61,7 @@ Window {
 
     Item {
         id: contentContainer
-        // [修改] 宽度计算：内容宽 + 箭头(如果有) + 左右极窄边距
+        //  宽度计算：内容宽 + 箭头(如果有) + 左右极窄边距
         width: contentStack.implicitWidth + (root.arrowDirection === 1 ? root.arrowOffset : 0) + (root.contentPadding * 2)
         height: contentStack.implicitHeight + (root.arrowDirection === 0 ? root.arrowOffset : 0) + (root.contentPadding * 2)
 

@@ -25,7 +25,7 @@ Dialog {
     // 信号
     signal confirmDelete(int index, bool deleteFile)
 
-    // [修改] 这里将 Text 改为 Label，因为 Text 组件没有 background 属性
+    //  这里将 Text 改为 Label，因为 Text 组件没有 background 属性
     header: Label {
         text: root.title
         color: "white"

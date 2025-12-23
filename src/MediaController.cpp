@@ -138,7 +138,7 @@ void MediaController::monitorLoop()
         if (!realCurrentPath.empty() && realCurrentPath != lastDetectedPath)
         {
             std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-
+            DatabaseService::instance().recordPlay(lastDetectedPath);
             PlaylistNode *newNode = nullptr;
             PlaylistNode *potentialNext = calculateNextNode(currentPlayingSongs);
 
@@ -866,12 +866,6 @@ void MediaController::removeSong(PlaylistNode *node, bool deletePhysicalFile)
     // 4. 获取待扣除的统计数据
     int64_t durSec = node->getMetaData().getDuration() / 1000000;
 
-    // 5. 从树结构中移除
-    parent->removeChild(node);
-
-    // 6. 更新统计
-    updateStatsUpwards(parent, -1, -durSec);
-
     // 7. 物理删除文件
     if (deletePhysicalFile)
     {
@@ -886,6 +880,11 @@ void MediaController::removeSong(PlaylistNode *node, bool deletePhysicalFile)
             spdlog::info("removeSong: Deleted file {}", node->getPath());
         }
     }
+    // 5. 从树结构中移除
+    parent->removeChild(node);
+
+    // 6. 更新统计
+    updateStatsUpwards(parent, -1, -durSec);
 }
 void printPlaylistTree(const std::shared_ptr<PlaylistNode> &root);
 bool MediaController::addFolder(const std::string &path, PlaylistNode *parent)
@@ -959,7 +958,10 @@ bool MediaController::addFolder(const std::string &path, PlaylistNode *parent)
         else
         {
             // 添加歌曲
-            DatabaseService::instance().addSong(curr->getMetaData());
+            if (!DatabaseService::instance().addSong(curr->getMetaData()))
+            {
+                spdlog::error("addFolder: Failed to add song to database: {}", curr->getPath());
+            }
         }
     };
 
@@ -1009,13 +1011,7 @@ void MediaController::removeFolder(PlaylistNode *node, bool deletePhysicalFile)
     int64_t totalSongs = node->getTotalSongs();
     int64_t totalDur = node->getTotalDuration();
 
-    // 5. 从树结构中移除
-    parent->removeChild(node);
-
-    // 6. 更新统计
-    updateStatsUpwards(parent, -totalSongs, -totalDur);
-
-    // 7. 物理删除文件夹
+    // 5. 物理删除文件夹
     if (deletePhysicalFile)
     {
         std::error_code ec;
@@ -1026,9 +1022,14 @@ void MediaController::removeFolder(PlaylistNode *node, bool deletePhysicalFile)
         }
         else
         {
-            spdlog::info("removeFolder: Deleted directory {}", node->getPath());
+            spdlog::info("removeFolder: Deleted directory {} : ", node->getPath(), ec.message());
         }
     }
+    // 6. 从树结构中移除
+    parent->removeChild(node);
+
+    // 7. 更新统计
+    updateStatsUpwards(parent, -totalSongs, -totalDur);
 }
 
 int MediaController::getSongsRating(PlaylistNode *node)

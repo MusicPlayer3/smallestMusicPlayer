@@ -70,7 +70,7 @@ MusicListModel::MusicListModel(QObject *parent) : QAbstractListModel(parent)
 {
     // 连接监听器：当异步任务完成时触发
     connect(&m_addWatcher, &QFutureWatcher<bool>::finished, this, [this]()
-    {
+            {
         // 如果 m_isAdding 仍然为 true，说明没有被中途取消
         if (m_isAdding) {
             if (m_addWatcher.result()) {
@@ -83,8 +83,7 @@ MusicListModel::MusicListModel(QObject *parent) : QAbstractListModel(parent)
             }
             m_isAdding = false;
             emit isAddingChanged();
-        }
-    });
+        } });
 }
 
 int MusicListModel::rowCount(const QModelIndex &parent) const
@@ -640,7 +639,7 @@ void MusicListModel::ListViewAddNewFolder(const QString &path)
 
     // 启动异步任务
     auto future = QtConcurrent::run([this, stdPath, parentNode]()
-                                                                                                          {
+                                    {
         auto &controller = MediaController::getInstance();
         // 调用 MediaController 的实际接口
         return controller.addFolder(stdPath, parentNode); });
@@ -762,4 +761,24 @@ void MusicListModel::deleteItem(int index, bool deletePhysicalFile)
     {
         loadRoot();
     }
+}
+
+void MusicListModel::setItemRating(int index, int rating)
+{
+    if (index < 0 || index >= m_displayList.size())
+        return;
+
+    const MusicItem &item = m_displayList.at(index);
+    PlaylistNode *node = item.nodePtr;
+
+    // 只有文件（非目录）才能设置星级
+    if (!node || node->isDir())
+        return;
+
+    // 调用 MediaController 更新数据（内存 + 数据库）
+    MediaController::getInstance().setSongsRating(node, rating);
+
+    // 注意：这里不需要手动 emit dataChanged，因为 InfoDialog 是模态的/独立的。
+    // 如果需要在主列表显示星级，才需要触发 Model 刷新。
+    // 目前逻辑主要服务于 InfoDialog 的即时显示。
 }

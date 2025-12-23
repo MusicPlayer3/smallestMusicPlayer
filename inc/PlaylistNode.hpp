@@ -38,18 +38,18 @@ public:
             return a->metaData.getOffset() < b->metaData.getOffset(); });
     }
 
-    const bool &isDir() const
+    const bool isDir() const
     {
         return _isDir;
     }
 
-    const std::string &getPath() const
+    std::string getPath() const
     {
         return path;
     }
 
     // 获取当前文件夹封面的Key (兼容旧接口命名)
-    const std::string &getThisDirCover() const
+    const std::string getThisDirCover() const
     {
         return _coverKey;
     }
@@ -64,13 +64,13 @@ public:
         return metaData;
     }
 
-    void setIsDir(const bool &isDir)
+    void setIsDir(const bool isDir)
     {
         this->_isDir = isDir;
     }
 
     // 获取用于 CoverCache 查找的 Key
-    const std::string &getCoverKey() const
+    const std::string getCoverKey() const
     {
         return _coverKey;
     }
@@ -106,7 +106,7 @@ public:
                       { return ptr.get() == childPtr; });
     }
 
-    const std::string &getCoverPath() const
+    const std::string getCoverPath() const
     {
         return this->metaData.getCoverPath();
     }

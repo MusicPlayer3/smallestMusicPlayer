@@ -11,7 +11,6 @@ Rectangle {
     property alias sortPopup: sortPopup // 添加这行
     property bool isSortPopupVisible: sortPopup.visible // 添加这行
 
-
     height: isSearching ? 100 : 50
     Behavior on height {
         NumberAnimation {
@@ -22,8 +21,8 @@ Rectangle {
 
     property string iconFontFamily: ""
     signal closeRequested
-    signal addFolderClicked()
-    signal addFileClicked()
+    signal addFolderClicked
+    signal addFileClicked
 
     property bool isSearching: false
 
@@ -230,7 +229,7 @@ Rectangle {
                 Repeater {
                     model: [
                         {
-                            name:"排序",
+                            name: "排序",
                             type: 0
                         }
                     ]
@@ -260,21 +259,20 @@ Rectangle {
                             hoverEnabled: true
                             onEntered: parent.color = "#30FFFFFF"
                             onExited: parent.color = "transparent"
-                            onClicked:
-                            {
-                                menuStack.currentIndex = 1 // 进入二级菜单1 排序
-                            } 
+                            onClicked: {
+                                menuStack.currentIndex = 1; // 进入二级菜单1 排序
+                            }
                         }
                     }
                 }
                 Repeater {
                     model: [
                         {
-                            name:"选择文件夹",
+                            name: "新增文件夹",
                             type: 0
                         },
                         {
-                            name:"选择文件",
+                            name: "新增歌曲",
                             type: 1
                         }
                     ]
@@ -304,17 +302,14 @@ Rectangle {
                             hoverEnabled: true
                             onEntered: parent.color = "#30FFFFFF"
                             onExited: parent.color = "transparent"
-                            onClicked:
-                            {
-                                if(modelData.type===0)
-                                {
+                            onClicked: {
+                                if (modelData.type === 0) {
                                     musicListHeader.addFolderClicked(); // 触发文件夹信号
                                 }
-                                if(modelData.type===1)
-                                {
+                                if (modelData.type === 1) {
                                     musicListHeader.addFileClicked();   // 触发文件信号
                                 }
-                            } 
+                            }
                         }
                     }
                 }

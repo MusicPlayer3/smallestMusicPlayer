@@ -13,13 +13,32 @@ Window {
     modality: Qt.ApplicationModal
     color: "#2b2b2b"
 
-    property var infoData: ({}) // 接收 C++ 返回的 Map
+    // 接收 C++ 返回的 Map 数据
+    property var infoData: ({})
 
-    function showInfo(data) {
+    // 存储当前操作的列表索引
+    property int targetListIndex: -1
+
+    // [修复逻辑] 内部星级交互状态
+    property bool isStarHovering: false
+    property int currentHoverRating: 0
+
+    function showInfo(data, index) {
         infoData = data;
-        // 根据内容调整高度
-        if (data.isFolder)
-            height = 320;
+
+        if (infoData.rating === undefined) {
+            infoData.rating = 0;
+        }
+
+        targetListIndex = index;
+
+        // [关键修复] 每次打开窗口时，强制重置交互状态
+        isStarHovering = false;
+        currentHoverRating = 0;
+
+        // 根据内容动态调整窗口高度
+        if (data.isFolder === true)
+            height = 380;
         else
             height = 480;
 
@@ -32,7 +51,7 @@ Window {
         anchors.margins: 20
         spacing: 15
 
-        // 1. 封面
+        // 1. 封面显示区域
         Rectangle {
             Layout.alignment: Qt.AlignHCenter
             width: 120
@@ -66,7 +85,7 @@ Window {
             rowSpacing: 8
             columnSpacing: 10
 
-            // 通用：名称
+            // --- 通用信息 ---
             Text {
                 text: "名称:"
                 color: "#AAAAAA"
@@ -80,7 +99,7 @@ Window {
                 elide: Text.ElideRight
             }
 
-            // --- 文件夹特有 (使用 === true 避免 undefined 错误) ---
+            // --- 文件夹特有信息 ---
             Text {
                 visible: infoData.isFolder === true
                 text: "上级目录:"
@@ -122,7 +141,7 @@ Window {
                 font.pixelSize: 13
             }
 
-            // --- 歌曲特有 (使用 === false 避免 undefined 错误) ---
+            // --- 歌曲特有信息 ---
             Text {
                 visible: infoData.isFolder === false
                 text: "艺术家:"
@@ -198,17 +217,85 @@ Window {
                 color: "#AAAAAA"
                 font.pixelSize: 13
             }
-            Row {
+
+            // [核心修复] 星级交互区域
+            // 使用 Item 包裹 Row，解决 anchors 报错问题
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 24
                 visible: infoData.isFolder === false
-                spacing: 2
-                Repeater {
-                    model: 5
-                    Text {
-                        text: "star"
-                        font.family: materialFont.name
-                        // 这里也要防范 undefined
-                        color: index < (infoData.rating || 0) ? "#FFD700" : "#555"
-                        font.pixelSize: 14
+
+                // 星星排列
+                Row {
+                    id: starRow
+                    spacing: 4
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Repeater {
+                        model: 5
+                        Text {
+                            text: "star"
+                            font.family: materialFont.name
+                            font.pixelSize: 22
+
+                            // 颜色逻辑：
+                            // 1. 如果正在悬停(isStarHovering)，使用 currentHoverRating 判断
+                            // 2. 否则使用真实的 infoData.rating 判断
+                            color: {
+                                var starLevel = index + 1;
+                                var targetLevel = infoWin.isStarHovering ? infoWin.currentHoverRating : (infoData.rating || 0);
+                                return starLevel <= targetLevel ? "#FFD700" : "#555";
+                            }
+                        }
+                    }
+                }
+
+                // 单个 MouseArea 覆盖整个星星条，逻辑更稳定
+                MouseArea {
+                    id: starMouseArea
+                    anchors.fill: starRow // 覆盖 Row 的大小
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+
+                    // 计算鼠标当前在第几颗星
+                    function calculateRating(mouseX) {
+                        // 估算每颗星的宽度 (字体大小 + 间距)
+                        // 为了更精确，这里简单的用宽度均分
+                        var itemWidth = starRow.width / 5;
+                        var r = Math.ceil(mouseX / itemWidth);
+                        if (r < 0)
+                            r = 0;
+                        if (r > 5)
+                            r = 5;
+                        return r;
+                    }
+
+                    onPositionChanged: {
+                        infoWin.isStarHovering = true;
+                        infoWin.currentHoverRating = calculateRating(mouseX);
+                    }
+
+                    onExited: {
+                        // [关键] 鼠标移出时，恢复原状
+                        infoWin.isStarHovering = false;
+                        infoWin.currentHoverRating = 0;
+                    }
+
+                    onClicked: {
+                        var newRating = calculateRating(mouseX);
+
+                        // 1. 更新 UI
+                        infoData.rating = newRating;
+                        infoData = infoData; // 触发刷新
+
+                        // 点击后重置悬停状态，防止颜色卡住
+                        // (或者保持悬停状态，看你喜欢哪种交互，这里选择保持悬停感)
+                        infoWin.currentHoverRating = newRating;
+
+                        // 2. 调用后端
+                        if (infoWin.targetListIndex >= 0) {
+                            musicListModel.setItemRating(infoWin.targetListIndex, newRating);
+                        }
                     }
                 }
             }

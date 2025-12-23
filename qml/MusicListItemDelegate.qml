@@ -30,7 +30,7 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
 
-        // [修改] 同时接受左键(点击播放/进入)和右键(上下文菜单)
+        //  同时接受左键(点击播放/进入)和右键(上下文菜单)
         acceptedButtons: Qt.LeftButton | Qt.RightButton
 
         onClicked: mouse => {

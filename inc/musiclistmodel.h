@@ -74,6 +74,7 @@ public:
     Q_INVOKABLE void ListViewAddNewFolder(const QString &path);
     Q_INVOKABLE void ListViewAddNewFile(const QString &path);
     Q_INVOKABLE void cancelAdding(); // 用于取消/重置状态
+    Q_INVOKABLE void setItemRating(int index, int rating);
 
     // [新增] 获取指定索引的详细信息 (用于右键菜单)
     Q_INVOKABLE QVariantMap getDetailInfo(int index);

@@ -71,7 +71,9 @@ void UIController::UpdateLastFolder()
     if (db.isPopulated())
     {
         // 有数据，从数据库中获取最近播放的文件夹
+        auto start = std::chrono::high_resolution_clock::now();
         auto rootNode = db.loadFullTree();
+        auto end = std::chrono::high_resolution_clock::now();
         if (rootNode)
         {
             MediaController::getInstance().setRootNode(rootNode);
@@ -81,6 +83,7 @@ void UIController::UpdateLastFolder()
             auto first = m_mediaController.findFirstValidAudio(m_mediaController.getRootNode().get());
             m_mediaController.setNowPlayingSong(first);
             m_mediaController.pause();
+            spdlog::info("UIController: UpdateLastFolder called. Loaded data from database in {} ms.", std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
         }
     }
     else
