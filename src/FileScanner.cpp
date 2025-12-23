@@ -759,7 +759,13 @@ static AudioTechInfo getAudioTechInfo(const std::string &filePath)
             {
                 int bytes = av_get_bytes_per_sample(static_cast<AVSampleFormat>(par->format));
                 if (bytes > 0)
+                {
                     info.bitDepth = bytes * 8;
+                }
+            }
+            else
+            {
+                info.bitDepth = 16; // 默认值，对于有损格式
             }
         }
     }
