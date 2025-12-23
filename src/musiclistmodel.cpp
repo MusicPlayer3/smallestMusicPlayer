@@ -676,3 +676,90 @@ void MusicListModel::cancelAdding()
         emit isAddingChanged();
     }
 }
+
+QVariantMap MusicListModel::getDetailInfo(int index)
+{
+    QVariantMap map;
+    if (index < 0 || index >= m_displayList.size())
+        return map;
+
+    const MusicItem &item = m_displayList.at(index);
+    PlaylistNode *node = item.nodePtr;
+    if (!node)
+        return map;
+
+    // 通用信息
+    map["isFolder"] = node->isDir();
+    map["title"] = item.title; // 已经处理过显示名称
+    map["path"] = QString::fromStdString(node->getPath());
+    map["cover"] = item.imageSource;
+
+    if (node->isDir())
+    {
+        // --- 文件夹信息 ---
+        if (auto parent = node->getParent())
+        {
+            std::filesystem::path pp(parent->getPath());
+            map["parentName"] = QString::fromStdString(pp.filename().string());
+        }
+        else
+        {
+            map["parentName"] = "Root";
+        }
+        map["songCount"] = QString::number(node->getTotalSongs());
+        map["totalDuration"] = formatDuration(node->getTotalDuration() * 1000000);
+    }
+    else
+    {
+        // --- 歌曲信息 ---
+        const auto &meta = node->getMetaData();
+        map["artist"] = QString::fromStdString(meta.getArtist());
+        map["album"] = QString::fromStdString(meta.getAlbum());
+        map["year"] = QString::fromStdString(meta.getYear());
+        map["sampleRate"] = QString::number(meta.getSampleRate()) + " Hz";
+        map["bitDepth"] = QString::number(meta.getBitDepth()) + " bit";
+        map["format"] = QString::fromStdString(meta.getFormatType()).toUpper();
+
+        // 实时获取播放数据
+        auto &controller = MediaController::getInstance();
+        map["playCount"] = controller.getSongsPlayCount(node);
+        map["rating"] = controller.getSongsRating(node);
+    }
+
+    return map;
+}
+
+void MusicListModel::deleteItem(int index, bool deletePhysicalFile)
+{
+    if (index < 0 || index >= m_displayList.size())
+        return;
+
+    const MusicItem &item = m_displayList.at(index);
+    PlaylistNode *node = item.nodePtr;
+    if (!node)
+        return;
+
+    auto &controller = MediaController::getInstance();
+
+    // 1. 调用 Controller 执行删除逻辑 (同时处理数据库和文件系统)
+    if (node->isDir())
+    {
+        controller.removeFolder(node, deletePhysicalFile);
+    }
+    else
+    {
+        controller.removeSong(node, deletePhysicalFile);
+    }
+
+    // 2. 刷新列表显示
+    // 此时 node 指针已经被析构或失效，不能再使用。
+    // 我们重新加载当前目录的子节点列表即可。
+    if (m_currentDirectoryNode)
+    {
+        repopulateList(m_currentDirectoryNode->getChildren());
+    }
+    else
+    {
+        loadRoot();
+    }
+}

@@ -22,12 +22,25 @@ Rectangle {
     property string iconFontFamily: ""
     property bool isFolder: false
 
+    // [新增] 信号：当用户点击右键时发出通知
+    signal contextMenuRequested
+
     MouseArea {
         id: mouseArea
         anchors.fill: parent
         hoverEnabled: true
-        onClicked: {
-            musicListModel.handleClick(index);
+
+        // [修改] 同时接受左键(点击播放/进入)和右键(上下文菜单)
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+
+        onClicked: mouse => {
+            if (mouse.button === Qt.LeftButton) {
+                // 左键逻辑：原有的播放或进入文件夹
+                musicListModel.handleClick(index);
+            } else if (mouse.button === Qt.RightButton) {
+                // 右键逻辑：发出信号，由外层 ListView 处理菜单弹出
+                delegateRoot.contextMenuRequested();
+            }
         }
     }
 

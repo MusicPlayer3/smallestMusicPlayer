@@ -206,6 +206,8 @@ qt_add_qml_module(appMusicPlayer
     qml/StyleButton.qml
     qml/WaveformProgressBar.qml
     qml/StartupPage.qml
+    qml/DeleteDialog.qml
+    qml/InfoDialog.qml
 )
 
 # ==============================================================================

@@ -75,6 +75,12 @@ public:
     Q_INVOKABLE void ListViewAddNewFile(const QString &path);
     Q_INVOKABLE void cancelAdding(); // 用于取消/重置状态
 
+    // [新增] 获取指定索引的详细信息 (用于右键菜单)
+    Q_INVOKABLE QVariantMap getDetailInfo(int index);
+
+    // [新增] 删除指定索引的项目
+    Q_INVOKABLE void deleteItem(int index, bool deletePhysicalFile);
+
     void setCurrentDirectoryNode(PlaylistNode *node);
     bool isAdding() const
     {
