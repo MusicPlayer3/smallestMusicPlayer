@@ -57,8 +57,25 @@ MediaController::MediaController()
     scanner = std::make_unique<FileScanner>();
     scanner->initSupportedExtensions();
 
-    monitorRunning = true;
-    monitorThread = std::thread(&MediaController::monitorLoop, this);
+    scanner->setScanFinishedCallback([this](std::shared_ptr<PlaylistNode> tree)
+                                     { this->handleScanFinished(tree); });
+    // [New] 设置 AudioPlayer 回调
+    PlayerCallbacks cbs;
+    cbs.onStateChanged = [this](PlayerState s)
+    { this->handlePlayerStateChange(s); };
+
+    cbs.onPositionChanged = [this](int64_t pos)
+    { this->handlePlayerPosition(pos); };
+
+    cbs.onFileComplete = [this]()
+    { this->handlePlayerFileComplete(); };
+
+    cbs.onPathChanged = [this](std::string path)
+    { this->handlePlayerPathChanged(path); };
+    player->setCallbacks(cbs);
+
+    // [Deleted] monitorRunning = true;
+    // [Deleted] monitorThread = std::thread(&MediaController::monitorLoop, this);
 
 #ifndef __WIN32__
     try
@@ -76,29 +93,19 @@ void MediaController::cleanup()
 {
     spdlog::info("[MediaController] Cleanup started.");
 
-    // 1. 停止监控线程 (必须最先停止，防止访问已释放的 player)
-    monitorRunning = false;
-    if (monitorThread.joinable())
-    {
-        monitorThread.join();
-    }
-    spdlog::info("[MediaController] Monitor thread stopped.");
+    // [Deleted] monitorRunning = false;
+    // [Deleted] monitorThread.join();
 
-    // 2. 停止扫描器
     if (scanner)
     {
         scanner->stopScan();
         scanner.reset();
     }
-
-    // 3. 停止播放器
     if (player)
     {
         player->pause();
-        player.reset(); // 触发析构，停止底层音频设备
+        player.reset();
     }
-
-    // 4. 服务清理
     if (mediaService)
     {
         mediaService.reset();
@@ -106,158 +113,97 @@ void MediaController::cleanup()
 
     spdlog::info("[MediaController] Cleanup finished.");
 }
-
-MediaController::~MediaController()
+// 新增：监听器管理
+void MediaController::addListener(IMediaControllerListener *listener)
 {
-    // 保底清理，防止未调用 destroy 直接 delete 的情况
-    if (monitorThread.joinable())
+    std::lock_guard<std::mutex> lock(listenerMutex);
+    listeners.push_back(listener);
+}
+
+void MediaController::removeListener(IMediaControllerListener *listener)
+{
+    std::lock_guard<std::mutex> lock(listenerMutex);
+    std::erase(listeners, listener);
+}
+
+// 新增：处理 AudioPlayer 状态变更
+void MediaController::handlePlayerStateChange(PlayerState state)
+{
+    bool playing = (state == PlayerState::Playing);
+    bool changed = (isPlaying.load() != playing);
+    isPlaying.store(playing);
+
+    // 更新 MPRIS
+    if (mediaService)
     {
-        monitorRunning = false;
-        monitorThread.join();
+        if (playing)
+            mediaService->setPlayBackStatus(mpris::PlaybackStatus::Playing);
+        else if (state == PlayerState::Paused)
+            mediaService->setPlayBackStatus(mpris::PlaybackStatus::Paused);
+        else
+            mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+    }
+
+    if (changed)
+    {
+        notifyStateChanged(playing);
     }
 }
 
-// 核心监控循环：检测播放进度与状态变化
-void MediaController::monitorLoop()
+// 新增：处理 AudioPlayer 进度 (替代 monitorLoop 中的 CUE 检测)
+void MediaController::handlePlayerPosition(int64_t currentAbsMicroseconds)
 {
-    while (monitorRunning)
+    PlaylistNode *curr = currentPlayingSongs;
+
+    if (curr && isPlaying.load())
     {
-        // 降低频率以节省 CPU，但保持足够响应
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        int64_t startOffset = curr->getMetaData().getOffset();
+        int64_t duration = curr->getMetaData().getDuration();
 
-        if (!player)
-            break;
-
-        std::string realCurrentPath = player->getCurrentPath();
-        int64_t currentAbsMicroseconds = player->getCurrentPositionMicroseconds();
-        bool justSwitched = false;
-
-        // ----------------------------------------------------
-        // 情况 A: 物理文件切换 (如播放完一首 MP3 自动切到下一首)
-        // ----------------------------------------------------
-        if (!realCurrentPath.empty() && realCurrentPath != lastDetectedPath)
+        if (duration > 0)
         {
-            std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-            DatabaseService::instance().recordPlay(lastDetectedPath);
-            PlaylistNode *newNode = nullptr;
-            PlaylistNode *potentialNext = calculateNextNode(currentPlayingSongs);
-
-            // 检查计算出的下一首是否匹配当前播放器实际加载的路径
-            if (potentialNext && potentialNext->getPath() == realCurrentPath)
+            int64_t expectedEndTime = startOffset + duration;
+            // 容忍 500ms
+            if (currentAbsMicroseconds >= expectedEndTime)
             {
-                newNode = potentialNext;
+                std::thread([this]()
+                            { this->next(); })
+                    .detach();
+                return;
             }
-            // 容错：如果不匹配，尝试在当前目录找
-            else if (currentPlayingSongs && currentPlayingSongs->getParent())
-            {
-                for (auto &child : currentPlayingSongs->getParent()->getChildren())
-                {
-                    if (child->getPath() == realCurrentPath)
-                    {
-                        newNode = child.get();
-                        break;
-                    }
-                }
-            }
-
-            if (newNode)
-            {
-                playHistory.push_back(currentPlayingSongs);
-                if (playHistory.size() > MAX_HISTORY_SIZE)
-                    playHistory.pop_front();
-
-                currentPlayingSongs = newNode;
-                updateMetaData(currentPlayingSongs);
-
-                if (mediaService)
-                    mediaService->triggerSeeked(std::chrono::microseconds(0));
-
-                justSwitched = true;
-                preloadNextSong(); // 再次预加载下下一首
-            }
-            lastDetectedPath = realCurrentPath;
-        }
-        // ----------------------------------------------------
-        // 情况 B: CUE 分轨切换 (同一个文件，时间戳越界)
-        // ----------------------------------------------------
-        else if (isPlaying.load() && !realCurrentPath.empty() && realCurrentPath == lastDetectedPath)
-        {
-            std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-
-            if (currentPlayingSongs)
-            {
-                int64_t startOffset = currentPlayingSongs->getMetaData().getOffset();
-                int64_t duration = currentPlayingSongs->getMetaData().getDuration();
-
-                if (duration > 0)
-                {
-                    int64_t expectedEndTime = startOffset + duration;
-                    // 容忍 500ms 误差防止误切
-                    if (currentAbsMicroseconds >= expectedEndTime)
-                    {
-                        PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
-                        // CUE 切换条件：下一首依然在同一个物理文件中
-                        if (nextNode && nextNode->getPath() == currentPlayingSongs->getPath())
-                        {
-                            playHistory.push_back(currentPlayingSongs);
-                            if (playHistory.size() > MAX_HISTORY_SIZE)
-                                playHistory.pop_front();
-
-                            currentPlayingSongs = nextNode;
-                            updateMetaData(currentPlayingSongs);
-
-                            if (mediaService)
-                                mediaService->triggerSeeked(std::chrono::microseconds(0));
-
-                            preloadNextSong();
-                            justSwitched = true;
-                        }
-                    }
-                }
-            }
-        }
-        // ----------------------------------------------------
-        // 情况 C: 播放结束 (路径变空)
-        // ----------------------------------------------------
-        else if (isPlaying.load() && realCurrentPath.empty() && !lastDetectedPath.empty())
-        {
-            std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-            PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
-
-            if (nextNode)
-            {
-                playNode(nextNode, true); // 自动切歌
-                justSwitched = true;
-            }
-            else
-            {
-                // 列表播完，停止
-                isPlaying = false;
-                lastDetectedPath = "";
-                if (mediaService)
-                    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
-            }
-        }
-
-        // 自然停止检测 (防止状态不同步)
-        if (player && isPlaying.load() && !player->isPlaying() && player->getNowPlayingTime() > 0)
-        {
-            // 双重确认
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            if (player && !player->isPlaying())
-            {
-                isPlaying = false;
-                if (mediaService)
-                    mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
-            }
-        }
-
-        // 同步 MPRIS 进度
-        if (isPlaying.load() && !justSwitched && mediaService)
-        {
-            mediaService->setPosition(std::chrono::microseconds(getCurrentPosMicroseconds()));
         }
     }
+
+    int64_t relPos = 0;
+    if (curr)
+        relPos = std::max((int64_t)0, currentAbsMicroseconds - curr->getMetaData().getOffset());
+    else
+        relPos = currentAbsMicroseconds;
+
+    notifyPositionChanged(relPos);
+}
+
+// 新增：处理 AudioPlayer 文件播放结束
+void MediaController::handlePlayerFileComplete()
+{
+    // 物理文件播放完毕，自动切歌
+    // 在独立线程中执行以避免阻塞解码器回调
+    std::thread([this]()
+                {
+        PlaylistNode *nextNode = calculateNextNode(currentPlayingSongs);
+        if (nextNode) {
+            playNode(nextNode, true);
+        } else {
+            // 列表播完
+            isPlaying = false;
+            if (mediaService) mediaService->setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+            notifyStateChanged(false);
+        } })
+        .detach();
+}
+
+MediaController::~MediaController()
+{
 }
 
 PlaylistNode *MediaController::calculateNextNode(PlaylistNode *current, bool ignoreSingleRepeat)
@@ -379,7 +325,7 @@ PlaylistNode *MediaController::pickRandomSong(PlaylistNode *scope)
     return candidates[0];
 }
 
-void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
+void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch, bool forcePause)
 {
     if (!player || !node || node->isDir())
         return;
@@ -395,8 +341,27 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     std::string oldPath = player->getCurrentPath();
     std::string newPath = node->getPath();
 
-    // 如果是用户点击，或者已经在播放，则新歌应该处于播放状态
-    bool shouldPlay = isPlaying.load() || (oldPath.empty());
+    // --- 核心状态逻辑修改 ---
+    bool shouldPlay = false;
+
+    if (forcePause)
+    {
+        // 情况 A: 强制暂停 (如：启动APP加载第一首歌)
+        shouldPlay = false;
+    }
+    else if (!isAutoSwitch)
+    {
+        // 情况 B: 手动切歌 (如：点击列表、点击下一首) -> 总是播放
+        // 哪怕之前是暂停的，用户手动切歌通常期望立即听到声音
+        shouldPlay = true;
+    }
+    else
+    {
+        // 情况 C: 自动切歌 (如：当前歌曲播完) -> 继承当前状态
+        // 如果当前是播放的，切歌后继续播；如果是暂停的(不太可能发生)，保持暂停
+        shouldPlay = isPlaying.load();
+    }
+    // ----------------------
 
     currentPlayingSongs = node;
 
@@ -404,9 +369,9 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     if (oldPath != newPath)
     {
         // 物理文件改变
-        player->setPath(newPath);
+        player->setPath(newPath); // 底层会重置为 Stopped
 
-        // 微小延迟等待解码器重置
+        // 稍微等待解码器准备好 (可选)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
         int64_t offset = node->getMetaData().getOffset();
@@ -417,10 +382,15 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     }
     else
     {
-        // 物理文件相同 (CUE)
+        // 物理文件相同 (CUE 分轨)
+        // 如果需要播放且当前未播放，则 Play；反之则 Pause
         if (shouldPlay && !player->isPlaying())
         {
             player->play();
+        }
+        else if (!shouldPlay && player->isPlaying())
+        {
+            player->pause();
         }
 
         int64_t offset = node->getMetaData().getOffset();
@@ -429,8 +399,12 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
 
     // 3. 更新状态
     isPlaying = shouldPlay;
-    lastDetectedPath = newPath;
     updateMetaData(node);
+
+    // 通知监听者 (UI更新封面、标题等)
+    notifyTrackChanged(node);
+    // 通知监听者 (UI更新播放/暂停图标)
+    notifyStateChanged(shouldPlay);
 
     if (mediaService)
     {
@@ -440,6 +414,156 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch)
     }
 
     preloadNextSong();
+
+    // 4. 如果决定播放，且底层还未动起来 (针对物理文件切换的情况)
+    if (shouldPlay && !player->isPlaying())
+    {
+        player->play();
+    }
+    // 如果决定暂停，且底层还在动 (防止意外)
+    else if (!shouldPlay && player->isPlaying())
+    {
+        player->pause();
+    }
+}
+
+void MediaController::notifyStateChanged(bool isPlayingState)
+{
+    std::lock_guard<std::mutex> lock(listenerMutex);
+    for (auto l : listeners)
+    {
+        l->onPlaybackStateChanged(isPlayingState);
+    }
+}
+
+void MediaController::notifyTrackChanged(PlaylistNode *node)
+{
+    std::lock_guard<std::mutex> lock(listenerMutex);
+    for (auto l : listeners)
+    {
+        l->onTrackChanged(node);
+    }
+}
+
+void MediaController::notifyPositionChanged(int64_t pos)
+{
+    std::lock_guard<std::mutex> lock(listenerMutex);
+    for (auto l : listeners)
+    {
+        l->onPositionChanged(pos);
+    }
+}
+
+// 处理底层无缝切歌导致的路径变更
+void MediaController::handlePlayerPathChanged(std::string newPath)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+
+    // 记录上一首到历史记录
+    if (currentPlayingSongs)
+    {
+        playHistory.push_back(currentPlayingSongs);
+        if (playHistory.size() > MAX_HISTORY_SIZE)
+            playHistory.pop_front();
+    }
+
+    // 尝试找到新路径对应的节点
+    // 通常情况下，它应该是 calculateNextNode 的结果
+    PlaylistNode *newNode = nullptr;
+    PlaylistNode *potentialNext = calculateNextNode(currentPlayingSongs);
+
+    if (potentialNext && potentialNext->getPath() == newPath)
+    {
+        newNode = potentialNext;
+    }
+    else
+    {
+        // 容错：如果不匹配（比如随机模式下预测错误），尝试在当前目录重新查找
+        // 这是一个低概率的 fallback
+        if (currentPlayingSongs && currentPlayingSongs->getParent())
+        {
+            for (auto &child : currentPlayingSongs->getParent()->getChildren())
+            {
+                if (child->getPath() == newPath)
+                {
+                    newNode = child.get();
+                    break;
+                }
+            }
+        }
+    }
+
+    // 无论是否找到节点，只要底层切了，我们必须更新状态
+    if (newNode)
+    {
+        currentPlayingSongs = newNode;
+
+        // 更新元数据缓存
+        updateMetaData(currentPlayingSongs);
+
+        // 通知 UI 更新 (切歌了！)
+        notifyTrackChanged(currentPlayingSongs);
+
+        // 通知状态 (虽然还在播放，但确保 UI 状态正确)
+        notifyStateChanged(true);
+
+        // [关键] Mixing 模式下切歌后，必须立刻预加载“下下一首”，
+        // 否则下一首播完时就没有 buffer 进行无缝切换了。
+        // 由于我们在 Audio 线程回调中，preloadNextSong 调用 player->setPreloadPath 是线程安全的。
+        preloadNextSong();
+
+        // 记录播放次数等
+        DatabaseService::instance().recordPlay(newPath);
+    }
+    else
+    {
+        spdlog::warn("Seamless switch happened to path {}, but MediaController could not find the node.", newPath);
+    }
+
+    // 同步 MPRIS 进度归零
+    if (mediaService)
+    {
+        mediaService->triggerSeeked(std::chrono::microseconds(0));
+    }
+}
+
+// [新增] 处理扫描完成
+void MediaController::handleScanFinished(std::shared_ptr<PlaylistNode> tree)
+{
+    // 注意：此函数在 FileScanner 的后台线程中被调用
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+        // 更新 MediaController 的根节点
+        this->rootNode = tree;
+        this->currentDir = tree.get();
+
+        // 保存到数据库
+        DatabaseService::instance().saveFullTree(rootNode);
+    }
+
+    spdlog::info("Scan finished. Root node updated.");
+
+    // 通知 UI
+    notifyScanFinished();
+}
+
+// [新增] 通知监听者
+void MediaController::notifyScanFinished()
+{
+    std::lock_guard<std::mutex> lock(listenerMutex);
+    for (auto l : listeners)
+    {
+        l->onScanFinished();
+    }
+}
+
+void MediaController::prepareSong(PlaylistNode *node)
+{
+    std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+    // 调用 playNode，参数3 (forcePause) 设为 true
+    // 这将加载文件、更新元数据、重置进度条，但保持暂停状态
+    playNode(node, false, true);
 }
 
 void MediaController::play()
@@ -536,9 +660,15 @@ void MediaController::prev()
 void MediaController::setNowPlayingSong(PlaylistNode *node)
 {
     std::lock_guard<std::recursive_mutex> lock(controllerMutex);
-    playNode(node);
+    // 用户点击列表：isAutoSwitch=false, forcePause=false
+    // 这将强制开始播放
+    playNode(node, false, false);
+
+    // 双重保险：如果 playNode 内部逻辑因某些原因没播，这里强制播
     if (!isPlaying)
+    {
         play();
+    }
 }
 
 void MediaController::setShuffle(bool shuffle)
@@ -553,6 +683,9 @@ void MediaController::setShuffle(bool shuffle)
     if (changed)
     {
         std::lock_guard<std::recursive_mutex> lock(controllerMutex);
+        std::lock_guard<std::mutex> lock2(listenerMutex);
+        for (auto l : listeners)
+            l->onShuffleChanged(shuffle);
         preloadNextSong();
     }
 }
@@ -567,6 +700,11 @@ void MediaController::setVolume(double vol)
     volume = vol;
     if (player)
         player->setVolume(vol);
+    {
+        std::lock_guard<std::mutex> lock(listenerMutex);
+        for (auto l : listeners)
+            l->onVolumeChanged(vol);
+    }
 }
 
 double MediaController::getVolume()

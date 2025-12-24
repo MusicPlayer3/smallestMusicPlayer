@@ -3,7 +3,7 @@
 
 #include "MediaController.hpp"
 
-class UIController : public QObject
+class UIController : public QObject, public IMediaControllerListener
 {
     Q_OBJECT
 
@@ -112,8 +112,8 @@ signals:
     void mixingParamsApplied(int actualSampleRate, int actualFormatIndex);
 
 public slots:
-    void updateStateFromController(); // 主定时器回调
-    void updateVolumeState();         // 音量定时器回调
+    // void updateStateFromController(); // 主定时器回调
+    // void updateVolumeState();         // 音量定时器回调
 
     Q_INVOKABLE void playpluse();
     Q_INVOKABLE void next();
@@ -127,8 +127,8 @@ public slots:
 
 private:
     MediaController &m_mediaController;
-    QTimer m_stateTimer;
-    QTimer m_volumeTimer;
+    // QTimer m_stateTimer;
+    // QTimer m_volumeTimer;
     QString m_defaultPath;
     bool m_isScanning = false;
 
@@ -143,6 +143,16 @@ private:
     void checkAndUpdateRepeatModeState();
     void checkAndUpdateOutputMode();
     void generateWaveformForNode(PlaylistNode *node);
+
+    // 实现接口
+    void onPlaybackStateChanged(bool isPlaying) override;
+    void onTrackChanged(PlaylistNode *newNode) override;
+    void onMetadataChanged(PlaylistNode *node) override;
+    void onPositionChanged(int64_t microsec) override;
+    void onVolumeChanged(double volume) override;
+    void onShuffleChanged(bool shuffle) override;
+    void onRepeatModeChanged(RepeatMode mode) override;
+    void onScanFinished() override;
 
     // 格式转换
     AVSampleFormat indexToAvFormat(int index);

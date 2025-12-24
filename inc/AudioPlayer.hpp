@@ -38,6 +38,18 @@ struct AudioFrame
 // 波形数据结构 (用于内部计算)
 struct BarData;
 
+struct PlayerCallbacks
+{
+    // 状态变更回调 (例如: Playing -> Paused)
+    std::function<void(PlayerState)> onStateChanged;
+    // 播放进度回调 (参数: 微秒)，通常需要限频触发
+    std::function<void(int64_t)> onPositionChanged;
+    // 物理文件播放结束回调 (用于非 Mixing 模式或列表播放结束)
+    std::function<void()> onFileComplete;
+    // 内部路径变更回调 (用于 Mixing 模式无缝切歌成功后的通知)
+    std::function<void(std::string)> onPathChanged;
+};
+
 class AudioPlayer
 {
 public:
@@ -105,6 +117,8 @@ public:
     int64_t getAudioDuration() const;        // 秒
     int64_t getDurationMillisecond() const;  // 毫秒
     int64_t getDurationMicroseconds() const; // 微秒
+
+    void setCallbacks(const PlayerCallbacks &callbacks);
 
 private:
     // --- 内部类型 ---
@@ -188,6 +202,10 @@ private:
     bool m_contextInited = false;
     ma_device m_device;
     bool m_deviceInited = false;
+
+    PlayerCallbacks m_callbacks;
+    // 用于进度回调限频
+    std::atomic<int64_t> lastCallbackTime{0};
 
     // --- 私有辅助方法 ---
 

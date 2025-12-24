@@ -282,6 +282,11 @@ AudioPlayer::~AudioPlayer()
     spdlog::info("AudioPlayer: Destruction complete.");
 }
 
+void AudioPlayer::setCallbacks(const PlayerCallbacks &callbacks)
+{
+    m_callbacks = callbacks;
+}
+
 void AudioPlayer::freeResources()
 {
     // 如果不是 Mixing 模式，清理设备
@@ -349,12 +354,17 @@ bool AudioPlayer::setPath(const std::string &path)
         }
         else if (playingState == PlayerState::Stopped)
         {
-            oldPlayingState = PlayerState::Playing; // 默认开始播放
+            oldPlayingState = PlayerState::Playing;
         }
-        playingState = PlayerState::Stopped; // 触发解码线程重置会话
+        playingState = PlayerState::Stopped;
+
+        // [Callback]
+        if (m_callbacks.onStateChanged)
+        {
+            m_callbacks.onStateChanged(PlayerState::Stopped);
+        }
     }
 
-    // 唤醒解码线程
     pathCondVar.notify_one();
     stateCondVar.notify_one();
     return true;
@@ -390,6 +400,12 @@ void AudioPlayer::play()
             ma_device_start(&m_device);
         }
         stateCondVar.notify_one();
+
+        // [Callback]
+        if (m_callbacks.onStateChanged)
+        {
+            m_callbacks.onStateChanged(PlayerState::Playing);
+        }
     }
 }
 
@@ -404,6 +420,12 @@ void AudioPlayer::pause()
             ma_device_stop(&m_device);
         }
         stateCondVar.notify_one();
+
+        // [Callback]
+        if (m_callbacks.onStateChanged)
+        {
+            m_callbacks.onStateChanged(PlayerState::Paused);
+        }
     }
 }
 
@@ -650,7 +672,22 @@ void AudioPlayer::ma_data_callback(ma_device *pDevice, void *pOutput, const void
         {
             int64_t bytesPlayed = player->m_currentFramePos;
             int64_t offsetUS = (bytesPlayed * 1000000) / (channels * bytesPerSample * player->deviceParams.sampleRate);
-            player->nowPlayingTime.store(player->m_currentFrame->pts + offsetUS);
+            int64_t currentUS = player->m_currentFrame->pts + offsetUS;
+            player->nowPlayingTime.store(currentUS);
+
+            // [Callback] 限频触发
+            int64_t now = std::chrono::steady_clock::now().time_since_epoch().count(); // 纳秒
+            int64_t last = player->lastCallbackTime.load(std::memory_order_relaxed);
+            // 100ms = 100,000,000 ns
+            if (now - last > 100000000)
+            {
+                player->lastCallbackTime.store(now, std::memory_order_relaxed);
+                if (player->m_callbacks.onPositionChanged)
+                {
+                    // 注意：这里是在音频线程，回调必须非常快且线程安全
+                    player->m_callbacks.onPositionChanged(currentUS);
+                }
+            }
         }
 
         size_t frameSize = player->m_currentFrame->data.size();
@@ -842,6 +879,10 @@ void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActiv
 
             playbackFinishedNaturally = true;
             isSongLoopActive = false;
+            if (m_callbacks.onFileComplete)
+            {
+                m_callbacks.onFileComplete();
+            }
         }
         else
         {
@@ -1003,10 +1044,14 @@ bool AudioPlayer::performSeamlessSwitch()
 
     applyFadeOutToLastFrame();
 
+    // 交换 Source
     m_currentSource = std::move(m_preloadSource);
+
+    std::string newPath;
     {
         std::lock_guard<std::mutex> lock(pathMutex);
         currentPath = m_currentSource->path;
+        newPath = currentPath; // 记录新路径用于回调
         preloadPath.clear();
     }
 
@@ -1018,6 +1063,13 @@ bool AudioPlayer::performSeamlessSwitch()
     totalDecodedBytes = 0;
     totalDecodedFrames = 0;
     hasCalculatedQueueSize = false;
+
+    // [新增] 关键：通知上层路径已变更 (在解锁后调用以防死锁)
+    if (m_callbacks.onPathChanged)
+    {
+        m_callbacks.onPathChanged(newPath);
+    }
+
     return true;
 }
 

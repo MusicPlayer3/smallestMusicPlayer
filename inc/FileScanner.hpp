@@ -32,6 +32,8 @@ private:
      */
     void scanDir(std::stop_token stoken);
 
+    std::function<void(std::shared_ptr<PlaylistNode>)> m_callback;
+
 public:
     /**
      * @brief 构造函数
@@ -127,6 +129,8 @@ public:
      * @return 构建好的文件夹节点（包含统计数据），路径无效返回 nullptr
      */
     static std::shared_ptr<PlaylistNode> scanDirectory(const std::string &path);
+
+    void setScanFinishedCallback(std::function<void(std::shared_ptr<PlaylistNode>)> cb);
 };
 
 #endif

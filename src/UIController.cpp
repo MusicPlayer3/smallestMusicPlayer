@@ -16,15 +16,15 @@ UIController::UIController(QObject *parent) :
     m_defaultPath = QDir::homePath();
 #endif
 
-    // 状态轮询：100ms 更新一次 UI 状态
-    m_stateTimer.setInterval(100);
-    connect(&m_stateTimer, &QTimer::timeout, this, &UIController::updateStateFromController);
-    m_stateTimer.start();
+    // 注册监听
+    m_mediaController.addListener(this);
 
-    // 音量轮询：500ms (降低频率)
-    m_volumeTimer.setInterval(500);
-    connect(&m_volumeTimer, &QTimer::timeout, this, &UIController::updateVolumeState);
-    m_volumeTimer.start();
+    // 初始化一次状态
+    m_volume = m_mediaController.getVolume();
+    m_isShuffle = m_mediaController.getShuffle();
+    m_repeatMode = static_cast<int>(m_mediaController.getRepeatMode());
+    // 手动调用一次更新封面等
+    onTrackChanged(m_mediaController.getCurrentPlayingNode());
 
     connect(&m_waveformWatcher, &QFutureWatcher<AsyncWaveformResult>::finished,
             this, &UIController::onWaveformCalculationFinished);
@@ -35,14 +35,13 @@ UIController::UIController(QObject *parent) :
 UIController::~UIController()
 {
     prepareForQuit();
+    // 注销
+    m_mediaController.removeListener(this);
 }
 
 void UIController::prepareForQuit()
 {
-    if (m_stateTimer.isActive())
-        m_stateTimer.stop();
-    if (m_volumeTimer.isActive())
-        m_volumeTimer.stop();
+    // [Deleted] Timers stop
     if (m_waveformWatcher.isRunning())
     {
         m_waveformWatcher.cancel();
@@ -81,8 +80,7 @@ void UIController::UpdateLastFolder()
             m_hasLoadedInitialData = true;
             m_isScanning = false;
             auto first = m_mediaController.findFirstValidAudio(m_mediaController.getRootNode().get());
-            m_mediaController.setNowPlayingSong(first);
-            m_mediaController.pause();
+            m_mediaController.prepareSong(first);
             spdlog::info("UIController: UpdateLastFolder called. Loaded data from database in {} ms.", std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
         }
     }
@@ -203,6 +201,145 @@ void UIController::updateGradientColors(const QString &imagePath)
         m_gradientColor3 = c3;
         emit gradientColorsChanged();
     }
+}
+
+// 新增：实现接口 - 播放状态
+void UIController::onPlaybackStateChanged(bool isPlaying)
+{
+    QMetaObject::invokeMethod(this, [=, this]()
+                              {
+        if (m_isPlaying != isPlaying) {
+            m_isPlaying = isPlaying;
+            emit isPlayingChanged();
+        } });
+}
+
+// 新增：实现接口 - 切歌
+void UIController::onTrackChanged(PlaylistNode *newNode)
+{
+    // 涉及到封面提取等较重操作，且 node 指针可能跨线程，
+    // 但 checkAndUpdateCoverArt 内部有处理。
+    // 为了安全，我们只传递信号，在 UI 线程拿数据。
+    QMetaObject::invokeMethod(this, [=, this]()
+                              {
+        PlaylistNode* curr = m_mediaController.getCurrentPlayingNode();
+        // 即使传入了 newNode，我们最好还是从 Controller 再确认一次，或者直接用 newNode
+        if (curr != m_lastPlayingNode) {
+            m_lastPlayingNode = curr;
+            
+            // 重置进度
+            m_currentPosMicrosec = 0;
+            emit currentPosMicrosecChanged();
+            m_currentPosText = "00:00";
+            emit currentPosTextChanged();
+
+            checkAndUpdateCoverArt(curr);
+            generateWaveformForNode(curr);
+        } });
+}
+
+// 新增：实现接口 - 进度更新
+void UIController::onPositionChanged(int64_t microsec)
+{
+    // 这个回调频率已经被 AudioPlayer 限制在 ~100ms
+    QMetaObject::invokeMethod(this, [=, this]()
+                              {
+        if (m_isSeeking) return; // 拖动时不更新
+        
+        if (m_currentPosMicrosec != microsec) {
+            m_currentPosMicrosec = microsec;
+            emit currentPosMicrosecChanged();
+        }
+
+        QString tPos = formatTime(microsec);
+        if (m_currentPosText != tPos) {
+            m_currentPosText = tPos;
+            emit currentPosTextChanged();
+        }
+        
+        // 顺便更新剩余时间
+        qint64 total = m_totalDurationMicrosec;
+        QString tRem = formatTime(std::max((qint64)0, total - microsec));
+        if (m_remainingTimeText != tRem) {
+            m_remainingTimeText = tRem;
+            emit remainingTimeTextChanged();
+        } });
+}
+
+// 新增：实现接口 - 音量
+void UIController::onVolumeChanged(double volume)
+{
+    QMetaObject::invokeMethod(this, [=, this]()
+                              {
+        if (std::abs(m_volume - volume) > 0.001) {
+            m_volume = volume;
+            emit volumeChanged();
+        } });
+}
+
+// 新增：实现接口 - 随机
+void UIController::onShuffleChanged(bool shuffle)
+{
+    QMetaObject::invokeMethod(this, [=, this]()
+                              {
+        if (m_isShuffle != shuffle) {
+            m_isShuffle = shuffle;
+            emit isShuffleChanged();
+        } });
+}
+
+// 新增：实现接口 - 循环
+void UIController::onRepeatModeChanged(RepeatMode mode)
+{
+    QMetaObject::invokeMethod(this, [=, this]()
+                              {
+        int m = static_cast<int>(mode);
+        if (m_repeatMode != m) {
+            m_repeatMode = m;
+            emit repeatModeChanged();
+        } });
+}
+
+// 实现接口 - 元数据变更 (如星级/播放次数)
+void UIController::onMetadataChanged(PlaylistNode *node)
+{
+    QMetaObject::invokeMethod(this, [=, this]()
+                              {
+        if (node == m_lastPlayingNode) {
+            checkAndUpdateCoverArt(node); // 刷新文字信息
+        } });
+}
+
+void UIController::onScanFinished()
+{
+    // FileScanner 在后台线程回调，必须用 invokeMethod 切回 UI 线程
+    QMetaObject::invokeMethod(this, [=, this]()
+                              {
+                                  // 1. 标记扫描结束
+                                  if (m_isScanning)
+                                  {
+                                      m_isScanning = false;
+                                      emit isScanningChanged(false);
+                                  }
+
+                                  // 2. 发送完成信号 (可能触发 StartupPage 关闭等)
+                                  emit scanCompleted();
+
+                                  // 3. 标记数据已加载
+                                  m_hasLoadedInitialData = true;
+
+                                  // 4. 尝试加载第一首歌 (可选逻辑)
+                                  auto first = m_mediaController.findFirstValidAudio(m_mediaController.getRootNode().get());
+                                  if (first)
+                                  {
+                                      m_mediaController.prepareSong(first);
+                                      // 强制刷新一次界面信息
+                                      onTrackChanged(first);
+                                  }
+
+                                  // 5. 如果当前在列表页，可能需要刷新 Model
+                                  // 通常 MusicListModel 会监听 scanCompleted 或者是手动调用 loadRoot
+                              });
 }
 
 void UIController::setIsSeeking(bool newIsSeeking)
@@ -626,37 +763,4 @@ void UIController::checkAndUpdateOutputMode()
         m_outputMode = mode;
         emit outputModeChanged();
     }
-}
-
-void UIController::updateStateFromController()
-{
-    checkAndUpdateScanState();
-    checkAndUpdateOutputMode();
-
-    PlaylistNode *curr = m_mediaController.getCurrentPlayingNode();
-    bool songChanged = (curr != m_lastPlayingNode);
-
-    if (songChanged)
-    {
-        m_lastPlayingNode = curr;
-        m_currentPosMicrosec = 0;
-        emit currentPosMicrosecChanged();
-
-        m_currentPosText = "00:00";
-        emit currentPosTextChanged();
-
-        checkAndUpdateCoverArt(curr);
-        generateWaveformForNode(curr);
-    }
-
-    checkAndUpdatePlayState();
-    if (!songChanged)
-        checkAndUpdateTimeState();
-}
-
-void UIController::updateVolumeState()
-{
-    checkAndUpdateVolumeState();
-    checkAndUpdateShuffleState();
-    checkAndUpdateRepeatModeState();
 }

@@ -18,6 +18,35 @@ enum class RepeatMode : std::uint8_t
     Single    // 单曲循环
 };
 
+struct IMediaControllerListener
+{
+    virtual ~IMediaControllerListener() = default;
+    virtual void onPlaybackStateChanged(bool isPlaying)
+    {
+    }
+    virtual void onTrackChanged(PlaylistNode *newNode)
+    {
+    }
+    virtual void onMetadataChanged(PlaylistNode *node)
+    {
+    }
+    virtual void onPositionChanged(int64_t microsec)
+    {
+    }
+    virtual void onVolumeChanged(double volume)
+    {
+    }
+    virtual void onShuffleChanged(bool shuffle)
+    {
+    }
+    virtual void onRepeatModeChanged(RepeatMode mode)
+    {
+    }
+    virtual void onScanFinished()
+    {
+    }
+};
+
 /**
  * @brief 核心媒体控制类 (单例)
  * 负责协调播放器(AudioPlayer)、文件扫描(FileScanner)和播放列表(PlaylistNode)。
@@ -59,14 +88,31 @@ private:
     std::atomic<RepeatMode> repeatMode{RepeatMode::None};
 
     // --- 后台监控线程 ---
-    std::thread monitorThread;
-    std::atomic<bool> monitorRunning{true};
-    std::string lastDetectedPath = ""; // 用于检测底层播放器是否切换了文件
+    // std::thread monitorThread;
+    // std::atomic<bool> monitorRunning{true};
+    // std::string lastDetectedPath = ""; // 用于检测底层播放器是否切换了文件
 
-    // --- 内部核心逻辑 ---
+    // // --- 内部核心逻辑 ---
 
-    // 后台循环：检测播放位置，处理自动切歌
-    void monitorLoop();
+    // // 后台循环：检测播放位置，处理自动切歌
+    // void monitorLoop();
+
+    // 新增：观察者列表
+    std::vector<IMediaControllerListener *> listeners;
+    std::mutex listenerMutex;
+
+    // 新增：内部回调处理函数
+    void handlePlayerStateChange(PlayerState state);
+    void handlePlayerPosition(int64_t pos);
+    void handlePlayerFileComplete();
+    void handlePlayerPathChanged(std::string newPath);
+    void handleScanFinished(std::shared_ptr<PlaylistNode> tree);
+
+    // 辅助：通知函数
+    void notifyStateChanged(bool isPlaying);
+    void notifyTrackChanged(PlaylistNode *node);
+    void notifyPositionChanged(int64_t pos);
+    void notifyScanFinished();
 
     // 预加载下一首歌曲 (实现无缝播放)
     void preloadNextSong();
@@ -86,8 +132,9 @@ private:
      * @brief 执行播放某个节点的逻辑
      * @param node 目标节点
      * @param isAutoSwitch 是否为自动切歌 (影响历史记录逻辑)
+     * @param forcePause 是否强制暂停 (用于启动时加载资源但不播放)
      */
-    void playNode(PlaylistNode *node, bool isAutoSwitch = false);
+    void playNode(PlaylistNode *node, bool isAutoSwitch = false, bool forcePause = false);
 
     // 更新系统媒体中心的元数据
     void updateMetaData(PlaylistNode *node);
@@ -109,6 +156,10 @@ public:
     // --- 生命周期管理 ---
     static void init();
     static void destroy();
+
+    // 注册/注销监听器
+    void addListener(IMediaControllerListener *listener);
+    void removeListener(IMediaControllerListener *listener);
 
     static MediaController &getInstance()
     {
@@ -161,6 +212,8 @@ public:
 
     // --- 列表交互 ---
     void setNowPlayingSong(PlaylistNode *node);
+    // 仅加载歌曲资源并更新UI，但不开始播放 (用于启动时)
+    void prepareSong(PlaylistNode *node);
 
     // 递归查找第一个可播放的音频文件 (用于初始化播放)
     PlaylistNode *findFirstValidAudio(PlaylistNode *node);

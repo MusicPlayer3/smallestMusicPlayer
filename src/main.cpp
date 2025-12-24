@@ -336,36 +336,51 @@ int main(int argc, char *argv[])
         spdlog::info("Initializing MediaController (GUI Mode)...");
         MediaController::init();
         DatabaseService::instance().connect("localhost", 3306, "root", "123456", "MusicPlayerDB");
-        QQmlApplicationEngine engine;
-        engine.addImageProvider(QStringLiteral("covercache"), new CoverImageProvider);
 
-        UIController playerController;
-        engine.rootContext()->setContextProperty("playerController", &playerController);
+        // 1. 使用智能指针管理 UIController 和 MusicListModel
+        // [关键] MusicListModel 的 parent 设为 nullptr，不要让 app 自动管理它
+        auto playerController = std::make_unique<UIController>();
+        auto musicModel = std::make_unique<MusicListModel>(nullptr);
 
-        MusicListModel *musicModel = new MusicListModel(&app);
-        engine.rootContext()->setContextProperty("musicListModel", musicModel);
+        int ret = 0;
 
-        // 连接退出信号，确保资源安全释放
-        QObject::connect(&app, &QCoreApplication::aboutToQuit, [&]()
-                         {
-            spdlog::info("Application about to quit. Starting cleanup...");
-            playerController.prepareForQuit();
-            
-            MediaController::destroy();
-            SimpleThreadPool::instance().shutdown();
-            
-            spdlog::info("Cleanup sequence finished."); });
+        {
+            QQmlApplicationEngine engine;
+            engine.addImageProvider(QStringLiteral("covercache"), new CoverImageProvider);
 
-        QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, []()
-                         { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
+            engine.rootContext()->setContextProperty("playerController", playerController.get());
+            engine.rootContext()->setContextProperty("musicListModel", musicModel.get());
 
-        engine.loadFromModule("MusicPlayer", "Main");
+            QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, []()
+                             { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
 
-        int ret = app.exec();
+            engine.loadFromModule("MusicPlayer", "Main");
 
-        // 双重保险清理
+            ret = app.exec();
+            // engine 在此处析构
+        }
+
+        spdlog::info("Application loop finished. Starting cleanup...");
+
+        // 2. [关键] 严格按照依赖反向顺序销毁
+
+        // 先销毁 Model (它依赖 Controller)
+        if (musicModel)
+        {
+            musicModel.reset();
+        }
+
+        if (playerController)
+        {
+            playerController->prepareForQuit();
+            playerController.reset();
+        }
+
+        // 最后销毁后端 MediaController
         MediaController::destroy();
         SimpleThreadPool::instance().shutdown();
+
+        spdlog::info("Cleanup sequence finished.");
         spdlog::drop_all();
         spdlog::shutdown();
 

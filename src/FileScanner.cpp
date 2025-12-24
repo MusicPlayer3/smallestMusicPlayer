@@ -1194,6 +1194,11 @@ void FileScanner::stopScan()
     }
 }
 
+void FileScanner::setScanFinishedCallback(std::function<void(std::shared_ptr<PlaylistNode>)> cb)
+{
+    m_callback = cb;
+}
+
 void FileScanner::scanDir(std::stop_token stoken)
 {
 #ifdef ANALYSE
@@ -1261,6 +1266,11 @@ void FileScanner::scanDir(std::stop_token stoken)
     // [优化] 扫描结束后释放 memo 内存
     ScannerLogic::clearCache();
     hasScanCpld = true;
+
+    if (m_callback)
+    {
+        m_callback(this->rootNode);
+    }
 #ifdef ANALYSE
     auto end_total = std::chrono::high_resolution_clock::now();
     int64_t total_us = std::chrono::duration_cast<std::chrono::microseconds>(end_total - start_total).count();
