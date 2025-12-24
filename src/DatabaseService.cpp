@@ -42,6 +42,7 @@ struct SongData
     QString album;
     QString year;
     QString filePath;
+    QString coverKey;
     qint64 duration;
     qint64 offset;
     qint64 lastWriteTime;
@@ -173,6 +174,7 @@ bool DatabaseService::initSchema()
             album VARCHAR(255),
             year VARCHAR(32),
             file_path VARCHAR(768) NOT NULL,
+            cover_key VARCHAR(255) DEFAULT NULL,  -- [新增] 必须存储 Hash Key
             duration BIGINT DEFAULT 0,
             offset_val BIGINT DEFAULT 0,
             last_write_time BIGINT DEFAULT 0,
@@ -352,7 +354,8 @@ static void bindAndExecBatchSongs(QSqlQuery &q, const std::vector<SongData> &son
     if (songs.empty())
         return;
 
-    QVariantList dids, titles, artists, albums, years, paths, durs, offs, lwts, srs, bds, fmts;
+    // [Modified] 增加 cks (Cover Keys) 列表
+    QVariantList dids, titles, artists, albums, years, paths, cks, durs, offs, lwts, srs, bds, fmts;
     size_t sz = songs.size();
 
     // 预分配内存
@@ -362,6 +365,7 @@ static void bindAndExecBatchSongs(QSqlQuery &q, const std::vector<SongData> &son
     albums.reserve(sz);
     years.reserve(sz);
     paths.reserve(sz);
+    cks.reserve(sz); // [New]
     durs.reserve(sz);
     offs.reserve(sz);
     lwts.reserve(sz);
@@ -377,6 +381,7 @@ static void bindAndExecBatchSongs(QSqlQuery &q, const std::vector<SongData> &son
         albums << s.album;
         years << s.year;
         paths << s.filePath;
+        cks << s.coverKey; // [New]
         durs << s.duration;
         offs << s.offset;
         lwts << s.lastWriteTime;
@@ -391,6 +396,7 @@ static void bindAndExecBatchSongs(QSqlQuery &q, const std::vector<SongData> &son
     q.addBindValue(albums);
     q.addBindValue(years);
     q.addBindValue(paths);
+    q.addBindValue(cks); // [New] 注意绑定的顺序必须和 SQL 中的 ? 顺序一致
     q.addBindValue(durs);
     q.addBindValue(offs);
     q.addBindValue(lwts);
@@ -417,13 +423,10 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
     // -------------------------------------------------------------------------
     // 步骤 1: 备份统计数据 (PlayCount, Rating)
     // -------------------------------------------------------------------------
-    // 即使目录结构变了，只要文件路径没变，我们就应该保留它的评分和播放次数。
-    // 使用临时表进行备份。
-    // -------------------------------------------------------------------------
     m_db.transaction();
     QSqlQuery q(m_db);
 
-    // 1.1 创建临时表 (MEMORY引擎更快)
+    // 1.1 创建临时表
     q.exec("CREATE TEMPORARY TABLE IF NOT EXISTS tmp_stats_backup ("
            "  file_path VARCHAR(768) NOT NULL, "
            "  play_count INT DEFAULT 0, "
@@ -432,16 +435,15 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
            "  INDEX idx_tmp_path (file_path)"
            ") ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin");
 
-    // 1.2 清空临时表 (以防连接复用有残留)
+    // 1.2 清空临时表
     q.exec("TRUNCATE TABLE tmp_stats_backup");
 
-    // 1.3 备份有意义的数据 (播放过或评过分的)
+    // 1.3 备份有意义的数据
     if (!q.exec("INSERT INTO tmp_stats_backup (file_path, play_count, rating, last_played_at) "
                 "SELECT file_path, play_count, rating, last_played_at FROM table_songs "
                 "WHERE play_count > 0 OR rating > 0"))
     {
         spdlog::error("[DB] Failed to backup stats: {}", q.lastError().text().toStdString());
-        // 如果备份失败，回滚并终止，防止数据丢失
         m_db.rollback();
         return;
     }
@@ -453,7 +455,7 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
     q.exec("TRUNCATE TABLE table_songs");
     q.exec("TRUNCATE TABLE table_directories");
     q.exec("SET FOREIGN_KEY_CHECKS = 1");
-    m_db.commit(); // 提交清空操作，后续插入开启新事务
+    m_db.commit();
 
     // 预加载封面Key
     std::unordered_set<std::string> existingCoverKeys;
@@ -494,6 +496,7 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
                                 TO_QSTR(md.getTitle()), TO_QSTR(md.getArtist()),
                                 TO_QSTR(md.getAlbum()), TO_QSTR(md.getYear()),
                                 TO_QSTR(md.getFilePath()),
+                                TO_QSTR(node->getCoverKey()), // 这里收集了 Key
                                 static_cast<qint64>(md.getDuration()),
                                 static_cast<qint64>(md.getOffset()),
                                 static_cast<qint64>(timeToDb(md.getLastWriteTime())),
@@ -544,13 +547,15 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
         {
             m_db.transaction();
             QSqlQuery qS(m_db);
-            // 初始插入统计数据为0
+
+            // [Modified] 修复 SQL 语句，添加 cover_key 字段
+            // 注意 ? 的数量要和 bindAndExecBatchSongs 中 addBindValue 的数量一致
             qS.prepare(R"(
                 INSERT IGNORE INTO table_songs 
-                (directory_id, title, artist, album, year, file_path, 
+                (directory_id, title, artist, album, year, file_path, cover_key,
                  duration, offset_val, last_write_time, sample_rate, bit_depth, format_type, 
                  play_count, rating, last_played_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
             )");
             bindAndExecBatchSongs(qS, allSongs);
             m_db.commit();
@@ -584,12 +589,13 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
                         if (db.open()) {
                             db.transaction();
                             QSqlQuery q(db);
+                            // [Modified] 同样修复 Worker 中的 SQL 语句
                             q.prepare(R"(
                                 INSERT IGNORE INTO table_songs 
-                                (directory_id, title, artist, album, year, file_path, 
-                                duration, offset_val, last_write_time, sample_rate, bit_depth, format_type, 
-                                play_count, rating, last_played_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+                                (directory_id, title, artist, album, year, file_path, cover_key,
+                                 duration, offset_val, last_write_time, sample_rate, bit_depth, format_type, 
+                                 play_count, rating, last_played_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
                             )");
                             bindAndExecBatchSongs(q, chunk);
                             db.commit();
@@ -605,9 +611,6 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
 
     // -------------------------------------------------------------------------
     // 步骤 6: 恢复统计数据 (Restore Stats)
-    // -------------------------------------------------------------------------
-    // 此时所有歌曲已插入，play_count 均为 0。
-    // 我们将临时表中的数据 Update 回去。
     // -------------------------------------------------------------------------
     spdlog::info("[DB] Restoring stats from backup...");
     m_db.transaction();
@@ -639,6 +642,7 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
     std::unordered_map<int, std::shared_ptr<PlaylistNode>> dirMap;
     std::shared_ptr<PlaylistNode> root = nullptr;
 
+    // 1. Load Directories
     QSqlQuery dirQ("SELECT id, parent_id, full_path, cover_key FROM table_directories ORDER BY id ASC", m_db);
     while (dirQ.next())
     {
@@ -657,7 +661,7 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
     if (!root)
         return nullptr;
 
-    // Load Songs
+    // 2. Load Songs
     std::vector<int> idsToDelete;
     int updatedCount = 0;
 
@@ -670,10 +674,14 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
     )");
 
     QSqlQuery songQ("SELECT * FROM table_songs", m_db);
+
+    // 获取字段索引以提高性能
     int idx_id = songQ.record().indexOf("id");
     int idx_dir = songQ.record().indexOf("directory_id");
     int idx_path = songQ.record().indexOf("file_path");
     int idx_lwt = songQ.record().indexOf("last_write_time");
+    // [Modified] 获取封面 Hash Key 的索引
+    int idx_cover_key = songQ.record().indexOf("cover_key");
 
     m_db.transaction();
     while (songQ.next())
@@ -699,6 +707,7 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
         auto ftime = fs::last_write_time(filePath, ec);
         int64_t dbTime = songQ.value(idx_lwt).toLongLong();
 
+        // 检查文件修改时间，若变动则重新读取元数据
         if (timeToDb(ftime) != dbTime)
         {
             md = FileScanner::getMetaData(filePath);
@@ -735,7 +744,27 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
         md.setRating(songQ.value("rating").toInt());
 
         auto songNode = std::make_shared<PlaylistNode>(filePath, false);
-        songNode->setCoverKey(md.getAlbum().empty() ? md.getTitle() : md.getAlbum());
+
+        // [Modified] 关键修复：从数据库加载 Hash Key
+        if (idx_cover_key != -1)
+        {
+            std::string dbKey = TO_STD(songQ.value(idx_cover_key).toString());
+            if (!dbKey.empty())
+            {
+                songNode->setCoverKey(dbKey);
+            }
+            else
+            {
+                // 如果数据库里该字段为空（旧数据），回退到使用专辑名
+                songNode->setCoverKey(md.getAlbum().empty() ? md.getTitle() : md.getAlbum());
+            }
+        }
+        else
+        {
+            // 兼容旧表结构
+            songNode->setCoverKey(md.getAlbum().empty() ? md.getTitle() : md.getAlbum());
+        }
+
         songNode->setMetaData(md);
         dirMap[dirId]->addChild(songNode);
     }
@@ -770,6 +799,7 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
             }
             n->setTotalSongs(ts);
             n->setTotalDuration(td);
+            n->sortChildren(); // 重新排序
         }
     };
     aggregate(root);
@@ -879,7 +909,7 @@ int DatabaseService::getDirectoryId(const std::string &fullPath)
     return -1;
 }
 
-bool DatabaseService::addSong(const MetaData &meta)
+bool DatabaseService::addSong(const MetaData &meta, const std::string &coverKey)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     int dirId = getDirectoryId(meta.getParentDir());
@@ -887,19 +917,25 @@ bool DatabaseService::addSong(const MetaData &meta)
         return false;
 
     QSqlQuery q(m_db);
-    // [Fix] AddSong 也应该遵守不覆盖统计数据的原则，使用 ON DUPLICATE UPDATE
+    // [Fix] 增加 cover_key 字段的处理
+    // 使用 ON DUPLICATE KEY UPDATE 确保文件重新扫描时更新信息（包括封面Key）
     q.prepare(R"(
         INSERT INTO table_songs 
-        (directory_id, title, artist, album, year, file_path, 
+        (directory_id, title, artist, album, year, file_path, cover_key,
          duration, offset_val, last_write_time, sample_rate, bit_depth, format_type, 
          play_count, rating, last_played_at)
         VALUES 
-        (:did, :title, :artist, :album, :year, :path, 
+        (:did, :title, :artist, :album, :year, :path, :ck,
          :dur, :off, :lwt, :sr, :bd, :fmt, 0, 0, 0)
         ON DUPLICATE KEY UPDATE
             directory_id = VALUES(directory_id),
             title = VALUES(title),
-            last_write_time = VALUES(last_write_time)
+            cover_key = VALUES(cover_key),
+            last_write_time = VALUES(last_write_time),
+            duration = VALUES(duration), 
+            sample_rate = VALUES(sample_rate),
+            bit_depth = VALUES(bit_depth),
+            format_type = VALUES(format_type)
     )");
 
     q.bindValue(":did", dirId);
@@ -908,6 +944,7 @@ bool DatabaseService::addSong(const MetaData &meta)
     q.bindValue(":album", TO_QSTR(meta.getAlbum()));
     q.bindValue(":year", TO_QSTR(meta.getYear()));
     q.bindValue(":path", TO_QSTR(meta.getFilePath()));
+    q.bindValue(":ck", TO_QSTR(coverKey)); // [New] 绑定封面 Hash Key
     q.bindValue(":dur", static_cast<qint64>(meta.getDuration()));
     q.bindValue(":off", static_cast<qint64>(meta.getOffset()));
     q.bindValue(":lwt", static_cast<qint64>(timeToDb(meta.getLastWriteTime())));

@@ -584,14 +584,36 @@ void MediaController::updateMetaData(PlaylistNode *node)
 {
     if (!node || !mediaService)
         return;
+
+    // 获取元数据副本
     auto data = node->getMetaData();
 
-    // 如果没有封面路径，尝试提取
-    if (data.getCoverPath().empty())
+    // 检查封面路径是否为空，或者路径对应的文件是否不存在 (防止缓存了被删除的临时文件)
+    bool needUpdate = data.getCoverPath().empty();
+    if (!needUpdate)
     {
-        data.setCoverPath(FileScanner::extractCoverToTempFile(data));
-        node->setMetaData(data); // 缓存回节点
+        if (!std::filesystem::exists(data.getCoverPath()))
+        {
+            needUpdate = true;
+        }
     }
+
+    if (needUpdate)
+    {
+        // 调用我们修复后的 extractCoverToTempFile
+        // 这会查找内嵌 -> 查找目录 -> 更新 data 中的 coverPath
+        std::string newPath = FileScanner::extractCoverToTempFile(data);
+
+        // 关键：将更新后的元数据设置回 Node，实现内存缓存
+        // 这样 UIController 稍后读取时就能直接拿到路径
+        if (!newPath.empty())
+        {
+            data.setCoverPath(newPath);
+            node->setMetaData(data);
+        }
+    }
+
+    // 将完整的元数据传给后端播放服务 (MPRIS 会使用其中的 coverPath)
     mediaService->setMetaData(data);
 }
 
@@ -821,7 +843,8 @@ bool MediaController::addSong(const std::string &path, PlaylistNode *parent)
     // 5. [新增] 同步写入数据库
     // 注意：DatabaseService::addSong 内部会根据文件路径自动查找父目录ID，
     // 前提是 parent 对应的目录已经在数据库中（通常情况下是存在的）。
-    DatabaseService::instance().addSong(newNode->getMetaData());
+    // [Modified] 传入 coverKey 参数
+    DatabaseService::instance().addSong(newNode->getMetaData(), newNode->getCoverKey());
 
     return true;
 }
@@ -958,7 +981,8 @@ bool MediaController::addFolder(const std::string &path, PlaylistNode *parent)
         else
         {
             // 添加歌曲
-            if (!DatabaseService::instance().addSong(curr->getMetaData()))
+            // [Modified] 传入 coverKey 参数
+            if (!DatabaseService::instance().addSong(curr->getMetaData(), curr->getCoverKey()))
             {
                 spdlog::error("addFolder: Failed to add song to database: {}", curr->getPath());
             }

@@ -5,6 +5,7 @@
 #include "CoverImage.hpp"
 #include <list>
 #include <mutex>
+#include <shared_mutex> // [Modified] 引入读写锁
 #include <unordered_map>
 #include <memory>
 #include <string>
@@ -42,7 +43,10 @@ private:
 
     const size_t MAX_CAPACITY = 200;
 
-    std::mutex m_mutex;
+    // [Modified] 使用 shared_mutex 替代 mutex
+    // 允许多个线程同时读取(get)，写入(put)时才独占
+    mutable std::shared_mutex m_mutex;
+
     std::list<std::string> m_lruList;
     struct CacheEntry
     {

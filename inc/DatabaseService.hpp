@@ -62,7 +62,7 @@ public:
     int getPlayCount(const std::string &filePath);
     int getRating(const std::string &filePath);
 
-    bool addSong(const MetaData &meta);
+    bool addSong(const MetaData &meta, const std::string &coverKey);
     bool addDirectory(const std::string &path, const std::string &name,
                       const std::string &parentPath, const std::string &coverKey);
     bool removeSong(const std::string &filePath);

@@ -456,22 +456,42 @@ void UIController::onWaveformCalculationFinished()
 void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
 {
     QString newCover = "", newTitle = "", newArtist = "", newAlbum = "";
+
     if (currentNode)
     {
         auto meta = currentNode->getMetaData();
+
+        // 双重检查：虽然 MediaController 可能已经处理过，但 UI 刷新可能独立触发
+        // 如果路径为空，再次尝试提取
         if (meta.getCoverPath().empty())
         {
-            meta.setCoverPath(FileScanner::extractCoverToTempFile(meta));
-            currentNode->setMetaData(meta);
+            std::string path = FileScanner::extractCoverToTempFile(meta);
+            if (!path.empty())
+            {
+                meta.setCoverPath(path);
+                currentNode->setMetaData(meta); // 回写缓存
+            }
         }
-        QString raw = QString::fromStdString(meta.getCoverPath());
-        if (!raw.isEmpty())
-            newCover = QUrl::fromLocalFile(raw).toString();
+
+        // 处理封面路径
+        QString rawPath = QString::fromStdString(meta.getCoverPath());
+        if (!rawPath.isEmpty())
+        {
+            // 转换为 QML 兼容的 file:// URL
+            // 这对于显示本地磁盘上的高清大图至关重要
+            newCover = QUrl::fromLocalFile(rawPath).toString();
+        }
+        else
+        {
+            // 如果确实没有封面，可以使用默认占位符或保持为空
+            newCover = "";
+        }
 
         newTitle = QString::fromStdString(meta.getTitle());
         newArtist = QString::fromStdString(meta.getArtist());
         newAlbum = QString::fromStdString(meta.getAlbum());
 
+        // 更新时长逻辑 (保持不变)
         qint64 dur = m_mediaController.getDurationMicroseconds();
         if (m_totalDurationMicrosec != dur)
         {
@@ -480,13 +500,20 @@ void UIController::checkAndUpdateCoverArt(PlaylistNode *currentNode)
         }
     }
 
+    // 仅在变动时发送信号
     if (m_coverArtSource != newCover)
     {
         m_coverArtSource = newCover;
         emit coverArtSourceChanged();
+
+        // 更新背景模糊/渐变色
         if (currentNode)
+        {
             updateGradientColors(QString::fromStdString(currentNode->getMetaData().getCoverPath()));
+        }
     }
+
+    // 更新文字信息
     if (m_songTitle != newTitle)
     {
         m_songTitle = newTitle;

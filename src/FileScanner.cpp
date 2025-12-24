@@ -1310,64 +1310,122 @@ MetaData FileScanner::getMetaData(const std::string &musicPath)
 
 std::string FileScanner::extractCoverToTempFile(MetaData &metadata)
 {
+    // 1. 如果元数据中已经有了有效的封面路径，直接返回
     if (!metadata.getCoverPath().empty())
-        return metadata.getCoverPath();
+    {
+        fs::path existingPath(metadata.getCoverPath());
+        // 必须再次检查文件是否存在，防止缓存了已被删除的临时文件
+        if (fs::exists(existingPath) && fs::is_regular_file(existingPath))
+        {
+            return metadata.getCoverPath();
+        }
+    }
+
     std::string musicPath = metadata.getFilePath();
-    fs::path tmpDir = fs::temp_directory_path() / "SmallestMusicPlayer";
-    try
+
+    // 确保有父目录信息
+    std::string parentDir = metadata.getParentDir();
+    if (parentDir.empty())
     {
-        if (!fs::exists(tmpDir))
-            fs::create_directories(tmpDir);
+        fs::path p(musicPath);
+        if (p.has_parent_path())
+        {
+            parentDir = p.parent_path().string();
+            metadata.setParentDir(parentDir);
+        }
     }
-    catch (...)
-    {
-        return "";
-    }
+
+    // 2. 尝试提取内嵌封面
     TagLib::ByteVector coverData = TagLibHelpers::extractCoverDataGeneric(musicPath);
+
     if (!coverData.isEmpty())
     {
-        auto sanitize = [](const std::string &name)
+        fs::path tmpDir = fs::temp_directory_path() / "SmallestMusicPlayer";
+        try
         {
-            std::string safe;
-            for (char c : name)
-                safe.push_back((c == '/' || c == '\\' || c == ':') ? '_' : c);
-            return safe.empty() ? "cover" : safe;
-        };
-        std::string safeName = sanitize(fs::path(musicPath).stem().string());
-        std::string ext = ".jpg";
-        if (coverData.size() >= 4 && coverData[0] == (char)0x89 && coverData[1] == 'P' && coverData[2] == 'N' && coverData[3] == 'G')
-            ext = ".png";
-        fs::path targetPath = tmpDir / (safeName + ext);
-        if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
-            return fs::absolute(targetPath).string();
-        std::ofstream outFile(targetPath, std::ios::binary | std::ios::trunc);
-        if (outFile)
-        {
-            outFile.write(coverData.data(), coverData.size());
-            return fs::absolute(targetPath).string();
+            if (!fs::exists(tmpDir))
+                fs::create_directories(tmpDir);
         }
-    }
-    fs::path musicDir = fs::path(musicPath).parent_path();
-    std::string coverPath;
-    for (const auto &name : kCoverFileNames)
-    {
-        for (const auto &ext : kImageExts)
+        catch (...)
         {
-            fs::path p = musicDir / (name + ext);
-            if (fs::exists(p))
+            // 忽略创建目录错误，继续尝试目录回退
+        }
+
+        if (fs::exists(tmpDir))
+        {
+            // 生成安全的文件名
+            auto sanitize = [](const std::string &name)
             {
-                coverPath = p.string();
-                break;
+                std::string safe;
+                for (char c : name)
+                    safe.push_back((c == '/' || c == '\\' || c == ':') ? '_' : c);
+                return safe.empty() ? "cover" : safe;
+            };
+
+            std::string safeName = sanitize(fs::path(musicPath).stem().string());
+            std::string ext = ".jpg";
+            if (coverData.size() >= 4 && coverData[0] == (char)0x89 && coverData[1] == 'P' && coverData[2] == 'N' && coverData[3] == 'G')
+                ext = ".png";
+
+            fs::path targetPath = tmpDir / (safeName + ext);
+
+            // 如果临时文件已存在且大小匹配，直接使用
+            if (fs::exists(targetPath) && fs::file_size(targetPath) > 0)
+            {
+                std::string res = fs::absolute(targetPath).string();
+                metadata.setCoverPath(res);
+                return res;
+            }
+
+            std::ofstream outFile(targetPath, std::ios::binary | std::ios::trunc);
+            if (outFile)
+            {
+                outFile.write(coverData.data(), coverData.size());
+                std::string res = fs::absolute(targetPath).string();
+                metadata.setCoverPath(res);
+                return res;
             }
         }
-        if (!coverPath.empty())
-            break;
     }
-    if (!coverPath.empty())
+
+    // 3. [Critical Fix for Linux] 遍历目录查找封面文件 (忽略大小写)
+    // 之前的逻辑是拼接路径检查是否存在，这在 Linux 上对大小写敏感的文件系统无效。
+    // 现在改为遍历目录项，手动比对文件名。
+    if (parentDir.empty() || !fs::exists(parentDir))
+        return "";
+
+    try
     {
-        metadata.setCoverPath(coverPath);
-        return coverPath;
+        for (const auto &entry : fs::directory_iterator(parentDir))
+        {
+            if (!entry.is_regular_file())
+                continue;
+
+            // 获取扩展名并转小写
+            std::string ext = getLowerExt(entry.path().string()); // 依赖顶部的 helper
+
+            // 检查是否是图片格式 (.jpg, .png, .bmp)
+            if (kImageExts.find(ext) == kImageExts.end())
+                continue;
+
+            // 获取文件名(不含后缀)
+            std::string stem = entry.path().stem().string();
+
+            // 检查文件名是否是封面名称 (cover, folder, front...)
+            // isCoverFileName 内部已经做了转小写处理，所以能匹配 Cover, COVER, cover
+            if (isCoverFileName(stem))
+            {
+                std::string foundPath = entry.path().string();
+                metadata.setCoverPath(foundPath);
+                return foundPath;
+            }
+        }
     }
+    catch (const std::exception &e)
+    {
+        spdlog::error("Directory iteration error in extractCover: {}", e.what());
+    }
+
     return "";
 }
 
