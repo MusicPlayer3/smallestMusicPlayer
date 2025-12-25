@@ -1,119 +1,13 @@
 #include "SysMediaService.hpp"
 #include "MediaController.hpp"
+#include <sstream>
+#include <iomanip>
+#include <map>
 
+// ==========================================
+//  Linux 专用辅助函数
+// ==========================================
 #ifdef __linux__
-SysMediaService::SysMediaService(MediaController &controller_) : controller(controller_)
-{
-    server = mpris::Server::make("org.mpris.MediaPlayer2.SysMediaService");
-
-    if (!server)
-    {
-        spdlog::error("[SysMediaService] Error: Can't create MPRIS server. MPRIS disabled.");
-        return;
-    }
-
-    // 基础信息设置
-    server->set_identity("MusicPlayer");
-    server->set_desktop_entry("music-player"); // 需对应 .desktop 文件名
-    server->set_supported_uri_schemes({"file"});
-    server->set_supported_mime_types({"application/octet-stream", "audio/mpeg", "audio/flac", "audio/x-wav", "text/plain"});
-
-    // 回调函数绑定
-    server->on_quit([this]()
-                    { this->onQuit(); });
-
-    server->on_next([this]()
-                    { this->onNext(); });
-
-    server->on_previous([this]()
-                        { this->onPrevious(); });
-
-    server->on_pause([this]()
-                     { this->onPause(); });
-
-    server->on_play_pause([this]()
-                          { this->onPlayPause(); });
-
-    server->on_stop([this]()
-                    { this->onStop(); });
-
-    server->on_play([this]()
-                    { this->onPlay(); });
-
-    server->on_loop_status_changed([this](mpris::LoopStatus status)
-                                   { this->onLoopStatusChanged(status); });
-
-    server->on_shuffle_changed([this](bool shuffle)
-                               { this->onShuffleChanged(shuffle); });
-
-    server->on_volume_changed([this](double volume)
-                              { this->onVolumeChanged(volume); });
-
-    server->on_seek([this](int64_t offset)
-                    { this->onSeek(std::chrono::microseconds(offset)); });
-
-    server->on_set_position([this](int64_t pos)
-                            { this->onSetPosition(std::chrono::microseconds(pos)); });
-
-    server->start_loop_async();
-}
-
-void SysMediaService::setMetaData(const std::string &title, const std::vector<std::string> &artist,
-                                  const std::string &album,
-                                  const std::string &coverPath, int64_t duration, const std::string &uri)
-{
-    if (!server)
-    {
-        spdlog::error("[SysMediaService] Error: MPRIS server not initialized.\n");
-        return;
-    }
-
-    // 修复：使用 map<mpris::Field, sdbus::Variant> 构建元数据
-    std::map<mpris::Field, sdbus::Variant> meta;
-
-    // 1. Track ID (关键修复：必须唯一，否则客户端不会重置进度)
-    // 使用 URI 的哈希值生成唯一的 TrackID
-    std::string uniqueIdStr = uri.empty() ? title : uri;
-    std::size_t hash = std::hash<std::string>{}(uniqueIdStr);
-    std::string trackIdPath = "/org/mpris/MediaPlayer2/Track/ID_" + std::to_string(hash);
-
-    meta[mpris::Field::TrackId] = sdbus::Variant(sdbus::ObjectPath(trackIdPath));
-
-    // 2. Title
-    meta[mpris::Field::Title] = sdbus::Variant(title);
-
-    // 3. Artist (MPRIS 标准要求是字符串列表 "as")
-    meta[mpris::Field::Artist] = sdbus::Variant(artist);
-
-    // 4. Album
-    meta[mpris::Field::Album] = sdbus::Variant(album);
-
-    if (!uri.empty())
-    { // 5. URL
-        meta[mpris::Field::Url] = sdbus::Variant(localPathToUri(uri));
-    }
-
-    // 6. Art URL (封面)
-    if (!coverPath.empty())
-    {
-        meta[mpris::Field::ArtUrl] = sdbus::Variant(localPathToUri(coverPath));
-    }
-
-    // 7. Length (单位微秒，int64_t)
-    if (duration > 0)
-    {
-        meta[mpris::Field::Length] = sdbus::Variant(duration);
-    }
-
-    // 调用 set_metadata
-    server->set_metadata(meta);
-}
-
-void SysMediaService::setMetaData(const MetaData &metadata)
-{
-    setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), metadata.getCoverPath(), metadata.getDuration(), metadata.getFilePath());
-}
-
 std::string SysMediaService::localPathToUri(const std::string &path)
 {
     if (path.empty())
@@ -147,79 +41,289 @@ std::string SysMediaService::localPathToUri(const std::string &path)
     uri += escaped.str();
     return uri;
 }
+#endif
+
+// ==========================================
+//  构造与析构
+// ==========================================
+
+SysMediaService::SysMediaService(MediaController &controller_) : controller(controller_)
+{
+#ifdef __linux__
+    server = mpris::Server::make("org.mpris.MediaPlayer2.MusicPlayer");
+
+    if (!server)
+    {
+        spdlog::error("[SysMediaService] Error: Can't create MPRIS server. MPRIS disabled.");
+    }
+    else
+    {
+        // 基础信息设置
+        server->set_identity("MusicPlayer");
+        server->set_desktop_entry("music-player"); // 需对应 .desktop 文件名
+        server->set_supported_uri_schemes({"file"});
+        server->set_supported_mime_types({"application/octet-stream", "audio/mpeg", "audio/flac", "audio/x-wav", "text/plain"});
+
+        // 回调函数绑定
+        server->on_quit([this]()
+                        { this->onMprisQuit(); });
+        server->on_next([this]()
+                        { this->onMprisNext(); });
+        server->on_previous([this]()
+                            { this->onMprisPrevious(); });
+        server->on_pause([this]()
+                         { this->onMprisPause(); });
+        server->on_play_pause([this]()
+                              { this->onMprisPlayPause(); });
+        server->on_stop([this]()
+                        { this->onMprisStop(); });
+        server->on_play([this]()
+                        { this->onMprisPlay(); });
+        server->on_loop_status_changed([this](mpris::LoopStatus status)
+                                       { this->onMprisLoopStatusChanged(status); });
+        server->on_shuffle_changed([this](bool shuffle)
+                                   { this->onMprisShuffleChanged(shuffle); });
+        server->on_volume_changed([this](double volume)
+                                  { this->onMprisVolumeChanged(volume); });
+        server->on_seek([this](int64_t offset)
+                        { this->onMprisSeek(std::chrono::microseconds(offset)); });
+        server->on_set_position([this](int64_t pos)
+                                { this->onMprisSetPosition(std::chrono::microseconds(pos)); });
+
+        server->start_loop_async();
+
+        // 同步初始状态
+        onVolumeChanged(controller.getVolume());
+        onShuffleChanged(controller.getShuffle());
+        onRepeatModeChanged(controller.getRepeatMode());
+        auto *curr = controller.getCurrentPlayingNode();
+        if (curr)
+        {
+            onTrackChanged(curr);
+            onPlaybackStateChanged(controller.getIsPlaying());
+        }
+        else
+        {
+            setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+        }
+    }
+#endif
+
+    // 无论 Linux 还是 Windows，都需要注册监听器
+    controller.addListener(this);
+}
+
+SysMediaService::~SysMediaService()
+{
+    controller.removeListener(this);
+}
+
+// ==========================================
+//  通用 Setter 实现
+// ==========================================
+
+void SysMediaService::setMetaData(const std::string &title, const std::vector<std::string> &artist,
+                                  const std::string &album,
+                                  const std::string &coverPath, int64_t duration, const std::string &uri)
+{
+#ifdef __linux__
+    if (!server)
+        return;
+
+    std::map<mpris::Field, sdbus::Variant> meta;
+
+    // 1. Track ID
+    std::string uniqueIdStr = uri.empty() ? title : uri;
+    std::size_t hash = std::hash<std::string>{}(uniqueIdStr);
+    std::string trackIdPath = "/org/mpris/MediaPlayer2/Track/ID_" + std::to_string(hash);
+
+    meta[mpris::Field::TrackId] = sdbus::Variant(sdbus::ObjectPath(trackIdPath));
+    meta[mpris::Field::Title] = sdbus::Variant(title);
+    meta[mpris::Field::Artist] = sdbus::Variant(artist);
+    meta[mpris::Field::Album] = sdbus::Variant(album);
+
+    if (!uri.empty())
+    {
+        meta[mpris::Field::Url] = sdbus::Variant(localPathToUri(uri));
+    }
+
+    if (!coverPath.empty())
+    {
+        meta[mpris::Field::ArtUrl] = sdbus::Variant(localPathToUri(coverPath));
+    }
+
+    if (duration > 0)
+    {
+        meta[mpris::Field::Length] = sdbus::Variant(duration);
+    }
+
+    server->set_metadata(meta);
+#endif
+}
+
+void SysMediaService::setMetaData(const MetaData &metadata)
+{
+    setMetaData(metadata.getTitle(),
+                std::vector<std::string>({metadata.getArtist()}),
+                metadata.getAlbum(),
+                metadata.getCoverPath(),
+                metadata.getDuration(),
+                metadata.getFilePath());
+}
 
 void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
 {
+#ifdef __linux__
     if (!server)
-    {
-        spdlog::error("[SysMediaService] Error: MPRIS server not initialized.");
         return;
-    }
     server->set_playback_status(status);
+#endif
+}
+
+void SysMediaService::setPosition(std::chrono::microseconds position)
+{
+#ifdef __linux__
+    if (!server)
+        return;
+    server->set_position(position.count());
+#endif
 }
 
 void SysMediaService::triggerSeeked(std::chrono::microseconds position)
 {
+#ifdef __linux__
     if (!server)
         return;
-
     int64_t pos = position.count();
-    // 1. 更新内部状态，防止客户端随后查询到旧时间
     server->set_position(pos);
-    // 2. 发送信号通知客户端重置
     server->send_seeked_signal(pos);
+#endif
 }
 
-void SysMediaService::onQuit()
+void SysMediaService::setLoopStatus(mpris::LoopStatus status)
+{
+#ifdef __linux__
+    if (!server)
+        return;
+    server->set_loop_status(status);
+#endif
+}
+
+void SysMediaService::setShuffle(bool shuffle)
+{
+#ifdef __linux__
+    if (!server)
+        return;
+    server->set_shuffle(shuffle);
+#endif
+}
+
+// ==========================================
+//  Listener 接口实现 (内部 -> 外部)
+// ==========================================
+
+void SysMediaService::onPlaybackStateChanged(bool isPlaying)
+{
+    setPlayBackStatus(isPlaying ? mpris::PlaybackStatus::Playing : mpris::PlaybackStatus::Paused);
+}
+
+void SysMediaService::onTrackChanged(PlaylistNode *newNode)
+{
+    if (!newNode)
+    {
+        setPlayBackStatus(mpris::PlaybackStatus::Stopped);
+        return;
+    }
+    setMetaData(newNode->getMetaData());
+}
+
+void SysMediaService::onMetadataChanged(PlaylistNode *node)
+{
+    if (node && node == controller.getCurrentPlayingNode())
+    {
+        setMetaData(node->getMetaData());
+    }
+}
+
+void SysMediaService::onPositionChanged(int64_t microsec)
+{
+    setPosition(std::chrono::microseconds(microsec));
+}
+
+void SysMediaService::onVolumeChanged(double volume)
+{
+#ifdef __linux__
+    if (server)
+        server->set_volume(volume);
+#endif
+}
+
+void SysMediaService::onShuffleChanged(bool shuffle)
+{
+    setShuffle(shuffle);
+}
+
+void SysMediaService::onRepeatModeChanged(RepeatMode mode)
+{
+    mpris::LoopStatus status = mpris::LoopStatus::None;
+    switch (mode)
+    {
+    case RepeatMode::None: status = mpris::LoopStatus::None; break;
+    case RepeatMode::Playlist: status = mpris::LoopStatus::Playlist; break;
+    case RepeatMode::Single: status = mpris::LoopStatus::Track; break;
+    }
+    setLoopStatus(status);
+}
+
+// ==========================================
+//  MPRIS 回调实现 (外部 -> 内部)
+// ==========================================
+
+#ifdef __linux__
+void SysMediaService::onMprisQuit()
 {
     spdlog::info("[SysMediaService] Quit signal received.");
-    // TODO:quit
+    // 可以在这里处理退出逻辑
 }
 
-void SysMediaService::onNext()
+void SysMediaService::onMprisNext()
 {
     spdlog::info("[SysMediaService] Next signal received.");
-    //  next
     controller.next();
 }
 
-void SysMediaService::onPrevious()
+void SysMediaService::onMprisPrevious()
 {
     spdlog::info("[SysMediaService] Previous signal received.");
-    //  previous
     controller.prev();
 }
 
-void SysMediaService::onPause()
+void SysMediaService::onMprisPause()
 {
     spdlog::info("[SysMediaService] Pause signal received.");
-    // pause
     controller.pause();
 }
 
-void SysMediaService::onPlayPause()
+void SysMediaService::onMprisPlayPause()
 {
     spdlog::info("[SysMediaService] PlayPause signal received.");
-    //  playPause
     controller.playpluse();
 }
 
-void SysMediaService::onStop()
+void SysMediaService::onMprisStop()
 {
     spdlog::info("[SysMediaService] Stop signal received.");
-    //  stop
     controller.stop();
 }
 
-void SysMediaService::onPlay()
+void SysMediaService::onMprisPlay()
 {
     spdlog::info("[SysMediaService] Play signal received.");
-    //  play
     controller.play();
     setPlayBackStatus(mpris::PlaybackStatus::Playing);
 }
 
-void SysMediaService::onLoopStatusChanged(mpris::LoopStatus status)
+void SysMediaService::onMprisLoopStatusChanged(mpris::LoopStatus status)
 {
     const char *statusStr =
         (status == mpris::LoopStatus::None)     ? "None" :
@@ -242,80 +346,52 @@ void SysMediaService::onLoopStatusChanged(mpris::LoopStatus status)
     }
 }
 
-void SysMediaService::onShuffleChanged(bool shuffle)
+void SysMediaService::onMprisShuffleChanged(bool shuffle)
 {
-    spdlog::info("[SysMediaService] ShuffleChanged signal received.,shuffle status:{}", shuffle);
+    spdlog::info("[SysMediaService] ShuffleChanged signal received. status:{}", shuffle);
     controller.setShuffle(shuffle);
 }
 
-void SysMediaService::onVolumeChanged(double volume)
+void SysMediaService::onMprisVolumeChanged(double volume)
 {
-    spdlog::info("[SysMediaService] VolumeChanged signal received.,volume status:{}", volume);
-    //  volumeChanged
+    spdlog::info("[SysMediaService] VolumeChanged signal received. volume:{}", volume);
     controller.setVolume(volume);
 }
 
-void SysMediaService::onSeek(std::chrono::microseconds offset)
+void SysMediaService::onMprisSeek(std::chrono::microseconds offset)
 {
-    spdlog::info("[SysMediaService] Seek signal received.,offset count:{}",offset.count());
-    //  seek
+    spdlog::info("[SysMediaService] Seek signal received. offset:{}", offset.count());
     int64_t currentPos = controller.getCurrentPosMicroseconds();
     int64_t duration = controller.getDurationMicroseconds();
 
     int64_t targetPos = currentPos + offset.count();
-    // 3. 边界处理 (Clamp)
+
     if (targetPos < 0)
-    {
         targetPos = 0;
-    }
     else if (targetPos > duration)
-    {
         targetPos = duration;
-        // 有些播放器策略是跳到下一首，但标准行为通常是停在末尾或跳到末尾
-    }
+
     controller.seek(targetPos);
-    server->set_position(targetPos);
+
+    // 立即更新服务端状态，增加响应感
+    if (server)
+        server->set_position(targetPos);
 }
 
-void SysMediaService::onSetPosition(std::chrono::microseconds pos)
+void SysMediaService::onMprisSetPosition(std::chrono::microseconds pos)
 {
-    spdlog::info("[SysMediaService] SetPosition signal received.,pos count:{}",pos.count());
-    // setPosition
+    spdlog::info("[SysMediaService] SetPosition signal received. pos:{}", pos.count());
     int64_t duration = controller.getDurationMicroseconds();
     int64_t position = pos.count();
+
     if (position < 0)
         position = 0;
     if (position > duration)
         position = duration;
 
-    // 直接跳转
     controller.seek(position);
-    server->set_position(position);
-}
 
-void SysMediaService::setShuffle(bool shuffle)
-{
     if (server)
-    {
-        server->set_shuffle(shuffle);
-    }
-}
-#endif
-
-#ifdef __WIN32__
-void SysMediaService::triggerSeeked(std::chrono::microseconds position)
-{
-}
-
-void SysMediaService::setPlayBackStatus(mpris::PlaybackStatus status)
-{
-}
-
-void SysMediaService::setShuffle(bool shuffle)
-{
-}
-void SysMediaService::setMetaData(const MetaData &metadata)
-{
-    // setMetaData(metadata.getTitle(), std::vector<std::string>({metadata.getArtist()}), metadata.getAlbum(), metadata.getCoverPath(), metadata.getDuration(), metadata.getFilePath());
+        server->set_position(position);
 }
 #endif
