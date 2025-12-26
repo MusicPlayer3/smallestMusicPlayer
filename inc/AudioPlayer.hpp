@@ -154,6 +154,7 @@ private:
     // 解码线程
     std::thread decodeThread;
     std::atomic<bool> quitFlag{false};
+    std::atomic<bool> isStopping{false};
 
     // 播放状态控制
     mutable std::mutex stateMutex;

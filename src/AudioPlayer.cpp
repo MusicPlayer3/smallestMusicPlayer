@@ -253,16 +253,22 @@ AudioPlayer::~AudioPlayer()
 {
     spdlog::info("AudioPlayer: Destructing...");
 
-    // 1. 设置退出标志并唤醒线程
     quitFlag.store(true);
-    pathCondVar.notify_one();
-    stateCondVar.notify_one();
+    pathCondVar.notify_all();
+    stateCondVar.notify_all();
+    if (decodeThread.joinable())
+    {
+        decodeThread.join();
+    }
 
-    // 2. 停止 Miniaudio 设备
     if (m_deviceInited)
     {
+        isStopping.store(true);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
         ma_device_stop(&m_device);
-        ma_device_uninit(&m_device); // 会等待回调结束
+        ma_device_uninit(&m_device);
         m_deviceInited = false;
     }
 
@@ -270,12 +276,6 @@ AudioPlayer::~AudioPlayer()
     {
         ma_context_uninit(&m_context);
         m_contextInited = false;
-    }
-
-    // 3. 等待解码线程结束
-    if (decodeThread.joinable())
-    {
-        decodeThread.join();
     }
 
     freeResources();
@@ -695,7 +695,13 @@ void AudioPlayer::ma_data_callback(ma_device *pDevice, void *pOutput, const void
         int bytesNeeded = totalBytesNeeded - bytesWritten;
         int copySize = std::min(frameRemaining, bytesNeeded);
 
-        if (copySize > 0)
+        if (player->isStopping.load())
+        {
+            // 填充静音数据
+            memset(pOutput, 0, frameCount * ma_get_bytes_per_frame(pDevice->playback.format, pDevice->playback.channels));
+            break;
+        }
+        else if (copySize > 0)
         {
             memcpy(outPtr + bytesWritten,
                    player->m_currentFrame->data.data() + player->m_currentFramePos,
