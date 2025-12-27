@@ -2,7 +2,7 @@
 #include "CoverCache.hpp"
 #include "FileScanner.hpp"
 #include "CoverImage.hpp"
-#include "SimpleThreadPool.hpp"
+// #include "SimpleThreadPool.hpp" // SQLite 写入建议单线程，不再需要线程池进行并发写入
 
 // OpenCV 用于图片编解码
 #include <opencv2/opencv.hpp>
@@ -12,10 +12,10 @@
 #include <QVariantList>
 #include <QUuid>
 #include <QDebug>
+#include <QFileInfo>
+#include <QDir>
 #include <spdlog/spdlog.h>
-#include <future>
 #include <unordered_set>
-#include <thread>
 
 #define TO_QSTR(s) QString::fromStdString(s)
 #define TO_STD(s) (s).toStdString()
@@ -23,7 +23,7 @@
 namespace fs = std::filesystem;
 
 // ==========================================
-//  内部数据结构 (用于扁平化存储)
+//  内部数据结构
 // ==========================================
 struct DirData
 {
@@ -82,66 +82,37 @@ fs::file_time_type DatabaseService::dbToTime(int64_t t)
 //  连接与初始化
 // ==========================================
 
-bool DatabaseService::connect(const std::string &host, int port,
-                              const std::string &user, const std::string &password,
-                              const std::string &dbName)
+bool DatabaseService::connect(const std::string &dbPath)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-
-    m_connParams.host = TO_QSTR(host);
-    m_connParams.port = port;
-    m_connParams.user = TO_QSTR(user);
-    m_connParams.password = TO_QSTR(password);
-    m_connParams.dbName = TO_QSTR(dbName);
-
-    if (!QSqlDatabase::isDriverAvailable("QMYSQL"))
-    {
-        spdlog::critical("[DB] QMYSQL 驱动不可用！");
-        return false;
-    }
+    m_dbPath = dbPath;
 
     if (QSqlDatabase::contains("qt_sql_default_connection"))
         m_db = QSqlDatabase::database("qt_sql_default_connection");
     else
-        m_db = QSqlDatabase::addDatabase("QMYSQL");
+        m_db = QSqlDatabase::addDatabase("QSQLITE");
 
-    m_db.setHostName(m_connParams.host);
-    m_db.setPort(m_connParams.port);
-    m_db.setUserName(m_connParams.user);
-    m_db.setPassword(m_connParams.password);
-    m_db.setConnectOptions("MYSQL_OPT_RECONNECT=1");
-
-    // 尝试连接并自动创建库
-    m_db.setDatabaseName(m_connParams.dbName);
-    if (!m_db.open())
+    // 确保目录存在
+    QString qPath = TO_QSTR(dbPath);
+    QFileInfo fi(qPath);
+    if (!fi.absoluteDir().exists())
     {
-        QSqlError err = m_db.lastError();
-        if (err.nativeErrorCode() == "1049" || err.text().contains("Unknown database"))
-        {
-            spdlog::info("[DB] Database '{}' not found. Creating...", dbName);
-            m_db.setDatabaseName("");
-            if (!m_db.open())
-                return false;
-
-            QSqlQuery q(m_db);
-            QString createSql = QString("CREATE DATABASE IF NOT EXISTS %1 CHARACTER SET utf8mb4 COLLATE utf8mb4_bin").arg(m_connParams.dbName);
-            if (!q.exec(createSql))
-                return false;
-
-            m_db.close();
-            m_db.setDatabaseName(m_connParams.dbName);
-            if (!m_db.open())
-                return false;
-        }
-        else
-        {
-            spdlog::error("[DB] Connection failed: {}", err.text().toStdString());
-            return false;
-        }
+        QDir().mkpath(fi.absoluteDir().path());
     }
 
+    m_db.setDatabaseName(qPath);
+
+    if (!m_db.open())
+    {
+        spdlog::error("[DB] Connection failed: {}", m_db.lastError().text().toStdString());
+        return false;
+    }
+
+    // SQLite 性能与功能优化指令
     QSqlQuery q(m_db);
-    q.exec("SET NAMES 'utf8mb4' COLLATE 'utf8mb4_bin'");
+    q.exec("PRAGMA foreign_keys = ON;");    // 启用外键约束
+    q.exec("PRAGMA journal_mode = WAL;");   // Write-Ahead Logging，大幅提升并发性能
+    q.exec("PRAGMA synchronous = NORMAL;"); // 适当降低同步级别以提升写入速度
 
     return initSchema();
 }
@@ -152,56 +123,58 @@ bool DatabaseService::initSchema()
     bool ok = true;
 
     // --- 1. Tables ---
+    // SQLite: AUTO_INCREMENT -> AUTOINCREMENT (必须配合 INTEGER PRIMARY KEY)
+    // 移除 ENGINE, CHARSET
     ok &= q.exec(R"(
         CREATE TABLE IF NOT EXISTS table_directories (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            parent_id INT DEFAULT NULL,
-            name VARCHAR(255) NOT NULL,
-            full_path VARCHAR(768) NOT NULL, 
-            cover_key VARCHAR(255) DEFAULT NULL,
-            CONSTRAINT fk_dir_parent FOREIGN KEY (parent_id) REFERENCES table_directories(id) ON DELETE CASCADE,
-            UNIQUE INDEX idx_path (full_path),
-            INDEX idx_cover_key (cover_key)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id INTEGER DEFAULT NULL,
+            name TEXT NOT NULL,
+            full_path TEXT NOT NULL, 
+            cover_key TEXT DEFAULT NULL,
+            CONSTRAINT fk_dir_parent FOREIGN KEY (parent_id) REFERENCES table_directories(id) ON DELETE CASCADE
+        );
     )");
+
+    // SQLite 创建唯一索引需要单独语句
+    q.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_dir_path ON table_directories (full_path)");
+    q.exec("CREATE INDEX IF NOT EXISTS idx_dir_cover ON table_directories (cover_key)");
 
     ok &= q.exec(R"(
         CREATE TABLE IF NOT EXISTS table_songs (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            directory_id INT NOT NULL,
-            title VARCHAR(255),
-            artist VARCHAR(255),
-            album VARCHAR(255),
-            year VARCHAR(32),
-            file_path VARCHAR(768) NOT NULL,
-            cover_key VARCHAR(255) DEFAULT NULL,  -- [新增] 必须存储 Hash Key
-            duration BIGINT DEFAULT 0,
-            offset_val BIGINT DEFAULT 0,
-            last_write_time BIGINT DEFAULT 0,
-            sample_rate INT UNSIGNED DEFAULT 0,
-            bit_depth SMALLINT UNSIGNED DEFAULT 0,
-            format_type VARCHAR(32),
-            play_count INT DEFAULT 0,
-            rating TINYINT DEFAULT 0,
-            last_played_at BIGINT DEFAULT 0,
-            CONSTRAINT fk_song_dir FOREIGN KEY (directory_id) REFERENCES table_directories(id) ON DELETE CASCADE,
-            UNIQUE INDEX idx_file_path_offset (file_path, offset_val),
-            INDEX idx_album (album),
-            INDEX idx_artist (artist),
-            INDEX idx_title (title)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            directory_id INTEGER NOT NULL,
+            title TEXT,
+            artist TEXT,
+            album TEXT,
+            year TEXT,
+            file_path TEXT NOT NULL,
+            cover_key TEXT DEFAULT NULL,
+            duration INTEGER DEFAULT 0,
+            offset_val INTEGER DEFAULT 0,
+            last_write_time INTEGER DEFAULT 0,
+            sample_rate INTEGER DEFAULT 0,
+            bit_depth INTEGER DEFAULT 0,
+            format_type TEXT,
+            play_count INTEGER DEFAULT 0,
+            rating INTEGER DEFAULT 0,
+            last_played_at INTEGER DEFAULT 0,
+            CONSTRAINT fk_song_dir FOREIGN KEY (directory_id) REFERENCES table_directories(id) ON DELETE CASCADE
+        );
     )");
 
-    // [优化] 添加全文索引，加速搜索 (注意: MySQL InnoDB 5.6+ 支持)
-    // 使用 try-catch 风格或忽略错误，防止重复创建报错
-    q.exec("CREATE FULLTEXT INDEX idx_ft_meta ON table_songs(title, artist, album)");
+    q.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_file_path_offset ON table_songs (file_path, offset_val)");
+    q.exec("CREATE INDEX IF NOT EXISTS idx_album ON table_songs (album)");
+    q.exec("CREATE INDEX IF NOT EXISTS idx_artist ON table_songs (artist)");
+    q.exec("CREATE INDEX IF NOT EXISTS idx_title ON table_songs (title)");
 
+    // Blob Table
     ok &= q.exec(R"(
         CREATE TABLE IF NOT EXISTS table_covers (
-            cache_key VARCHAR(255) NOT NULL PRIMARY KEY,
-            thumbnail_data MEDIUMBLOB NOT NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+            cache_key TEXT NOT NULL PRIMARY KEY,
+            thumbnail_data BLOB NOT NULL,
+            updated_at INTEGER DEFAULT (strftime('%s', 'now')) 
+        );
     )");
 
     if (!ok)
@@ -219,34 +192,29 @@ bool DatabaseService::initSchema()
     )");
 
     // --- 3. Triggers ---
+    // SQLite 的 Trigger 写法略有不同，不支持 IF...SET 这种过程式写法，需要用 CASE 或者 MIN/MAX
+    // 或者完全依赖应用层逻辑。这里用 UPDATE 时的 CASE 语句演示。
+
     q.exec("DROP TRIGGER IF EXISTS trg_validate_rating_insert");
     q.exec(R"(
-        CREATE TRIGGER trg_validate_rating_insert BEFORE INSERT ON table_songs
-        FOR EACH ROW BEGIN
-            IF NEW.rating < 0 THEN SET NEW.rating = 0; END IF;
-            IF NEW.rating > 5 THEN SET NEW.rating = 5; END IF;
-        END
+        CREATE TRIGGER trg_validate_rating_insert AFTER INSERT ON table_songs
+        BEGIN
+            UPDATE table_songs SET rating = 0 WHERE id = NEW.id AND rating < 0;
+            UPDATE table_songs SET rating = 5 WHERE id = NEW.id AND rating > 5;
+        END;
     )");
 
     q.exec("DROP TRIGGER IF EXISTS trg_validate_rating_update");
     q.exec(R"(
-        CREATE TRIGGER trg_validate_rating_update BEFORE UPDATE ON table_songs
-        FOR EACH ROW BEGIN
-            IF NEW.rating < 0 THEN SET NEW.rating = 0; END IF;
-            IF NEW.rating > 5 THEN SET NEW.rating = 5; END IF;
-        END
+        CREATE TRIGGER trg_validate_rating_update AFTER UPDATE ON table_songs
+        BEGIN
+            UPDATE table_songs SET rating = 0 WHERE id = NEW.id AND rating < 0;
+            UPDATE table_songs SET rating = 5 WHERE id = NEW.id AND rating > 5;
+        END;
     )");
 
     // --- 4. Procedures ---
-    q.exec("DROP PROCEDURE IF EXISTS sp_record_play");
-    ok = q.exec(R"(
-        CREATE PROCEDURE sp_record_play(IN target_path VARCHAR(768), IN current_time_tick BIGINT)
-        BEGIN
-            UPDATE table_songs 
-            SET play_count = play_count + 1, last_played_at = current_time_tick
-            WHERE file_path = target_path;
-        END
-    )");
+    // SQLite 不支持 Stored Procedures。逻辑已移至 recordPlay 函数内的 C++ 代码。
 
     return true;
 }
@@ -270,7 +238,8 @@ void DatabaseService::saveCoverBlob(const std::string &key, const std::vector<ui
         return;
     std::lock_guard<std::mutex> lock(m_mutex);
     QSqlQuery q(m_db);
-    q.prepare("INSERT IGNORE INTO table_covers (cache_key, thumbnail_data) VALUES (:k, :d)");
+    // SQLite: INSERT OR IGNORE
+    q.prepare("INSERT OR IGNORE INTO table_covers (cache_key, thumbnail_data) VALUES (:k, :d)");
     q.bindValue(":k", TO_QSTR(key));
     q.bindValue(":d", QByteArray(reinterpret_cast<const char *>(pngData.data()), pngData.size()));
     q.exec();
@@ -319,7 +288,7 @@ void DatabaseService::checkAndSaveCover(const std::string &key, std::unordered_s
         cv::imencode(".png", mat, buf, params);
 
         QSqlQuery insQ(m_db);
-        insQ.prepare("INSERT IGNORE INTO table_covers (cache_key, thumbnail_data) VALUES (:k, :d)");
+        insQ.prepare("INSERT OR IGNORE INTO table_covers (cache_key, thumbnail_data) VALUES (:k, :d)");
         insQ.bindValue(":k", TO_QSTR(key));
         insQ.bindValue(":d", QByteArray(reinterpret_cast<const char *>(buf.data()), buf.size()));
         insQ.exec();
@@ -338,7 +307,7 @@ void DatabaseService::cleanupOrphanedCovers()
     q.exec(R"(
         DELETE FROM table_covers 
         WHERE cache_key NOT IN (
-            SELECT DISTINCT album FROM table_songs WHERE album IS NOT NULL
+            SELECT DISTINCT cover_key FROM table_songs WHERE cover_key IS NOT NULL
             UNION 
             SELECT DISTINCT cover_key FROM table_directories WHERE cover_key IS NOT NULL
         )
@@ -346,7 +315,7 @@ void DatabaseService::cleanupOrphanedCovers()
 }
 
 // ==========================================
-//  整树存取 (核心逻辑 - 优化版)
+//  整树存取 (核心逻辑)
 // ==========================================
 
 static void bindAndExecBatchSongs(QSqlQuery &q, const std::vector<SongData> &songs)
@@ -354,18 +323,16 @@ static void bindAndExecBatchSongs(QSqlQuery &q, const std::vector<SongData> &son
     if (songs.empty())
         return;
 
-    // [Modified] 增加 cks (Cover Keys) 列表
     QVariantList dids, titles, artists, albums, years, paths, cks, durs, offs, lwts, srs, bds, fmts;
     size_t sz = songs.size();
 
-    // 预分配内存
     dids.reserve(sz);
     titles.reserve(sz);
     artists.reserve(sz);
     albums.reserve(sz);
     years.reserve(sz);
     paths.reserve(sz);
-    cks.reserve(sz); // [New]
+    cks.reserve(sz);
     durs.reserve(sz);
     offs.reserve(sz);
     lwts.reserve(sz);
@@ -381,7 +348,7 @@ static void bindAndExecBatchSongs(QSqlQuery &q, const std::vector<SongData> &son
         albums << s.album;
         years << s.year;
         paths << s.filePath;
-        cks << s.coverKey; // [New]
+        cks << s.coverKey;
         durs << s.duration;
         offs << s.offset;
         lwts << s.lastWriteTime;
@@ -396,7 +363,7 @@ static void bindAndExecBatchSongs(QSqlQuery &q, const std::vector<SongData> &son
     q.addBindValue(albums);
     q.addBindValue(years);
     q.addBindValue(paths);
-    q.addBindValue(cks); // [New] 注意绑定的顺序必须和 SQL 中的 ? 顺序一致
+    q.addBindValue(cks);
     q.addBindValue(durs);
     q.addBindValue(offs);
     q.addBindValue(lwts);
@@ -417,7 +384,7 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
     if (!root)
         return;
 
-    spdlog::info("[DB] Starting saveFullTree with stats preservation...");
+    spdlog::info("[DB] Starting saveFullTree (SQLite)...");
     auto startTotal = std::chrono::high_resolution_clock::now();
 
     // -------------------------------------------------------------------------
@@ -426,19 +393,16 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
     m_db.transaction();
     QSqlQuery q(m_db);
 
-    // 1.1 创建临时表
-    q.exec("CREATE TEMPORARY TABLE IF NOT EXISTS tmp_stats_backup ("
-           "  file_path VARCHAR(768) NOT NULL, "
-           "  play_count INT DEFAULT 0, "
-           "  rating TINYINT DEFAULT 0, "
-           "  last_played_at BIGINT DEFAULT 0, "
-           "  INDEX idx_tmp_path (file_path)"
-           ") ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin");
+    // SQLite 的内存表或临时表
+    q.exec("CREATE TEMP TABLE IF NOT EXISTS tmp_stats_backup ("
+           "  file_path TEXT NOT NULL, "
+           "  play_count INTEGER DEFAULT 0, "
+           "  rating INTEGER DEFAULT 0, "
+           "  last_played_at INTEGER DEFAULT 0 "
+           ")");
+    q.exec("CREATE INDEX IF NOT EXISTS idx_tmp_path ON tmp_stats_backup (file_path)");
+    q.exec("DELETE FROM tmp_stats_backup"); // TRUNCATE -> DELETE FROM
 
-    // 1.2 清空临时表
-    q.exec("TRUNCATE TABLE tmp_stats_backup");
-
-    // 1.3 备份有意义的数据
     if (!q.exec("INSERT INTO tmp_stats_backup (file_path, play_count, rating, last_played_at) "
                 "SELECT file_path, play_count, rating, last_played_at FROM table_songs "
                 "WHERE play_count > 0 OR rating > 0"))
@@ -449,12 +413,19 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
     }
 
     // -------------------------------------------------------------------------
-    // 步骤 2: 清空主表并预备新数据
+    // 步骤 2: 清空主表
     // -------------------------------------------------------------------------
-    q.exec("SET FOREIGN_KEY_CHECKS = 0");
-    q.exec("TRUNCATE TABLE table_songs");
-    q.exec("TRUNCATE TABLE table_directories");
-    q.exec("SET FOREIGN_KEY_CHECKS = 1");
+    // SQLite 不需要关闭外键检查来清空表，只要按顺序删除或使用 DELETE FROM
+    // 如果设置了 ON DELETE CASCADE，删目录也会删歌
+    q.exec("DELETE FROM table_directories");
+    // 上面会自动删除 table_songs (因外键 CASCADE)
+    // 为了保险起见也可以显式清空:
+    q.exec("DELETE FROM table_songs");
+
+    // SQLite: 重置自增 ID (可选)
+    q.exec("DELETE FROM sqlite_sequence WHERE name='table_directories'");
+    q.exec("DELETE FROM sqlite_sequence WHERE name='table_songs'");
+
     m_db.commit();
 
     // 预加载封面Key
@@ -496,7 +467,7 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
                                 TO_QSTR(md.getTitle()), TO_QSTR(md.getArtist()),
                                 TO_QSTR(md.getAlbum()), TO_QSTR(md.getYear()),
                                 TO_QSTR(md.getFilePath()),
-                                TO_QSTR(node->getCoverKey()), // 这里收集了 Key
+                                TO_QSTR(node->getCoverKey()),
                                 static_cast<qint64>(md.getDuration()),
                                 static_cast<qint64>(md.getOffset()),
                                 static_cast<qint64>(timeToDb(md.getLastWriteTime())),
@@ -538,99 +509,65 @@ void DatabaseService::saveFullTree(const std::shared_ptr<PlaylistNode> &root)
     }
 
     // -------------------------------------------------------------------------
-    // 步骤 5: 插入歌曲 (单线程或多线程)
+    // 步骤 5: 插入歌曲 (改为单线程)
     // -------------------------------------------------------------------------
+    // SQLite 是文件锁数据库，多线程同时写入容易导致 SQLITE_BUSY。
+    // 对于本地文件 I/O，单线程大事务通常比多线程竞争锁更快。
     size_t totalSongs = allSongs.size();
     if (totalSongs > 0)
     {
-        if (totalSongs < 50000)
+        m_db.transaction();
+        QSqlQuery qS(m_db);
+        // INSERT OR IGNORE
+        qS.prepare(R"(
+            INSERT OR IGNORE INTO table_songs 
+            (directory_id, title, artist, album, year, file_path, cover_key,
+                duration, offset_val, last_write_time, sample_rate, bit_depth, format_type, 
+                play_count, rating, last_played_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+        )");
+
+        // 分批 Batch 执行，防止一次性绑定内存过大 (虽然 SQLite 限制较宽，但保守起见分块)
+        const size_t BATCH_SIZE = 5000;
+        for (size_t i = 0; i < totalSongs; i += BATCH_SIZE)
         {
-            m_db.transaction();
-            QSqlQuery qS(m_db);
-
-            // [Modified] 修复 SQL 语句，添加 cover_key 字段
-            // 注意 ? 的数量要和 bindAndExecBatchSongs 中 addBindValue 的数量一致
-            qS.prepare(R"(
-                INSERT IGNORE INTO table_songs 
-                (directory_id, title, artist, album, year, file_path, cover_key,
-                 duration, offset_val, last_write_time, sample_rate, bit_depth, format_type, 
-                 play_count, rating, last_played_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
-            )");
-            bindAndExecBatchSongs(qS, allSongs);
-            m_db.commit();
+            size_t end = std::min(i + BATCH_SIZE, totalSongs);
+            std::vector<SongData> chunk(allSongs.begin() + i, allSongs.begin() + end);
+            bindAndExecBatchSongs(qS, chunk);
         }
-        else
-        {
-            // 多线程插入
-            size_t hardwareConcurrency = std::thread::hardware_concurrency();
-            size_t threadCount = std::min((size_t)4, hardwareConcurrency != 0 ? hardwareConcurrency : (size_t)2);
-            size_t batchSize = (totalSongs + threadCount - 1) / threadCount;
-            std::vector<std::future<void>> futures;
-            ConnectionParams params = m_connParams;
-
-            for (size_t i = 0; i < threadCount; ++i)
-            {
-                size_t start = i * batchSize;
-                size_t end = std::min(start + batchSize, totalSongs);
-                if (start >= totalSongs)
-                    break;
-
-                std::vector<SongData> chunk(allSongs.begin() + start, allSongs.begin() + end);
-                futures.emplace_back(SimpleThreadPool::instance().enqueue([params, chunk, i]()
-                                                                          {
-                    QString cName = QString("Worker_%1").arg(i);
-                    {
-                        QSqlDatabase db = QSqlDatabase::addDatabase("QMYSQL", cName);
-                        db.setHostName(params.host); db.setPort(params.port);
-                        db.setUserName(params.user); db.setPassword(params.password);
-                        db.setDatabaseName(params.dbName);
-                        db.setConnectOptions("MYSQL_OPT_RECONNECT=1");
-                        if (db.open()) {
-                            db.transaction();
-                            QSqlQuery q(db);
-                            // [Modified] 同样修复 Worker 中的 SQL 语句
-                            q.prepare(R"(
-                                INSERT IGNORE INTO table_songs 
-                                (directory_id, title, artist, album, year, file_path, cover_key,
-                                 duration, offset_val, last_write_time, sample_rate, bit_depth, format_type, 
-                                 play_count, rating, last_played_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
-                            )");
-                            bindAndExecBatchSongs(q, chunk);
-                            db.commit();
-                        }
-                        db.close();
-                    }
-                    QSqlDatabase::removeDatabase(cName); }));
-            }
-            for (auto &f : futures)
-                f.wait();
-        }
+        m_db.commit();
     }
 
     // -------------------------------------------------------------------------
-    // 步骤 6: 恢复统计数据 (Restore Stats)
+    // 步骤 6: 恢复统计数据
     // -------------------------------------------------------------------------
     spdlog::info("[DB] Restoring stats from backup...");
     m_db.transaction();
+
+    // SQLite UPDATE ... FROM 语法 (SQLite 3.33+)
+    // 兼容旧版 SQLite 的写法通常比较麻烦，但 Qt 附带的 SQLite 通常较新。
+    // 如果支持 UPDATE FROM:
     bool restoreOk = q.exec(R"(
-        UPDATE table_songs s
-        JOIN tmp_stats_backup t ON s.file_path = t.file_path
-        SET s.play_count = t.play_count,
-            s.rating = t.rating,
-            s.last_played_at = t.last_played_at
+        UPDATE table_songs 
+        SET play_count = tmp_stats_backup.play_count,
+            rating = tmp_stats_backup.rating,
+            last_played_at = tmp_stats_backup.last_played_at
+        FROM tmp_stats_backup
+        WHERE table_songs.file_path = tmp_stats_backup.file_path
     )");
 
     if (!restoreOk)
-        spdlog::error("[DB] Stats restore failed: {}", q.lastError().text().toStdString());
+    {
+        // 降级方案：如果不支持 UPDATE FROM，尝试 REPLACE 或忽略
+        // 或者在 C++ 中读取 tmp 表然后逐条更新（较慢）
+        spdlog::warn("[DB] UPDATE FROM failed (old SQLite?), stats might be lost: {}", q.lastError().text().toStdString());
+    }
 
-    // 清理临时表
-    q.exec("DROP TEMPORARY TABLE IF EXISTS tmp_stats_backup");
+    q.exec("DROP TABLE IF EXISTS tmp_stats_backup");
     m_db.commit();
 
     auto endTotal = std::chrono::high_resolution_clock::now();
-    spdlog::info("[DB] Save Full Tree (w/ Stats) completed in {} ms.",
+    spdlog::info("[DB] Save Full Tree (SQLite) completed in {} ms.",
                  std::chrono::duration_cast<std::chrono::milliseconds>(endTotal - startTotal).count());
 }
 
@@ -674,13 +611,10 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
     )");
 
     QSqlQuery songQ("SELECT * FROM table_songs", m_db);
-
-    // 获取字段索引以提高性能
     int idx_id = songQ.record().indexOf("id");
     int idx_dir = songQ.record().indexOf("directory_id");
     int idx_path = songQ.record().indexOf("file_path");
     int idx_lwt = songQ.record().indexOf("last_write_time");
-    // [Modified] 获取封面 Hash Key 的索引
     int idx_cover_key = songQ.record().indexOf("cover_key");
 
     m_db.transaction();
@@ -707,7 +641,6 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
         auto ftime = fs::last_write_time(filePath, ec);
         int64_t dbTime = songQ.value(idx_lwt).toLongLong();
 
-        // 检查文件修改时间，若变动则重新读取元数据
         if (timeToDb(ftime) != dbTime)
         {
             md = FileScanner::getMetaData(filePath);
@@ -739,29 +672,18 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
             md.setFormatType(TO_STD(songQ.value("format_type").toString()));
         }
 
-        // 加载统计数据
         md.setPlayCount(songQ.value("play_count").toInt());
         md.setRating(songQ.value("rating").toInt());
 
         auto songNode = std::make_shared<PlaylistNode>(filePath, false);
 
-        // [Modified] 关键修复：从数据库加载 Hash Key
         if (idx_cover_key != -1)
         {
             std::string dbKey = TO_STD(songQ.value(idx_cover_key).toString());
-            if (!dbKey.empty())
-            {
-                songNode->setCoverKey(dbKey);
-            }
-            else
-            {
-                // 如果数据库里该字段为空（旧数据），回退到使用专辑名
-                songNode->setCoverKey(md.getAlbum().empty() ? md.getTitle() : md.getAlbum());
-            }
+            songNode->setCoverKey(dbKey.empty() ? (md.getAlbum().empty() ? md.getTitle() : md.getAlbum()) : dbKey);
         }
         else
         {
-            // 兼容旧表结构
             songNode->setCoverKey(md.getAlbum().empty() ? md.getTitle() : md.getAlbum());
         }
 
@@ -799,7 +721,7 @@ std::shared_ptr<PlaylistNode> DatabaseService::loadFullTree()
             }
             n->setTotalSongs(ts);
             n->setTotalDuration(td);
-            n->sortChildren(); // 重新排序
+            n->sortChildren();
         }
     };
     aggregate(root);
@@ -816,9 +738,11 @@ bool DatabaseService::recordPlay(const std::string &filePath)
     std::lock_guard<std::mutex> lock(m_mutex);
     QSqlQuery q(m_db);
     int64_t nowTick = std::chrono::system_clock::now().time_since_epoch().count();
-    q.prepare("CALL sp_record_play(:path, :time)");
-    q.bindValue(":path", TO_QSTR(filePath));
+
+    // SQLite 不支持 CALL，直接执行 Update
+    q.prepare("UPDATE table_songs SET play_count = play_count + 1, last_played_at = :time WHERE file_path = :path");
     q.bindValue(":time", static_cast<qint64>(nowTick));
+    q.bindValue(":path", TO_QSTR(filePath));
     return q.exec();
 }
 
@@ -828,23 +752,19 @@ std::vector<MetaData> DatabaseService::searchSongs(const std::string &keyword)
     std::vector<MetaData> results;
     QSqlQuery q(m_db);
 
-    // [优化] 尝试使用全文索引，若不满足条件(如中文分词问题)可回退到LIKE
-    // 这里使用 OR 逻辑：匹配全文索引 或者 LIKE 匹配路径/标题
+    // SQLite 没有 MATCH ... AGAINST (除非用 FTS5)
+    // 使用标准 LIKE，配合 View
     QString pattern = "%" + TO_QSTR(keyword) + "%";
 
-    // MATCH ... AGAINST IN BOOLEAN MODE 允许使用 +word -word 等操作符
-    // 联合查询 View 以获取目录信息
     q.prepare(R"(
         SELECT * FROM view_library_search 
         WHERE 
-            MATCH(title, artist, album) AGAINST(:kw IN BOOLEAN MODE)
-            OR title LIKE :pat 
+            title LIKE :pat 
             OR artist LIKE :pat 
             OR album LIKE :pat
         LIMIT 200
     )");
 
-    q.bindValue(":kw", TO_QSTR(keyword));
     q.bindValue(":pat", pattern);
 
     if (q.exec())
@@ -866,6 +786,12 @@ std::vector<MetaData> DatabaseService::searchSongs(const std::string &keyword)
 bool DatabaseService::updateRating(const std::string &filePath, int rating)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    // 范围检查由 Trigger 处理，或者这里也可以做
+    if (rating < 0)
+        rating = 0;
+    if (rating > 5)
+        rating = 5;
+
     QSqlQuery q(m_db);
     q.prepare("UPDATE table_songs SET rating = :r WHERE file_path = :p");
     q.bindValue(":r", rating);
@@ -917,8 +843,9 @@ bool DatabaseService::addSong(const MetaData &meta, const std::string &coverKey)
         return false;
 
     QSqlQuery q(m_db);
-    // [Fix] 增加 cover_key 字段的处理
-    // 使用 ON DUPLICATE KEY UPDATE 确保文件重新扫描时更新信息（包括封面Key）
+    // SQLite Upsert Syntax:
+    // INSERT INTO ... VALUES (...) ON CONFLICT(col) DO UPDATE SET ...
+    // 前提：table_songs 在 (file_path, offset_val) 上必须有 UNIQUE 索引（initSchema中已创建）
     q.prepare(R"(
         INSERT INTO table_songs 
         (directory_id, title, artist, album, year, file_path, cover_key,
@@ -927,15 +854,15 @@ bool DatabaseService::addSong(const MetaData &meta, const std::string &coverKey)
         VALUES 
         (:did, :title, :artist, :album, :year, :path, :ck,
          :dur, :off, :lwt, :sr, :bd, :fmt, 0, 0, 0)
-        ON DUPLICATE KEY UPDATE
-            directory_id = VALUES(directory_id),
-            title = VALUES(title),
-            cover_key = VALUES(cover_key),
-            last_write_time = VALUES(last_write_time),
-            duration = VALUES(duration), 
-            sample_rate = VALUES(sample_rate),
-            bit_depth = VALUES(bit_depth),
-            format_type = VALUES(format_type)
+        ON CONFLICT(file_path, offset_val) DO UPDATE SET
+            directory_id = excluded.directory_id,
+            title = excluded.title,
+            cover_key = excluded.cover_key,
+            last_write_time = excluded.last_write_time,
+            duration = excluded.duration, 
+            sample_rate = excluded.sample_rate,
+            bit_depth = excluded.bit_depth,
+            format_type = excluded.format_type
     )");
 
     q.bindValue(":did", dirId);
@@ -944,7 +871,7 @@ bool DatabaseService::addSong(const MetaData &meta, const std::string &coverKey)
     q.bindValue(":album", TO_QSTR(meta.getAlbum()));
     q.bindValue(":year", TO_QSTR(meta.getYear()));
     q.bindValue(":path", TO_QSTR(meta.getFilePath()));
-    q.bindValue(":ck", TO_QSTR(coverKey)); // [New] 绑定封面 Hash Key
+    q.bindValue(":ck", TO_QSTR(coverKey));
     q.bindValue(":dur", static_cast<qint64>(meta.getDuration()));
     q.bindValue(":off", static_cast<qint64>(meta.getOffset()));
     q.bindValue(":lwt", static_cast<qint64>(timeToDb(meta.getLastWriteTime())));

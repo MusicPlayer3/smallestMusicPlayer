@@ -18,7 +18,7 @@
 
 /**
  * @class DatabaseService
- * @brief 数据库核心服务类 (单例模式)
+ * @brief 数据库核心服务类 (SQLite版)
  */
 class DatabaseService
 {
@@ -29,9 +29,8 @@ public:
     // 1. 连接与初始化
     // ==========================================
 
-    bool connect(const std::string &host, int port,
-                 const std::string &user, const std::string &password,
-                 const std::string &dbName);
+    // SQLite 中 host, port, user, password 可忽略，dbName 为文件路径
+    bool connect(const std::string &dbPath);
 
     bool isPopulated();
 
@@ -39,7 +38,6 @@ public:
     // 2. 核心：整树存取 (Tree Persistence)
     // ==========================================
 
-    // [优化] 采用了内存扁平化 + 批量插入 + 线程池并发写入
     void saveFullTree(const std::shared_ptr<PlaylistNode> &root);
 
     std::shared_ptr<PlaylistNode> loadFullTree();
@@ -52,7 +50,7 @@ public:
     void saveCoverBlob(const std::string &key, const std::vector<uint8_t> &pngData);
 
     // ==========================================
-    // 4. 业务功能 (CRUD & Advanced Features)
+    // 4. 业务功能
     // ==========================================
 
     bool recordPlay(const std::string &filePath);
@@ -77,22 +75,13 @@ private:
     QSqlDatabase m_db;
     std::mutex m_mutex;
 
-    // 保存连接参数，供多线程 Worker 使用
-    struct ConnectionParams
-    {
-        QString host;
-        int port;
-        QString user;
-        QString password;
-        QString dbName;
-    } m_connParams;
+    std::string m_dbPath; // 保存数据库文件路径
 
     // --- 内部辅助函数 ---
 
     bool initSchema();
     int getDirectoryId(const std::string &fullPath);
 
-    // 检查并保存封面 (优化版：可传入已存在集合)
     void checkAndSaveCover(const std::string &key, std::unordered_set<std::string> *existingKeys = nullptr);
 
     void cleanupOrphanedCovers();

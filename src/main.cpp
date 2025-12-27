@@ -310,7 +310,7 @@ int main(int argc, char *argv[])
         QCoreApplication app(argc, argv); // 无 GUI 上下文
         app.setOrganizationName("MusicPlayer3");
         app.setApplicationName("MusicPlayer");
-        DatabaseService::instance().connect("localhost", 3306, "root", "123456", "MusicPlayerDB");
+        DatabaseService::instance().connect("./MusicPlayerDB.db");
         runTerminalMode(app, rootDir);
 
         // 清理 spdlog
@@ -335,7 +335,7 @@ int main(int argc, char *argv[])
 
         spdlog::info("Initializing MediaController (GUI Mode)...");
         MediaController::init();
-        DatabaseService::instance().connect("localhost", 3306, "root", "123456", "MusicPlayerDB");
+        DatabaseService::instance().connect("./MusicPlayerDB.db");
 
         // 1. 使用智能指针管理 UIController 和 MusicListModel
         // [关键] MusicListModel 的 parent 设为 nullptr，不要让 app 自动管理它
