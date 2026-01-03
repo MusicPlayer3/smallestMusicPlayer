@@ -2,6 +2,10 @@
 #define AUDIOPLAYER_HPP
 
 #include "PCH.h"
+#include "AudioFilterChain.hpp" // 引入滤镜链头文件
+
+
+// --- 其他定义 ---
 
 // 输出模式：直接输出或混合输出
 enum class OutputMode : std::uint8_t
@@ -19,20 +23,12 @@ enum class PlayerState : std::uint8_t
     Seeking,
 };
 
-// 音频参数：用于配置重采样器或设备
-struct AudioParams
-{
-    int sampleRate = 96000;
-    AVSampleFormat sampleFormat = AV_SAMPLE_FMT_S32;
-    AVChannelLayout ch_layout = AV_CHANNEL_LAYOUT_STEREO; // 默认立体声
-    int channels = 2;
-};
-
 // 音频帧：解码后的 PCM 数据单元
 struct AudioFrame
 {
     std::vector<uint8_t> data; // PCM 数据
     int64_t pts = 0;           // 呈现时间戳 (微秒)
+    std::string sourcePath;    // 该帧所属的音频文件路径 (用于精确同步)
 };
 
 // 波形数据结构 (用于内部计算)
@@ -128,7 +124,7 @@ private:
     {
         AVFormatContext *pFormatCtx = nullptr;
         AVCodecContext *pCodecCtx = nullptr;
-        SwrContext *swrCtx = nullptr;
+        // 注意：SwrContext 已移除，由 AudioFilterChain 接管
         int audioStreamIndex = -1;
         std::string path;
 
@@ -140,7 +136,6 @@ private:
 
         void free();
         bool initDecoder(const std::string &inputPath);
-        bool openSwrContext(const AudioParams &deviceParams);
     };
 
     // --- 成员变量 ---
@@ -161,7 +156,9 @@ private:
     std::condition_variable stateCondVar;
     std::atomic<OutputMode> outputMode{OutputMode::Mixing};
     PlayerState playingState{PlayerState::Stopped};
-    PlayerState oldPlayingState{PlayerState::Stopped}; // 用于 Seek 后恢复状态
+    PlayerState oldPlayingState{PlayerState::Stopped};        // 用于 Seek 后恢复状态
+    std::atomic<bool> m_endOfStreamReached{false};            // 解码器是否已读到文件末尾
+    std::atomic<bool> m_playbackFinishedCallbackFired{false}; // 是否已触发 onFileComplete 回调
 
     std::atomic<int64_t> seekTarget{0};
     bool isFirstPlay = true;
@@ -171,6 +168,9 @@ private:
     std::atomic<bool> hasPreloaded{false};
     std::unique_ptr<AudioStreamSource> m_currentSource;
     std::unique_ptr<AudioStreamSource> m_preloadSource;
+
+    // 音频滤镜链 (替代原 SwrContext)
+    std::unique_ptr<AudioFilterChain> m_filterChain;
 
     // 解码保护锁 (防止解码过程中重置上下文)
     std::mutex decodeMutex;
@@ -193,6 +193,7 @@ private:
     std::atomic<int64_t> nowPlayingTime{0}; // 微秒
     std::atomic<int64_t> audioDuration{0};  // 微秒
     std::atomic<double> volume{1.0};
+    std::string lastReportedPath; // 记录上一次报告给回调的路径，用于检测变更
 
     // 参数配置
     AudioParams mixingParams;
@@ -227,11 +228,18 @@ private:
 
     // 解码核心
     void decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActive, bool &playbackFinishedNaturally);
+
+    // 处理从解码器出来的帧，送入滤镜链
     bool processFrame(AVFrame *frame);
+    // 从滤镜链取出处理好的帧并放入播放队列
+    bool pullProcessedFramesFromGraph();
+
     void triggerPreload(double currentPts);
     void calculateQueueSize(int out_bytes_per_sample);
     bool performSeamlessSwitch();
-    void applyFadeOutToLastFrame();
+
+    // 淡出功能建议由滤镜链的 volume 滤镜实现，或者保留现状
+    // void applyFadeOutToLastFrame();
 
     // Miniaudio 数据回调 (静态)
     static void ma_data_callback(ma_device *pDevice, void *pOutput, const void *pInput, ma_uint32 frameCount);

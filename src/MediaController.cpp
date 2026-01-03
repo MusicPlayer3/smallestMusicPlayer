@@ -150,7 +150,6 @@ void MediaController::handlePlayerStateChange(PlayerState state)
     }
 }
 
-// 新增：处理 AudioPlayer 进度 (替代 monitorLoop 中的 CUE 检测)
 void MediaController::handlePlayerPosition(int64_t currentAbsMicroseconds)
 {
     PlaylistNode *curr = currentPlayingSongs;
@@ -160,20 +159,30 @@ void MediaController::handlePlayerPosition(int64_t currentAbsMicroseconds)
         int64_t startOffset = curr->getMetaData().getOffset();
         int64_t duration = curr->getMetaData().getDuration();
 
+        // 检查是否为需要手动切歌的 CUE 轨道
         if (duration > 0)
         {
             int64_t expectedEndTime = startOffset + duration;
-            // 容忍 500ms
             if (currentAbsMicroseconds >= expectedEndTime)
             {
-                std::thread([this]()
-                            { this->next(); })
-                    .detach();
-                return;
+                // 【修复】增加一个关键判断：
+                // 仅当下一首歌曲与当前歌曲在同一个物理文件时，
+                // 才认为这是一个 CUE 分轨切换，由本函数处理。
+                // 否则，这是一个正常的歌曲末尾，应交由 onFileComplete 处理。
+                PlaylistNode *nextNode = calculateNextNode(curr);
+                if (nextNode && nextNode->getPath() == curr->getPath())
+                {
+                    // 确认是 CUE 分轨切换，执行 next
+                    std::thread([this]()
+                                { this->next(); })
+                        .detach();
+                    return; // 处理完毕，直接返回
+                }
             }
         }
     }
 
+    // 更新相对位置用于UI显示
     int64_t relPos = 0;
     if (curr)
         relPos = std::max((int64_t)0, currentAbsMicroseconds - curr->getMetaData().getOffset());
@@ -341,29 +350,24 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch, bool force
     std::string oldPath = player->getCurrentPath();
     std::string newPath = node->getPath();
 
-    // --- 核心状态逻辑修改 ---
     bool shouldPlay = false;
-
     if (forcePause)
     {
-        // 情况 A: 强制暂停 (如：启动APP加载第一首歌)
         shouldPlay = false;
     }
     else if (!isAutoSwitch)
     {
-        // 情况 B: 手动切歌 (如：点击列表、点击下一首) -> 总是播放
-        // 哪怕之前是暂停的，用户手动切歌通常期望立即听到声音
         shouldPlay = true;
     }
     else
     {
-        // 情况 C: 自动切歌 (如：当前歌曲播完) -> 继承当前状态
-        // 如果当前是播放的，切歌后继续播；如果是暂停的(不太可能发生)，保持暂停
         shouldPlay = isPlaying.load();
     }
     // ----------------------
 
     currentPlayingSongs = node;
+
+    isPlaying.store(shouldPlay);
 
     // 2. 切换逻辑
     if (oldPath != newPath)
@@ -383,7 +387,6 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch, bool force
     else
     {
         // 物理文件相同 (CUE 分轨)
-        // 如果需要播放且当前未播放，则 Play；反之则 Pause
         if (shouldPlay && !player->isPlaying())
         {
             player->play();
@@ -415,15 +418,23 @@ void MediaController::playNode(PlaylistNode *node, bool isAutoSwitch, bool force
 
     preloadNextSong();
 
-    // 4. 如果决定播放，且底层还未动起来 (针对物理文件切换的情况)
-    if (shouldPlay && !player->isPlaying())
+    // 4. 【核心修复】根据最新的 isPlaying 状态决定最终动作
+    // 检查 isPlaying 标志，这是反映用户最新指令的真相。
+    if (isPlaying.load())
     {
-        player->play();
+        // 如果最终意图是播放，且播放器当前没有在播放，则启动它。
+        if (!player->isPlaying())
+        {
+            player->play();
+        }
     }
-    // 如果决定暂停，且底层还在动 (防止意外)
-    else if (!shouldPlay && player->isPlaying())
+    else
     {
-        player->pause();
+        // 如果最终意图是暂停，且播放器当前正在播放，则停止它。
+        if (player->isPlaying())
+        {
+            player->pause();
+        }
     }
 }
 
@@ -759,18 +770,32 @@ int64_t MediaController::getCurrentPosMicroseconds()
 {
     if (!player)
         return 0;
+
     int64_t absPos = player->getCurrentPositionMicroseconds();
     int64_t offset = 0;
+    int64_t duration = 0;
 
-    // 短暂加锁读取 offset
+    // 短暂加锁以原子地读取 offset 和 duration
     {
         std::lock_guard<std::recursive_mutex> lock(controllerMutex);
         if (currentPlayingSongs)
         {
             offset = currentPlayingSongs->getMetaData().getOffset();
+            duration = currentPlayingSongs->getMetaData().getDuration();
         }
     }
-    return std::max((int64_t)0, absPos - offset);
+
+    int64_t relPos = std::max((int64_t)0, absPos - offset);
+
+    // 【核心修复】
+    // 确保返回的相对位置永远不会超过当前歌曲的已知总时长。
+    // 这可以防止因元数据与实际流时长不符而导致的UI跳变。
+    if (duration > 0)
+    {
+        return std::min(relPos, duration);
+    }
+
+    return relPos;
 }
 
 int64_t MediaController::getDurationMicroseconds()
@@ -870,10 +895,9 @@ void MediaController::setMixingParameters(int sampleRate, AVSampleFormat smapleF
     if (!player)
         return;
     AudioParams params;
-    params.sampleRate = sampleRate;
-    params.sampleFormat = smapleFormat;
+    params.sample_rate = sampleRate;
+    params.fmt = smapleFormat;
     params.ch_layout = AV_CHANNEL_LAYOUT_STEREO;
-    params.channels = 2;
     player->setMixingParameters(params);
 }
 

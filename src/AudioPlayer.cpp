@@ -7,7 +7,6 @@
 #include <deque>
 
 // --- RAII Wrappers for FFmpeg ---
-// 使用智能指针自动管理 FFmpeg 对象的生命周期，防止内存泄漏
 
 struct AVPacketDeleter
 {
@@ -17,11 +16,6 @@ struct AVPacketDeleter
     }
 };
 using AVPacketPtr = std::unique_ptr<AVPacket, AVPacketDeleter>;
-
-// 【修复 Build 错误】
-// 线程池使用 std::bind 时可能会发生参数拷贝。
-// std::unique_ptr 不可拷贝，导致 vector<unique_ptr> 拷贝失败。
-// 对于需要传入线程池的批处理任务，使用 shared_ptr 替代 unique_ptr。
 using AVPacketSharedPtr = std::shared_ptr<AVPacket>;
 
 struct AVFrameDeleter
@@ -65,11 +59,11 @@ static std::string my_av_strerror(int errnum)
 namespace
 {
 constexpr double PRELOAD_TRIGGER_SECONDS_BEFORE_END = 10.0;
-constexpr double AUDIO_BUFFER_DURATION_SECONDS = 0.4; // 400ms 缓冲
+constexpr double AUDIO_BUFFER_DURATION_SECONDS = 0.4;
 constexpr int MIN_AUDIO_QUEUE_SIZE = 4;
 } // namespace
 
-// 格式转换工具
+// 格式转换工具 (Miniaudio <-> FFmpeg)
 static ma_format toMaFormat(AVSampleFormat ffmpegFormat)
 {
     switch (ffmpegFormat)
@@ -82,7 +76,7 @@ static ma_format toMaFormat(AVSampleFormat ffmpegFormat)
     case AV_SAMPLE_FMT_S32P: return ma_format_s32;
     case AV_SAMPLE_FMT_FLT:
     case AV_SAMPLE_FMT_FLTP: return ma_format_f32;
-    default: return ma_format_f32; // 默认 float
+    default: return ma_format_f32;
     }
 }
 
@@ -98,22 +92,10 @@ static AVSampleFormat toAVSampleFormat(ma_format maFormat)
     }
 }
 
-static AVChannelLayout toAVChannelLayout(const uint8_t &channels)
-{
-    AVChannelLayout layout;
-    av_channel_layout_default(&layout, channels);
-    return layout;
-}
-
 // --- AudioStreamSource Implementation ---
 
 void AudioPlayer::AudioStreamSource::free()
 {
-    if (swrCtx)
-    {
-        swr_free(&swrCtx);
-        swrCtx = nullptr;
-    }
     if (pCodecCtx)
     {
         avcodec_free_context(&pCodecCtx);
@@ -167,46 +149,11 @@ bool AudioPlayer::AudioStreamSource::initDecoder(const std::string &inputPath)
         return false;
     }
 
-    // 启用多线程解码 (如果支持)
-    pCodecCtx->thread_count = 0; // 0 表示自动检测
+    pCodecCtx->thread_count = 0;
 
     if (avcodec_open2(pCodecCtx, pCodec, nullptr) < 0)
     {
         free();
-        return false;
-    }
-    return true;
-}
-
-bool AudioPlayer::AudioStreamSource::openSwrContext(const AudioParams &deviceParams)
-{
-    if (!pCodecCtx)
-        return false;
-
-    if (swrCtx)
-    {
-        swr_free(&swrCtx);
-        swrCtx = nullptr;
-    }
-
-    // FFmpeg 新版 API 推荐使用 av_opt_set 配合 swr_alloc
-    swrCtx = swr_alloc();
-    if (!swrCtx)
-        return false;
-
-    av_opt_set_chlayout(swrCtx, "in_chlayout", &(pCodecCtx->ch_layout), 0);
-    av_opt_set_int(swrCtx, "in_sample_rate", pCodecCtx->sample_rate, 0);
-    av_opt_set_sample_fmt(swrCtx, "in_sample_fmt", pCodecCtx->sample_fmt, 0);
-
-    av_opt_set_chlayout(swrCtx, "out_chlayout", &(deviceParams.ch_layout), 0);
-    av_opt_set_int(swrCtx, "out_sample_rate", deviceParams.sampleRate, 0);
-    av_opt_set_sample_fmt(swrCtx, "out_sample_fmt", deviceParams.sampleFormat, 0);
-
-    int ret = swr_init(swrCtx);
-    if (ret < 0)
-    {
-        spdlog::error("swr_init failed: {}", my_av_strerror(ret));
-        swr_free(&swrCtx);
         return false;
     }
     return true;
@@ -245,7 +192,12 @@ std::string AudioPlayer::getCurrentStreamTitle() const
 AudioPlayer::AudioPlayer()
 {
     av_channel_layout_default(&mixingParams.ch_layout, 2);
-    // 启动后台解码线程
+    mixingParams.sample_rate = 96000;
+    mixingParams.fmt = AV_SAMPLE_FMT_S32;
+    // 混合器输出通常假设以 1/sample_rate 为时间基，但实际会被 deviceParams 覆盖
+    mixingParams.time_base = {1, 96000};
+
+    m_filterChain = std::make_unique<AudioFilterChain>();
     decodeThread = std::thread(&AudioPlayer::mainDecodeThread, this);
 }
 
@@ -264,9 +216,7 @@ AudioPlayer::~AudioPlayer()
     if (m_deviceInited)
     {
         isStopping.store(true);
-
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
         ma_device_stop(&m_device);
         ma_device_uninit(&m_device);
         m_deviceInited = false;
@@ -289,7 +239,6 @@ void AudioPlayer::setCallbacks(const PlayerCallbacks &callbacks)
 
 void AudioPlayer::freeResources()
 {
-    // 如果不是 Mixing 模式，清理设备
     if (outputMode.load() != OutputMode::Mixing)
     {
         closeAudioDevice();
@@ -307,22 +256,23 @@ void AudioPlayer::freeResources()
 void AudioPlayer::flushQueue()
 {
     std::lock_guard<std::mutex> lock(audioFrameQueueMutex);
-    // 使用 swap 清空队列，释放 shared_ptr 引用
     std::queue<std::shared_ptr<AudioFrame>> empty;
     std::swap(audioFrameQueue, empty);
 
     m_currentFrame.reset();
     m_currentFramePos = 0;
+
+    if (m_filterChain)
+    {
+        m_filterChain->flush();
+    }
 }
 
 bool AudioPlayer::isValidAudio(const std::string &path)
 {
-    // 简单快速检查，不解码
     AVFormatContext *fmt = nullptr;
     if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) != 0)
         return false;
-
-    // 查找音频流
     bool found = (avformat_find_stream_info(fmt, nullptr) >= 0 && av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0) >= 0);
     avformat_close_input(&fmt);
     return found;
@@ -336,6 +286,14 @@ bool AudioPlayer::setPath(const std::string &path)
         return false;
     }
 
+    // 停止设备，防止回调读取脏数据
+    if (m_deviceInited)
+    {
+        ma_device_stop(&m_device);
+    }
+
+    flushQueue();
+
     {
         std::lock_guard<std::mutex> lock(pathMutex);
         currentPath = path;
@@ -343,9 +301,13 @@ bool AudioPlayer::setPath(const std::string &path)
         hasPreloaded = false;
         m_preloadSource.reset();
         m_decoderCursor.store(0);
+        nowPlayingTime.store(0);
+
+        m_endOfStreamReached.store(false);
+        m_playbackFinishedCallbackFired.store(false);
+        lastReportedPath = path;
     }
 
-    // 更新状态
     {
         std::lock_guard<std::mutex> lock(stateMutex);
         if (playingState != PlayerState::Stopped && playingState != PlayerState::Seeking)
@@ -358,7 +320,6 @@ bool AudioPlayer::setPath(const std::string &path)
         }
         playingState = PlayerState::Stopped;
 
-        // [Callback]
         if (m_callbacks.onStateChanged)
         {
             m_callbacks.onStateChanged(PlayerState::Stopped);
@@ -379,7 +340,6 @@ void AudioPlayer::setPreloadPath(const std::string &path)
     if (path != preloadPath)
     {
         preloadPath = path;
-        // 只有在 Mixing 模式下，我们才能无缝切换并重用输出格式
         if (outputMode.load() == OutputMode::Mixing)
         {
             hasPreloaded = false;
@@ -401,7 +361,6 @@ void AudioPlayer::play()
         }
         stateCondVar.notify_one();
 
-        // [Callback]
         if (m_callbacks.onStateChanged)
         {
             m_callbacks.onStateChanged(PlayerState::Playing);
@@ -421,7 +380,6 @@ void AudioPlayer::pause()
         }
         stateCondVar.notify_one();
 
-        // [Callback]
         if (m_callbacks.onStateChanged)
         {
             m_callbacks.onStateChanged(PlayerState::Paused);
@@ -440,12 +398,10 @@ void AudioPlayer::seek(int64_t timeMicroseconds)
     }
     playingState = PlayerState::Seeking;
 
-    // 暂停设备防止爆音或数据错乱
     if (m_deviceInited)
     {
         ma_device_stop(&m_device);
     }
-    // 唤醒解码线程处理 Seek
     stateCondVar.notify_one();
 }
 
@@ -464,7 +420,7 @@ void AudioPlayer::setMixingParameters(const AudioParams &params)
         return;
 
     std::lock_guard<std::mutex> stateLock(stateMutex);
-    std::lock_guard<std::mutex> decodeLock(decodeMutex); // 暂停解码活动
+    std::lock_guard<std::mutex> decodeLock(decodeMutex);
 
     bool wasPlaying = (playingState == PlayerState::Playing);
 
@@ -474,16 +430,10 @@ void AudioPlayer::setMixingParameters(const AudioParams &params)
     flushQueue();
     mixingParams = params;
 
-    // 重建音频设备
     closeAudioDevice();
     if (openAudioDevice())
     {
-        if (m_currentSource)
-        {
-            // 更新 Resampler
-            m_currentSource->openSwrContext(deviceParams);
-        }
-        m_preloadSource.reset(); // 清除预加载，因为格式已变
+        m_preloadSource.reset();
         hasPreloaded.store(false);
 
         if (wasPlaying && m_deviceInited)
@@ -509,16 +459,10 @@ void AudioPlayer::setOutputMode(OutputMode mode)
     outputMode.store(mode);
     closeAudioDevice();
 
-    // 尝试重新打开设备
-    // Direct: 只有有源时才打开; Mixing: 立即打开
     bool tryOpen = (mode == OutputMode::Mixing) || (m_currentSource != nullptr);
 
     if (tryOpen && openAudioDevice())
     {
-        if (m_currentSource)
-        {
-            m_currentSource->openSwrContext(deviceParams);
-        }
         m_preloadSource.reset();
         hasPreloaded.store(false);
 
@@ -547,7 +491,6 @@ void AudioPlayer::closeAudioDevice()
         ma_device_uninit(&m_device);
         m_deviceInited = false;
     }
-    // Context 保留以便重用，析构时清理
 }
 
 bool AudioPlayer::openAudioDevice()
@@ -559,9 +502,9 @@ bool AudioPlayer::openAudioDevice()
 
     if (outputMode.load() == OutputMode::Mixing)
     {
-        targetFormat = toMaFormat(mixingParams.sampleFormat);
-        targetChannels = mixingParams.channels;
-        targetSampleRate = mixingParams.sampleRate;
+        targetFormat = toMaFormat(mixingParams.fmt);
+        targetChannels = mixingParams.ch_layout.nb_channels;
+        targetSampleRate = mixingParams.sample_rate;
         targetAppName = "AppMusicPlayer";
     }
     else // Direct Mode
@@ -575,7 +518,6 @@ bool AudioPlayer::openAudioDevice()
         targetAppName = getCurrentStreamTitle();
     }
 
-    // 检查是否无需重建
     if (m_deviceInited)
     {
         if (outputMode.load() == OutputMode::Mixing && m_device.playback.format == targetFormat && m_device.playback.channels == targetChannels && m_device.sampleRate == targetSampleRate)
@@ -585,7 +527,6 @@ bool AudioPlayer::openAudioDevice()
         closeAudioDevice();
     }
 
-    // 重建 Context 以更新 AppName (针对 PulseAudio 等)
     if (m_contextInited)
     {
         ma_context_uninit(&m_context);
@@ -617,10 +558,9 @@ bool AudioPlayer::openAudioDevice()
     }
 
     m_deviceInited = true;
-    deviceParams.sampleRate = m_device.sampleRate;
-    deviceParams.sampleFormat = toAVSampleFormat(m_device.playback.format);
-    deviceParams.ch_layout = toAVChannelLayout(m_device.playback.channels);
-    deviceParams.channels = m_device.playback.channels;
+    deviceParams.sample_rate = m_device.sampleRate;
+    deviceParams.fmt = toAVSampleFormat(m_device.playback.format);
+    av_channel_layout_default(&deviceParams.ch_layout, m_device.playback.channels);
 
     ma_device_set_master_volume(&m_device, (float)volume.load());
     return true;
@@ -633,14 +573,13 @@ void AudioPlayer::ma_data_callback(ma_device *pDevice, void *pOutput, const void
     if (!player)
         return;
 
-    int bytesPerSample = av_get_bytes_per_sample(player->deviceParams.sampleFormat);
-    int channels = player->deviceParams.channels;
+    int bytesPerSample = av_get_bytes_per_sample(player->deviceParams.fmt);
+    int channels = player->deviceParams.ch_layout.nb_channels;
     int totalBytesNeeded = frameCount * channels * bytesPerSample;
 
     uint8_t *outPtr = static_cast<uint8_t *>(pOutput);
     int bytesWritten = 0;
 
-    // 关键区域：持有锁直到数据填充完毕
     std::lock_guard<std::mutex> lock(player->audioFrameQueueMutex);
 
     while (bytesWritten < totalBytesNeeded)
@@ -649,17 +588,34 @@ void AudioPlayer::ma_data_callback(ma_device *pDevice, void *pOutput, const void
         {
             if (player->audioFrameQueue.empty())
             {
-                player->stateCondVar.notify_one(); // 通知解码线程产粮
-                break;                             // 队列空，填充静音
+                // 队列已空，检查是否播放完毕
+                if (player->m_endOfStreamReached.load() && !player->m_playbackFinishedCallbackFired.load())
+                {
+                    player->m_playbackFinishedCallbackFired.store(true);
+                    if (player->m_callbacks.onFileComplete)
+                    {
+                        player->m_callbacks.onFileComplete();
+                    }
+                }
+                player->stateCondVar.notify_one();
+                break;
             }
 
             player->m_currentFrame = player->audioFrameQueue.front();
             player->audioFrameQueue.pop();
             player->m_currentFramePos = 0;
 
-            if (player->m_currentFrame)
+            // 检测路径变更
+            if (player->m_currentFrame && !player->m_currentFrame->sourcePath.empty())
             {
-                player->nowPlayingTime.store(player->m_currentFrame->pts);
+                if (player->m_currentFrame->sourcePath != player->lastReportedPath)
+                {
+                    player->lastReportedPath = player->m_currentFrame->sourcePath;
+                    if (player->m_callbacks.onPathChanged)
+                    {
+                        player->m_callbacks.onPathChanged(player->lastReportedPath);
+                    }
+                }
             }
             player->stateCondVar.notify_one();
         }
@@ -667,24 +623,21 @@ void AudioPlayer::ma_data_callback(ma_device *pDevice, void *pOutput, const void
         if (!player->m_currentFrame)
             break;
 
-        // 计算当前更精确的时间戳 (插值)
-        if (player->deviceParams.sampleRate > 0)
+        // 计算时间戳
+        if (player->deviceParams.sample_rate > 0)
         {
             int64_t bytesPlayed = player->m_currentFramePos;
-            int64_t offsetUS = (bytesPlayed * 1000000) / (channels * bytesPerSample * player->deviceParams.sampleRate);
+            int64_t offsetUS = (bytesPlayed * 1000000) / (channels * bytesPerSample * player->deviceParams.sample_rate);
             int64_t currentUS = player->m_currentFrame->pts + offsetUS;
             player->nowPlayingTime.store(currentUS);
 
-            // [Callback] 限频触发
-            int64_t now = std::chrono::steady_clock::now().time_since_epoch().count(); // 纳秒
+            int64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
             int64_t last = player->lastCallbackTime.load(std::memory_order_relaxed);
-            // 100ms = 100,000,000 ns
-            if (now - last > 100000000)
+            if (now - last > 100000000) // 100ms
             {
                 player->lastCallbackTime.store(now, std::memory_order_relaxed);
                 if (player->m_callbacks.onPositionChanged)
                 {
-                    // 注意：这里是在音频线程，回调必须非常快且线程安全
                     player->m_callbacks.onPositionChanged(currentUS);
                 }
             }
@@ -697,7 +650,6 @@ void AudioPlayer::ma_data_callback(ma_device *pDevice, void *pOutput, const void
 
         if (player->isStopping.load())
         {
-            // 填充静音数据
             memset(pOutput, 0, frameCount * ma_get_bytes_per_frame(pDevice->playback.format, pDevice->playback.channels));
             break;
         }
@@ -726,7 +678,6 @@ void AudioPlayer::ma_data_callback(ma_device *pDevice, void *pOutput, const void
 
 void AudioPlayer::mainDecodeThread()
 {
-    // RAII Packet
     AVPacketPtr packet = make_av_packet();
 
     while (!quitFlag.load())
@@ -743,7 +694,6 @@ void AudioPlayer::mainDecodeThread()
 
         if (setupDecodingSession(path))
         {
-            // 恢复播放状态
             {
                 std::lock_guard<std::mutex> lock(stateMutex);
                 if (playingState == PlayerState::Stopped)
@@ -767,7 +717,7 @@ void AudioPlayer::mainDecodeThread()
             {
                 if (!waitForDecodeState())
                 {
-                    isSongLoopActive = false; // 被停止或退出
+                    isSongLoopActive = false;
                     continue;
                 }
 
@@ -777,7 +727,6 @@ void AudioPlayer::mainDecodeThread()
                     continue;
                 }
 
-                // 核心解码区，使用 RAII Packet
                 {
                     std::lock_guard<std::mutex> decodeLock(decodeMutex);
                     decodeAndProcessPacket(packet.get(), isSongLoopActive, playbackFinishedNaturally);
@@ -813,8 +762,7 @@ bool AudioPlayer::waitForDecodeState()
                               std::lock_guard<std::mutex> qLock(audioFrameQueueMutex);
                               return audioFrameQueue.size() < audioFrameQueueMaxSize.load();
                           }
-                          return false; // Paused 状态下保持等待
-                      });
+                          return false; });
 
     return !(quitFlag.load() || playingState == PlayerState::Stopped);
 }
@@ -848,6 +796,61 @@ void AudioPlayer::handleSeekRequest()
     }
     m_decoderCursor.store(target);
     nowPlayingTime.store(target);
+
+    if (m_filterChain)
+    {
+        m_filterChain->flush();
+    }
+}
+
+// MP3 采样率查询表
+// Version indices: 0=MPEG2.5, 1=Reserved, 2=MPEG2, 3=MPEG1
+// Rate indices: 0, 1, 2 (3=Reserved)
+static const int kMp3SampleRates[4][4] = {
+    {11025, 12000, 8000, 0},  // 00: MPEG 2.5
+    {0, 0, 0, 0},             // 01: Reserved
+    {22050, 24000, 16000, 0}, // 10: MPEG 2
+    {44100, 48000, 32000, 0}  // 11: MPEG 1
+};
+
+/**
+ * @brief 解析 MP3 帧头并返回采样率
+ * @return 返回采样率 (Hz)，如果非有效 MP3 帧头则返回 -1
+ */
+static int getMp3FrameSampleRate(const uint8_t *head, int size)
+{
+    // 最小 MP3 帧头为 4 字节
+    if (size < 4)
+        return -1;
+
+    // 提取前 4 字节为 32 位整数 (Big Endian)
+    uint32_t header = (static_cast<uint32_t>(head[0]) << 24) | (static_cast<uint32_t>(head[1]) << 16) | (static_cast<uint32_t>(head[2]) << 8) | static_cast<uint32_t>(head[3]);
+
+    // 1. Sync Word 校验: 11 bits (0xFFE0....)
+    if ((header & 0xFFE00000) != 0xFFE00000)
+        return -1;
+
+    // 2. Version Index (Bits 20,19)
+    int ver_idx = (header >> 19) & 3;
+    if (ver_idx == 1)
+        return -1; // Reserved
+
+    // 3. Layer Index (Bits 18,17)
+    int layer_idx = (header >> 17) & 3;
+    if (layer_idx == 0)
+        return -1; // Reserved
+
+    // 4. Bitrate Index (Bits 15-12)
+    int bitrate_idx = (header >> 12) & 0xF;
+    if (bitrate_idx == 0 || bitrate_idx == 15)
+        return -1; // Free/Bad
+
+    // 5. Sample Rate Index (Bits 11,10)
+    int srate_idx = (header >> 10) & 3;
+    if (srate_idx == 3)
+        return -1; // Reserved
+
+    return kMp3SampleRates[ver_idx][srate_idx];
 }
 
 void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActive, bool &playbackFinishedNaturally)
@@ -857,11 +860,16 @@ void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActiv
     {
         if (ret == AVERROR_EOF)
         {
-            // --- 歌曲切换逻辑 ---
-            if (outputMode.load() == OutputMode::Mixing)
+            avcodec_send_packet(m_currentSource->pCodecCtx, nullptr);
+            AVFramePtr frame = make_av_frame();
+            while (avcodec_receive_frame(m_currentSource->pCodecCtx, frame.get()) >= 0)
             {
-                if (performSeamlessSwitch())
-                    return;
+                processFrame(frame.get());
+            }
+
+            if (outputMode.load() == OutputMode::Mixing && performSeamlessSwitch())
+            {
+                return;
             }
             else if (outputMode.load() == OutputMode::Direct)
             {
@@ -877,18 +885,15 @@ void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActiv
                         currentPath = nextPath;
                         preloadPath.clear();
                     }
-                    playbackFinishedNaturally = false; // 触发外层重新 setupSession
+                    playbackFinishedNaturally = false;
                     isSongLoopActive = false;
                     return;
                 }
             }
 
+            m_endOfStreamReached.store(true);
             playbackFinishedNaturally = true;
             isSongLoopActive = false;
-            if (m_callbacks.onFileComplete)
-            {
-                m_callbacks.onFileComplete();
-            }
         }
         else
         {
@@ -900,16 +905,45 @@ void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActiv
 
     if (packet->stream_index == m_currentSource->audioStreamIndex)
     {
-        if (avcodec_send_packet(m_currentSource->pCodecCtx, packet) >= 0)
+        bool isValidPacket = true;
+
+        // 仅针对 MP3 格式启用“严格审查模式”
+        if (m_currentSource->pCodecCtx->codec_id == AV_CODEC_ID_MP3)
         {
-            // 使用 RAII Frame
-            AVFramePtr frame = make_av_frame();
-            while (avcodec_receive_frame(m_currentSource->pCodecCtx, frame.get()) >= 0)
+            // 获取当前音频流的预期采样率 (例如 44100)
+            int expectedSampleRate = m_currentSource->pCodecCtx->sample_rate;
+
+            // 解析包头中的实际采样率
+            int packetSampleRate = getMp3FrameSampleRate(packet->data, packet->size);
+
+            if (packetSampleRate == -1)
             {
-                if (!processFrame(frame.get()))
+                // 连基础帧头结构都不对，肯定是垃圾
+                isValidPacket = false;
+            }
+            else if (packetSampleRate != expectedSampleRate)
+            {
+                // 帧头结构虽然合法，但采样率突变 (例如 44100 -> 12000)
+                // 判定为伪装成音频的元数据/乱码
+                isValidPacket = false;
+                spdlog::warn("Dropped consistent-check failed MP3 packet: {} Hz vs Exp {} Hz", packetSampleRate, expectedSampleRate);
+            }
+        }
+
+        // 如果是 FLAC, WAV, AAC 等其他格式，默认信任 Demuxer，isValidPacket 保持 true
+
+        if (isValidPacket)
+        {
+            if (avcodec_send_packet(m_currentSource->pCodecCtx, packet) >= 0)
+            {
+                AVFramePtr frame = make_av_frame();
+                while (avcodec_receive_frame(m_currentSource->pCodecCtx, frame.get()) >= 0)
                 {
-                    isSongLoopActive = false;
-                    break;
+                    if (!processFrame(frame.get()))
+                    {
+                        isSongLoopActive = false;
+                        break;
+                    }
                 }
             }
         }
@@ -917,18 +951,63 @@ void AudioPlayer::decodeAndProcessPacket(AVPacket *packet, bool &isSongLoopActiv
     av_packet_unref(packet);
 }
 
+// =========================================================
+// 【核心修改】使用 AudioFilterChain 替代 SwrContext
+// =========================================================
 bool AudioPlayer::processFrame(AVFrame *frame)
 {
-    if (!frame || !m_currentSource)
+    if (!frame || !m_currentSource || !m_filterChain)
         return false;
 
+    // 1. 准备 Input Params
+    AudioParams inputParams;
+    inputParams.sample_rate = frame->sample_rate;
+    inputParams.fmt = static_cast<AVSampleFormat>(frame->format);
+
+    if (frame->ch_layout.nb_channels > 0)
+        av_channel_layout_copy(&inputParams.ch_layout, &frame->ch_layout);
+    else
+        av_channel_layout_default(&inputParams.ch_layout, frame->ch_layout.nb_channels);
+
+    // 【关键】从 Stream 中获取真实的时间基并传递给 AudioParams
+    // 这样 AudioFilterChain 就会知道输入数据的 PTS 单位是什么
+    int streamIdx = m_currentSource->audioStreamIndex;
+    if (streamIdx >= 0)
+    {
+        inputParams.time_base = m_currentSource->pFormatCtx->streams[streamIdx]->time_base;
+    }
+    else
+    {
+        // Fallback: 如果没有流信息，通常 frame->time_base 也是不准的，只能猜
+        inputParams.time_base = {1, frame->sample_rate};
+    }
+
+    // 2. 初始化滤镜链
+    // 此时 inputParams 包含了正确的时间基，init 会检测是否需要重建
+    int ret = m_filterChain->init(inputParams, deviceParams, "");
+    if (ret < 0)
+    {
+        spdlog::error("Failed to init filter chain: {}", my_av_strerror(ret));
+        return false;
+    }
+
+    // 3. 将帧推入滤镜链
+    AVFrame *cloneFrame = av_frame_clone(frame);
+    if (!cloneFrame)
+        return false;
+
+    // 【关键】不再需要手动 av_rescale_q
+    // 因为 abuffer 滤镜已经通过 time_base 参数知道这个 PTS 的含义了，
+    // FFmpeg 内部会自动处理时间基转换。
+
+    // 更新 UI 显示用的软时钟逻辑 (保持不变，用于 triggerPreload)
     double frameDurationSec = (double)frame->nb_samples / frame->sample_rate;
     int64_t frameDurationMicro = static_cast<int64_t>(frameDurationSec * 1000000);
     int64_t ptsMicro = 0;
 
     if (frame->best_effort_timestamp != AV_NOPTS_VALUE)
     {
-        double ptsSec = frame->best_effort_timestamp * av_q2d(m_currentSource->pFormatCtx->streams[m_currentSource->audioStreamIndex]->time_base);
+        double ptsSec = frame->best_effort_timestamp * av_q2d(m_currentSource->pFormatCtx->streams[streamIdx]->time_base);
         ptsMicro = static_cast<int64_t>(ptsSec * 1000000);
         m_decoderCursor.store(ptsMicro + frameDurationMicro);
     }
@@ -937,55 +1016,90 @@ bool AudioPlayer::processFrame(AVFrame *frame)
         ptsMicro = m_decoderCursor.load();
         m_decoderCursor.fetch_add(frameDurationMicro);
     }
-
     triggerPreload(static_cast<double>(ptsMicro) / 1000000.0);
 
-    // 重采样计算
-    int64_t delay = swr_get_delay(m_currentSource->swrCtx, frame->sample_rate);
-    int64_t out_samples = av_rescale_rnd(delay + frame->nb_samples, deviceParams.sampleRate, frame->sample_rate, AV_ROUND_UP);
-
-    auto audioFrame = std::make_shared<AudioFrame>();
-    audioFrame->pts = ptsMicro;
-
-    int out_bytes_per_sample = av_get_bytes_per_sample(deviceParams.sampleFormat);
-    int out_channels = deviceParams.channels;
-    int buffer_size = static_cast<int>(out_samples * out_channels * out_bytes_per_sample);
-
-    audioFrame->data.resize(buffer_size);
-    uint8_t *out_ptr = audioFrame->data.data();
-
-    int64_t converted = swr_convert(m_currentSource->swrCtx, &out_ptr, static_cast<int>(out_samples),
-                                    (const uint8_t **)frame->data, frame->nb_samples);
-
-    if (converted < 0)
-        return false;
-
-    int real_size = static_cast<int>(converted * out_channels * out_bytes_per_sample);
-    audioFrame->data.resize(real_size);
-
-    totalDecodedBytes += real_size;
-    totalDecodedFrames++;
-    calculateQueueSize(out_bytes_per_sample);
-
+    ret = m_filterChain->push_frame(cloneFrame);
+    if (ret < 0)
     {
-        std::lock_guard<std::mutex> lock(audioFrameQueueMutex);
-        audioFrameQueue.push(audioFrame);
+        av_frame_free(&cloneFrame);
+        return false;
+    }
+
+    return pullProcessedFramesFromGraph();
+}
+
+bool AudioPlayer::pullProcessedFramesFromGraph()
+{
+    AVFramePtr outFrame = make_av_frame();
+
+    // 【关键】获取滤镜链实际输出的时间基
+    // 滤镜链经过 abuffer -> aformat -> abuffersink 后，
+    // 时间基可能会变 (通常 aformat 会将其重置为 1/sample_rate)
+    AVRational outTB = m_filterChain->get_output_time_base();
+
+    while (true)
+    {
+        int ret = m_filterChain->pop_frame(outFrame.get());
+
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            break;
+        if (ret < 0)
+            return false;
+
+        auto audioFrame = std::make_shared<AudioFrame>();
+
+        // 将滤镜输出的 PTS 转换为微秒 (用于 AudioFrame 和 Miniaudio 回调)
+        if (outFrame->pts != AV_NOPTS_VALUE && outTB.den > 0)
+        {
+            // 使用 av_rescale_q 将输出时间基转换为 1/1,000,000 (微秒)
+            audioFrame->pts = av_rescale_q(outFrame->pts, outTB, {1, 1000000});
+        }
+        else
+        {
+            audioFrame->pts = m_decoderCursor.load(); // Fallback
+        }
+        audioFrame->sourcePath = m_currentSource->path;
+
+        // ... (数据拷贝部分保持不变，假设输出为 Packed 格式) ...
+        int bytesPerSample = av_get_bytes_per_sample(static_cast<AVSampleFormat>(outFrame->format));
+        int channels = outFrame->ch_layout.nb_channels;
+        int samples = outFrame->nb_samples;
+        int bufferSize = av_samples_get_buffer_size(nullptr, channels, samples, static_cast<AVSampleFormat>(outFrame->format), 1);
+
+        if (bufferSize > 0)
+        {
+            audioFrame->data.resize(bufferSize);
+            // 简单拷贝 data[0]，确保 deviceParams 是 Packed 格式
+            memcpy(audioFrame->data.data(), outFrame->data[0], bufferSize);
+
+            totalDecodedBytes += bufferSize;
+            totalDecodedFrames++;
+            calculateQueueSize(bytesPerSample);
+
+            {
+                std::lock_guard<std::mutex> lock(audioFrameQueueMutex);
+                audioFrameQueue.push(audioFrame);
+            }
+        }
+        av_frame_unref(outFrame.get());
     }
     return true;
 }
 
 bool AudioPlayer::setupDecodingSession(const std::string &path)
 {
+    m_endOfStreamReached.store(false);
+    m_playbackFinishedCallbackFired.store(false);
     m_currentSource = std::make_unique<AudioStreamSource>();
     if (!m_currentSource->initDecoder(path))
+    {
         return false;
+    }
 
     if (!openAudioDevice())
+    {
         return false;
-
-    // Direct 模式下 deviceParams 会更新，Mixing 模式下使用预设
-    if (!m_currentSource->openSwrContext(deviceParams))
-        return false;
+    }
 
     audioDuration.store(m_currentSource->pFormatCtx->duration);
     return true;
@@ -1008,7 +1122,7 @@ void AudioPlayer::triggerPreload(double currentPts)
     if (dur > 0 && (dur - currentPts) < PRELOAD_TRIGGER_SECONDS_BEFORE_END)
     {
         auto src = std::make_unique<AudioStreamSource>();
-        if (src->initDecoder(pPath) && src->openSwrContext(deviceParams))
+        if (src->initDecoder(pPath))
         {
             m_preloadSource = std::move(src);
             hasPreloaded.store(true);
@@ -1035,7 +1149,7 @@ void AudioPlayer::calculateQueueSize(int out_bytes_per_sample)
     if (avgBytes == 0)
         return;
 
-    int bytesPerSec = deviceParams.sampleRate * deviceParams.channels * out_bytes_per_sample;
+    int bytesPerSec = deviceParams.sample_rate * deviceParams.ch_layout.nb_channels * out_bytes_per_sample;
     int targetBytes = static_cast<int>(bytesPerSec * AUDIO_BUFFER_DURATION_SECONDS);
     size_t maxF = std::max(MIN_AUDIO_QUEUE_SIZE, targetBytes / avgBytes);
 
@@ -1048,16 +1162,13 @@ bool AudioPlayer::performSeamlessSwitch()
     if (outputMode.load() != OutputMode::Mixing || !hasPreloaded.load() || !m_preloadSource)
         return false;
 
-    applyFadeOutToLastFrame();
-
-    // 交换 Source
     m_currentSource = std::move(m_preloadSource);
 
     std::string newPath;
     {
         std::lock_guard<std::mutex> lock(pathMutex);
         currentPath = m_currentSource->path;
-        newPath = currentPath; // 记录新路径用于回调
+        newPath = currentPath;
         preloadPath.clear();
     }
 
@@ -1069,40 +1180,8 @@ bool AudioPlayer::performSeamlessSwitch()
     totalDecodedBytes = 0;
     totalDecodedFrames = 0;
     hasCalculatedQueueSize = false;
-
-    // [新增] 关键：通知上层路径已变更 (在解锁后调用以防死锁)
-    if (m_callbacks.onPathChanged)
-    {
-        m_callbacks.onPathChanged(newPath);
-    }
-
     return true;
 }
-
-void AudioPlayer::applyFadeOutToLastFrame()
-{
-    std::lock_guard<std::mutex> lock(audioFrameQueueMutex);
-    if (audioFrameQueue.empty())
-        return;
-
-    auto frame = audioFrameQueue.back();
-    if (!frame || frame->data.empty())
-        return;
-
-    // 简单淡出实现 (仅支持 Float)
-    if (deviceParams.sampleFormat == AV_SAMPLE_FMT_FLT)
-    {
-        float *samples = reinterpret_cast<float *>(frame->data.data());
-        size_t count = frame->data.size() / sizeof(float);
-        for (size_t i = 0; i < count; ++i)
-        {
-            float gain = 1.0f - (static_cast<float>(i) / count);
-            samples[i] *= gain;
-        }
-    }
-}
-
-// --- Getters ---
 
 bool AudioPlayer::isPlaying() const
 {
@@ -1328,6 +1407,26 @@ static std::vector<BarData> processAudioChunk_StrategyA(
     {
         if (pkt->stream_index == streamIdx)
         {
+            // ID3v1 标签固定为 128 字节，且位于文件绝对末尾。
+            // FFmpeg 有时会将这部分数据误读进最后一个 Packet 中。
+            if (pkt->size >= 128)
+            {
+                // 获取 packet 数据末尾的最后 128 字节的指针
+                const uint8_t *tail = pkt->data + pkt->size - 128;
+
+                // 检查 Magic Bytes: 'T', 'A', 'G'
+                if (tail[0] == 'T' && tail[1] == 'A' && tail[2] == 'G')
+                {
+                    // 确认这是 ID3v1 标签！
+                    // 直接减小 packet 的 size，逻辑上“切除”这部分数据。
+                    // 注意：这不会导致内存泄漏，av_packet_unref 依然会释放整个 buffer。
+                    pkt->size -= 128;
+
+                    // 可选：打印日志确认
+                    spdlog::info("Detected and stripped ID3v1 tag from last packet.");
+                    // printf("Detected and stripped ID3v1 tag from last packet.\n");
+                }
+            }
             if (avcodec_send_packet(ctx.get(), pkt.get()) >= 0)
             {
                 while (avcodec_receive_frame(ctx.get(), frame.get()) >= 0)

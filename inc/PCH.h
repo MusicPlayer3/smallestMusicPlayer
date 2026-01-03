@@ -75,6 +75,9 @@ extern "C"
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
+#include <libavfilter/buffersrc.h>
+#include <libavfilter/buffersink.h>
+#include <libavutil/channel_layout.h>
 }
 
 // stb single headers

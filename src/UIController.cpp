@@ -527,15 +527,15 @@ void UIController::applyMixingParams(int sampleRate, int formatIndex)
     QTimer::singleShot(500, this, [=, this]()
                        {
         AudioParams p = m_mediaController.getDeviceParameters();
-        emit mixingParamsApplied(p.sampleRate, avFormatToIndex(p.sampleFormat)); });
+        emit mixingParamsApplied(p.sample_rate, avFormatToIndex(p.fmt)); });
 }
 
 QVariantMap UIController::getCurrentDeviceParams()
 {
     AudioParams p = m_mediaController.getDeviceParameters();
     QVariantMap map;
-    map["sampleRate"] = p.sampleRate;
-    map["formatIndex"] = avFormatToIndex(p.sampleFormat);
+    map["sampleRate"] = p.sample_rate;
+    map["formatIndex"] = avFormatToIndex(p.fmt);
     return map;
 }
 

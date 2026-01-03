@@ -169,6 +169,7 @@ qt_add_qml_module(appMusicPlayer
     ${RES}
 
     # Headers
+    inc/AudioFilterChain.hpp
     inc/AudioPlayer.hpp
     inc/CoverCache.hpp
     inc/CoverImage.hpp
@@ -184,6 +185,7 @@ qt_add_qml_module(appMusicPlayer
     inc/DatabaseService.hpp
 
     # Sources
+    src/AudioFilterChain.cpp
     src/AudioPlayer.cpp
     src/CoverCache.cpp
     src/CoverImageProvider.cpp
