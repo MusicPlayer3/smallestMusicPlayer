@@ -23,6 +23,8 @@ if(ENABLE_COMPILER_CACHE)
     endif()
 endif()
 
+set(WIN_MANIFEST "${CMAKE_SOURCE_DIR}/app.manifest")
+
 # ==============================================================================
 # Qt 依赖查找
 # ==============================================================================
@@ -47,67 +49,93 @@ set(PROJECT_INCLUDE_DIRS "")
 set(PROJECT_LIBRARY_DIRS "")
 set(PROJECT_LIBRARIES "")
 
-# --- OpenCV 查找配置 (通用) ---
-# 我们只需要核心(core)、图像处理(imgproc)和编解码(imgcodecs)
-# 这部分逻辑在 Windows(MSYS2) 和 Linux 下通常是通用的，
-# 但为了配合你现有的结构，我将其放入下方的条件块中以便管理路径。
+# --- 平台依赖分发 ---
 if(WIN32)
-    message(STATUS "Configuring for Windows (Qt Official MinGW + MSYS2 Libs strategy)...")
+    message(STATUS "Configuring for Windows (MSVC + Vcpkg strategy)...")
 
-    # --- 1. 路径定义 ---
-    set(FFMPEG_ROOT "C:/ffmpeg" CACHE PATH "Path to FFmpeg install directory.")
-    set(MSYS64_PREFIX "C:/msys64/mingw64" CACHE PATH "Path to MSYS2 MinGW64 prefix.")
-
-    # 添加 MSYS2 前缀到查找路径，这对 find_package(OpenCV) 至关重要
-    list(APPEND CMAKE_PREFIX_PATH "${MSYS64_PREFIX}")
-
-    # --- 2. FFmpeg (Manual) ---
-    set(FFMPEG_INCLUDE_DIRS "${FFMPEG_ROOT}/include")
-    set(FFMPEG_LIBRARY_DIRS "${FFMPEG_ROOT}/lib")
-    set(FFMPEG_LIBS avformat avcodec avutil swscale swresample avfilter)
-
-    find_package_handle_standard_args(FFMPEG DEFAULT_MSG FFMPEG_INCLUDE_DIRS FFMPEG_LIBS)
-
-    list(APPEND PROJECT_INCLUDE_DIRS "${FFMPEG_INCLUDE_DIRS}")
-    list(APPEND PROJECT_LIBRARY_DIRS "${FFMPEG_LIBRARY_DIRS}")
-    list(APPEND PROJECT_LIBRARIES ${FFMPEG_LIBS})
-
-    # --- 3. MSYS2 库 ---
-
-    # [新增] OpenCV (通过 MSYS2 的 Config 模式查找)
-    # 只要 CMAKE_PREFIX_PATH 包含了 mingw64 路径，这里就能自动找到
+    # --------------------------------------------------------------------------
+    # 1. OpenCV
+    # Vcpkg 通常提供 OpenCVConfig.cmake，直接查找即可
+    # --------------------------------------------------------------------------
     find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
     message(STATUS "OpenCV Windows Found: ${OpenCV_VERSION}")
 
     list(APPEND PROJECT_INCLUDE_DIRS ${OpenCV_INCLUDE_DIRS})
     list(APPEND PROJECT_LIBRARIES ${OpenCV_LIBS})
 
-    # TagLib
-    find_path(TAGLIB_INCLUDE_DIRS NAMES tag.h PATH_SUFFIXES taglib PATHS "${MSYS64_PREFIX}/include")
-    find_library(TAGLIB_LIBRARIES NAMES tag PATHS "${MSYS64_PREFIX}/lib")
-    find_package_handle_standard_args(TAGLIB DEFAULT_MSG TAGLIB_INCLUDE_DIRS TAGLIB_LIBRARIES)
+    # --------------------------------------------------------------------------
+    # 2. FFmpeg
+    # Vcpkg 安装的 FFmpeg 通常没有标准的 CMake Config，或者需要 pkg-config。
+    # 为了保证 MSVC 下的稳健性，这里使用标准 find_library 查找 vcpkg 目录下的 .lib
+    # --------------------------------------------------------------------------
+    set(FFMPEG_COMPONENTS avformat avcodec avutil swscale swresample avfilter)
+    set(FFMPEG_FOUND TRUE)
 
-    list(APPEND PROJECT_INCLUDE_DIRS "${TAGLIB_INCLUDE_DIRS}")
-    list(APPEND PROJECT_LIBRARIES ${TAGLIB_LIBRARIES})
+    # 查找头文件路径 (检查其中一个即可)
+    find_path(FFMPEG_INCLUDE_DIR
+        NAMES libavformat/avformat.h
+        DOC "Path to FFmpeg headers"
+    )
 
-    # Uchardet
-    find_path(UCHARDET_INCLUDE_DIRS NAMES uchardet.h PATH_SUFFIXES uchardet PATHS "${MSYS64_PREFIX}/include")
-    find_library(UCHARDET_LIBRARIES NAMES uchardet PATHS "${MSYS64_PREFIX}/lib")
-    find_package_handle_standard_args(UCHARDET DEFAULT_MSG UCHARDET_INCLUDE_DIRS UCHARDET_LIBRARIES)
+    if(FFMPEG_INCLUDE_DIR)
+        list(APPEND PROJECT_INCLUDE_DIRS "${FFMPEG_INCLUDE_DIR}")
+    endif()
 
-    list(APPEND PROJECT_INCLUDE_DIRS "${UCHARDET_INCLUDE_DIRS}")
-    list(APPEND PROJECT_LIBRARIES ${UCHARDET_LIBRARIES})
+    # 查找各个库文件
+    foreach(_comp ${FFMPEG_COMPONENTS})
+        find_library(FFMPEG_${_comp}_LIBRARY
+            NAMES ${_comp}
+            DOC "FFmpeg ${_comp} library"
+        )
 
-    # spdlog
+        if(FFMPEG_${_comp}_LIBRARY)
+            list(APPEND PROJECT_LIBRARIES ${FFMPEG_${_comp}_LIBRARY})
+            message(STATUS "Found FFmpeg component: ${_comp}")
+        else()
+            set(FFMPEG_FOUND FALSE)
+            message(WARNING "Could NOT find FFmpeg component: ${_comp}")
+        endif()
+    endforeach()
+
+    if(NOT FFMPEG_FOUND)
+        message(FATAL_ERROR "FFmpeg is required but some components were not found via Vcpkg.")
+    endif()
+
+    # --------------------------------------------------------------------------
+    # 3. TagLib
+    # Vcpkg 提供 TagLibConfig.cmake，导出目标通常为 TagLib::tag
+    # --------------------------------------------------------------------------
+    find_package(TagLib REQUIRED)
+
+    if(TARGET TagLib::tag)
+        list(APPEND PROJECT_LIBRARIES TagLib::tag)
+    else()
+        list(APPEND PROJECT_INCLUDE_DIRS ${TAGLIB_INCLUDE_DIRS})
+        list(APPEND PROJECT_LIBRARIES ${TAGLIB_LIBRARIES})
+    endif()
+
+    # --------------------------------------------------------------------------
+    # 4. Uchardet
+    # Vcpkg 提供 uchardetConfig.cmake，导出目标 uchardet::libuchardet
+    # --------------------------------------------------------------------------
+    find_package(uchardet CONFIG REQUIRED)
+    list(APPEND PROJECT_LIBRARIES uchardet::libuchardet)
+
+    # --------------------------------------------------------------------------
+    # 5. spdlog
+    # Vcpkg 提供 spdlogConfig.cmake，导出目标 spdlog::spdlog
+    # --------------------------------------------------------------------------
     find_package(spdlog CONFIG REQUIRED)
     list(APPEND PROJECT_LIBRARIES spdlog::spdlog)
 
-    set(SDBUSCPP_FOUND FALSE)
+    # --------------------------------------------------------------------------
+    # 6. ZLib (vcpkg 默认包含)
+    # --------------------------------------------------------------------------
+    find_package(ZLIB REQUIRED)
+    list(APPEND PROJECT_LIBRARIES ZLIB::ZLIB)
 
-    # 补充库
-    list(APPEND PROJECT_LIBRARIES z)
-    list(APPEND PROJECT_LIBRARY_DIRS "${MSYS64_PREFIX}/lib")
-
+# 注意: sdbus-c++ (DBus) 是 Linux 特有机制，Windows 下通常不包含此库。
+# 请确保代码中使用 #ifndef _WIN32 包裹了 DBus 相关逻辑。
 else()
     # --- Linux / POSIX 模式 (PkgConfig) ---
     message(STATUS "Configuring for Linux/POSIX (PkgConfig strategy)...")
@@ -160,7 +188,10 @@ endif()
 # ==============================================================================
 qt_add_resources(RES qrc/img.qrc)
 
-qt_add_executable(appMusicPlayer src/main.cpp)
+qt_add_executable(appMusicPlayer
+    src/main.cpp
+    ${WIN_MANIFEST}
+)
 
 qt_add_qml_module(appMusicPlayer
     URI MusicPlayer
@@ -232,7 +263,8 @@ target_include_directories(appMusicPlayer PRIVATE
 target_precompile_headers(appMusicPlayer PRIVATE inc/PCH.h)
 
 # 3. Compile Definitions
-target_compile_definitions(appMusicPlayer PRIVATE TAGLIB_STATIC)
+# TAGLIB_STATIC 宏在使用 vcpkg 的静态库时通常是需要的，如果是动态库也无害
+# target_compile_definitions(appMusicPlayer PRIVATE TAGLIB_STATIC)
 
 # 4. Compile Options
 if(MSVC)
@@ -241,6 +273,7 @@ if(MSVC)
         $<$<CONFIG:Debug>:/Od /Zi>
         $<$<CONFIG:Release>:/O2 /Ob2 /GL> # /GL 开启全程序优化
     )
+    target_compile_options(appMusicPlayer PRIVATE "/utf-8")
 
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
         set_property(TARGET appMusicPlayer PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -254,8 +287,7 @@ else()
         $<$<CONFIG:Release>:-O3 -DNDEBUG>
     )
 
-    # 开启 LTO (Link Time Optimization) - 对 MinGW Release 构建同样有效
-    # 注意：如果遇到 LTO 报错 (lto-wrapper failed)，请注释掉下面这行
+    # 开启 LTO (Link Time Optimization)
     set_property(TARGET appMusicPlayer PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
 endif()
 
@@ -263,14 +295,8 @@ endif()
 if(WIN32)
     set_target_properties(appMusicPlayer PROPERTIES WIN32_EXECUTABLE TRUE)
 
-    # 确保 MinGW 链接器能找到手动指定的库路径
-    target_link_directories(appMusicPlayer PRIVATE ${PROJECT_LIBRARY_DIRS})
-
-    if(NOT MSVC)
-        # -mwindows: 隐藏控制台窗口
-        # -s: Release 模式下剥离符号，减小体积
-        target_link_options(appMusicPlayer PRIVATE -mwindows $<$<CONFIG:Release>:-s>)
-    endif()
+    # MSVC / Vcpkg 不需要手动 target_link_directories，CMake 会自动处理
+    # 也不需要 -mwindows 或 -s，因为 WIN32_EXECUTABLE 会处理子系统设置
 endif()
 
 target_link_libraries(appMusicPlayer

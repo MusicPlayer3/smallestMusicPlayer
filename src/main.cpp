@@ -256,14 +256,12 @@ void initLogger()
 //  Main Entry Point
 // =========================================================
 
-#if defined(Q_OS_WIN)
-Q_DECL_EXPORT int qMain(int argc, char *argv[])
-#else
 int main(int argc, char *argv[])
-#endif
 {
+#ifdef __linux__
 #if TAGLIB_MAJOR_VERSION >= 2
     TagLib::setDebugListener(new TrapDebugListener());
+#endif
 #endif
 
 #ifdef DEBUG

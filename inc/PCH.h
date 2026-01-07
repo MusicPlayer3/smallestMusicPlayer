@@ -1,7 +1,29 @@
 #ifndef __PRECOMPILED_H__
 #define __PRECOMPILED_H__
 
-// Standard C++ Libraries
+// =========================================================
+// Windows 特有配置 (必须在任何标准库或 Qt 头文件之前处理)
+// =========================================================
+#ifdef _WIN32
+    // 禁用 Windows 平台特有的 min() 和 max() 宏，防止与 std::min/max 冲突
+    #ifndef NOMINMAX
+    #define NOMINMAX
+    #endif
+    
+    // 减少 windows.h 引入的非必要头文件，加快编译速度
+    #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+    #endif
+
+    #include <windows.h>
+    // 注意：如果有 winsock2.h 需求，必须在 windows.h 之前包含，
+    // 但在这个项目中似乎由 Qt 或其他库间接处理了。
+#else
+    #include <iconv.h>
+    #include <errno.h>
+#endif
+
+// ================= Standard C++ Libraries =================
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -31,6 +53,7 @@
 #include <random>
 
 // ================= TagLib Headers =================
+// 确保 TagLib 在 Qt 之前包含，防止某些类型冲突
 #include <taglib/tag.h>
 #include <taglib/fileref.h>
 #include <taglib/tpropertymap.h>
@@ -58,17 +81,9 @@
 #include <taglib/dsffile.h>
 #endif
 
-// 操作系统原生字符处理头文件
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <iconv.h>
-#include <errno.h>
-#endif
-
 namespace fs = std::filesystem;
 
-// ffmpeg headers
+// ================= FFmpeg Headers =================
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -80,25 +95,17 @@ extern "C"
 #include <libavutil/channel_layout.h>
 }
 
-// stb single headers
-#include "stb_image.h"
-#include "stb_image_resize2.h"
-#include "stb_image_write.h"
-
-// uchardet
 #include <uchardet/uchardet.h>
-
-// miniaudio header
 #include "miniaudio.h"
 
-// spdlog header
+// ================= SPDLog =================
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 
 constexpr std::string_view LOG_NAME = "globalLogger";
 
-// Qt Headers
+// ================= Qt Headers =================
 #include <QImage>
 #include <QSize>
 #include <QDebug>
@@ -127,4 +134,7 @@ constexpr std::string_view LOG_NAME = "globalLogger";
 #include <qdebug.h>
 #include <qcolor.h>
 #include <qimage.h>
-#endif
+#include <QColor>
+#include <QFuture>
+
+#endif // __PRECOMPILED_H__

@@ -9,7 +9,9 @@
 
 #include "PCH.h"
 
-#ifdef __WIN32__
+// FIX: Changed condition to be "if NOT linux", covering Windows and other OS.
+// MSVC often defines _WIN32 but not __WIN32__.
+#ifndef __linux__
 namespace mpris
 {
 enum class PlaybackStatus

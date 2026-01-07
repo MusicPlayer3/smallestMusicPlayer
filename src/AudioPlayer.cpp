@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <future>
 #include <deque>
+#include <immintrin.h> // Move include to global scope
 
 // --- RAII Wrappers for FFmpeg ---
 
@@ -1231,8 +1232,6 @@ struct ChunkResult
 // --- SIMD Kernels (Internal) ---
 // 使用匿名命名空间保持内部链接，防止符号污染
 
-#include <immintrin.h> // Make sure this is available
-
 static ChunkResult computeSumSquaresAVX2_Float(const float *data, int range_count, int step, int decimation)
 {
     float sum = 0.0f;
@@ -1395,7 +1394,8 @@ static std::vector<BarData> processAudioChunk_StrategyA(
     if (decimation < 1)
         decimation = 1;
 
-    int64_t seekTimestamp = av_rescale_q(absoluteStartSample, (AVRational){1, ctx->sample_rate}, fmt->streams[streamIdx]->time_base);
+    // FIX: Removed C99 compound literal (AVRational){...}
+    int64_t seekTimestamp = av_rescale_q(absoluteStartSample, AVRational{1, ctx->sample_rate}, fmt->streams[streamIdx]->time_base);
     av_seek_frame(fmt, streamIdx, seekTimestamp, AVSEEK_FLAG_BACKWARD);
     avcodec_flush_buffers(ctx.get());
 
@@ -1433,7 +1433,8 @@ static std::vector<BarData> processAudioChunk_StrategyA(
                 {
                     if (frame->pts != AV_NOPTS_VALUE)
                     {
-                        int64_t ptsSample = av_rescale_q(frame->pts, fmt->streams[streamIdx]->time_base, (AVRational){1, ctx->sample_rate});
+                        // FIX: Removed C99 compound literal
+                        int64_t ptsSample = av_rescale_q(frame->pts, fmt->streams[streamIdx]->time_base, AVRational{1, ctx->sample_rate});
                         if (currentGlobalSample == -1 || std::abs(ptsSample - currentGlobalSample) > 2000)
                         {
                             currentGlobalSample = ptsSample;
@@ -1566,7 +1567,8 @@ static std::vector<BarData> processPacketBatch_StrategyB(
                 if (frame->pts == AV_NOPTS_VALUE)
                     continue;
 
-                int64_t ptsSample = av_rescale_q(frame->pts, timeBase, (AVRational){1, ctx->sample_rate});
+                // FIX: Removed C99 compound literal
+                int64_t ptsSample = av_rescale_q(frame->pts, timeBase, AVRational{1, ctx->sample_rate});
                 int samples = frame->nb_samples;
                 int channels = ctx->ch_layout.nb_channels;
                 int step = (!av_sample_fmt_is_planar(ctx->sample_fmt) && channels > 1) ? channels : 1;
@@ -1730,9 +1732,11 @@ std::vector<int> AudioPlayer::buildAudioWaveform(
         currentBatch.reserve(BATCH_SIZE);
 
         auto tempPkt = make_av_packet();
-        int64_t seekTarget = av_rescale_q(startTimeUS, (AVRational){1, 1000000}, timeBase);
+        // FIX: Removed C99 compound literal
+        int64_t seekTarget = av_rescale_q(startTimeUS, AVRational{1, 1000000}, timeBase);
         av_seek_frame(fmt, streamIdx, seekTarget, AVSEEK_FLAG_BACKWARD);
-        int64_t endPTS = av_rescale_q(endTimeUS, (AVRational){1, 1000000}, timeBase);
+        // FIX: Removed C99 compound literal
+        int64_t endPTS = av_rescale_q(endTimeUS, AVRational{1, 1000000}, timeBase);
 
         while (av_read_frame(fmt, tempPkt.get()) >= 0)
         {
