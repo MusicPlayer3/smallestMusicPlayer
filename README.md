@@ -56,4 +56,28 @@ cmake --build build -j$(nproc)
 ```
 
 ### Windows
-（待施工）
+
+#### 使用MSVC
+``` bash
+#以下操作完全在qt的终端中进行（如Qt 6.10.1 (MSVC 2022 64-bit)）
+# 1. 安装依赖
+vcpkg install opencv ffmpeg taglib uchardet spdlog --triplet x64-windows
+
+# 2. 克隆项目
+git clone https://github.com/MusicPlayer3/smallestMusicPlayer.git
+
+# 3. 进入项目文件夹
+cd smallestMusicPlayer
+
+# 4. 配置构建
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="path to your vcpkg. Eg.C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+
+#5. 编译项目
+cmake --build build --config Release
+
+#6. 进入可执行文件所在文件夹
+cd ./build/Release
+
+#7. 执行环境打包 Eg.windeployqt6 --qmldir "C:\smallestMusicPlayer\qml" .\appMusicPlayer.exe
+windeployqt6 --qmldir "your Project Dir\qml" .\appMusicPlayer.exe
+```
