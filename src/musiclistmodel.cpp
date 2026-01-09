@@ -183,7 +183,7 @@ MusicItem MusicListModel::createItemFromNode(PlaylistNode *node, int id)
     if (node->isDir())
     {
         item.isFolder = true;
-        std::filesystem::path p(node->getPath());
+        fs::path p(node->getPath());
         item.title = QString::fromStdString(p.filename().string());
         std::string key = node->getCoverKey();
         if (!key.empty())
@@ -199,7 +199,7 @@ MusicItem MusicListModel::createItemFromNode(PlaylistNode *node, int id)
 
         if (auto parent = node->getParent())
         {
-            std::filesystem::path pp(parent->getPath());
+            fs::path pp(parent->getPath());
             item.parentDirName = QString::fromStdString(pp.filename().string());
         }
         else
@@ -213,7 +213,7 @@ MusicItem MusicListModel::createItemFromNode(PlaylistNode *node, int id)
         const auto &meta = node->getMetaData();
         item.title = QString::fromStdString(meta.getTitle());
         if (item.title.isEmpty())
-            item.title = QString::fromStdString(std::filesystem::path(node->getPath()).filename().string());
+            item.title = QString::fromStdString(fs::path(node->getPath()).filename().string());
 
         item.artist = QString::fromStdString(meta.getArtist());
         item.album = QString::fromStdString(meta.getAlbum());
@@ -289,17 +289,17 @@ bool MusicListModel::lessThan(PlaylistNode *nodeA, PlaylistNode *nodeB) const
     {
         QString tA = QString::fromStdString(metaA.getTitle());
         if (tA.isEmpty())
-            tA = QString::fromStdString(std::filesystem::path(nodeA->getPath()).filename().string());
+            tA = QString::fromStdString(fs::path(nodeA->getPath()).filename().string());
         QString tB = QString::fromStdString(metaB.getTitle());
         if (tB.isEmpty())
-            tB = QString::fromStdString(std::filesystem::path(nodeB->getPath()).filename().string());
+            tB = QString::fromStdString(fs::path(nodeB->getPath()).filename().string());
         compareResult = tA.compare(tB, Qt::CaseInsensitive);
         break;
     }
     case SortByFilename:
     {
-        QString fa = QString::fromStdString(std::filesystem::path(nodeA->getPath()).filename().string());
-        QString fb = QString::fromStdString(std::filesystem::path(nodeB->getPath()).filename().string());
+        QString fa = QString::fromStdString(fs::path(nodeA->getPath()).filename().string());
+        QString fb = QString::fromStdString(fs::path(nodeB->getPath()).filename().string());
         compareResult = fa.compare(fb, Qt::CaseInsensitive);
         break;
     }
@@ -470,7 +470,7 @@ void MusicListModel::search(const QString &query)
                 totalScore += calculateFieldScore(meta.getArtist(), queryLower, SCORE_ARTIST);
                 totalScore += calculateFieldScore(meta.getAlbum(), queryLower, SCORE_ALBUM);
 
-                std::string filename = std::filesystem::path(child->getPath()).filename().string();
+                std::string filename = fs::path(child->getPath()).filename().string();
                 totalScore += calculateFieldScore(filename, queryLower, SCORE_FILENAME);
 
                 if (totalScore > 0)
@@ -569,7 +569,7 @@ void MusicListModel::setCurrentDirectoryNode(PlaylistNode *node)
     }
 
     QString newPath = QString::fromStdString(node->getPath());
-    std::filesystem::path p(node->getPath());
+    fs::path p(node->getPath());
     QString newDirName = QString::fromStdString(p.filename().string());
     if (newDirName.isEmpty() || newDirName == ".")
         newDirName = "音乐库";
@@ -712,7 +712,7 @@ QVariantMap MusicListModel::getDetailInfo(int index)
         // --- 文件夹信息 ---
         if (auto parent = node->getParent())
         {
-            std::filesystem::path pp(parent->getPath());
+            fs::path pp(parent->getPath());
             map["parentName"] = QString::fromStdString(pp.filename().string());
         }
         else

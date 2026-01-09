@@ -250,24 +250,33 @@ static std::string convertToUTF8(const std::string &data, const char *fromEncodi
     int codePage = CP_ACP;
     std::string encodingUpper = fromEncName;
     std::ranges::transform(encodingUpper, encodingUpper.begin(), ::toupper);
+
     if (encodingUpper == "GBK" || encodingUpper == "GB2312" || encodingUpper == "GB18030")
-        codePage = 54936;
+        codePage = 54936; // GB18030
     else if (encodingUpper == "BIG5")
         codePage = 950;
-    else if (encodingUpper == "SHIFT_JIS")
+    else if (encodingUpper == "SHIFT_JIS" || encodingUpper == "SHIFT-JIS" || encodingUpper == "SJIS")
         codePage = 932;
     else if (encodingUpper == "WINDOWS-1252")
         codePage = 1252;
     else if (encodingUpper == "UTF-8" || encodingUpper == "ASCII")
         return sanitizeUTF8(data);
+
+    // [Fix] 如果 Manifest 设置了 UTF-8，但我们需要转换 GBK，必须明确指定 CodePage。
+    // 如果找不到对应的 CodePage，回退到 CP_ACP 可能也是错的（因为 ACP 现在是 UTF-8），
+    // 但为了兼容性，如果不是特定编码，还是尝试一下。
+
     int wLen = MultiByteToWideChar(codePage, 0, data.c_str(), (int)data.size(), nullptr, 0);
     if (wLen <= 0)
         return sanitizeUTF8(data);
+
     std::wstring wStr(wLen, 0);
     MultiByteToWideChar(codePage, 0, data.c_str(), (int)data.size(), &wStr[0], wLen);
+
     int uLen = WideCharToMultiByte(CP_UTF8, 0, wStr.c_str(), wLen, nullptr, 0, nullptr, nullptr);
     if (uLen <= 0)
         return sanitizeUTF8(data);
+
     std::string ret(uLen, 0);
     WideCharToMultiByte(CP_UTF8, 0, wStr.c_str(), wLen, &ret[0], uLen, nullptr, nullptr);
     return ret;
@@ -318,11 +327,29 @@ static std::string detectAndConvert(const std::string &rawData)
 {
     if (rawData.empty())
         return "";
+
+    // [Fix] 优先检测是否已经是有效的 UTF-8
+    // 如果 uchardet 说它是 UTF-8，我们就不需要折腾了
     std::string detectedEncoding = detectCharset(rawData);
+
     if (detectedEncoding.empty())
+    {
+        // [Fix] 如果无法检测，默认尝试 GB18030 (针对中文环境的常见情况)
         detectedEncoding = "GB18030";
-    else if (detectedEncoding == "ASCII")
+    }
+
+    std::string upperEnc = detectedEncoding;
+    std::ranges::transform(upperEnc, upperEnc.begin(), ::toupper);
+
+    if (upperEnc == "UTF-8" || upperEnc == "ASCII")
+    {
         return sanitizeUTF8(rawData);
+    }
+
+    // Windows-1252 经常是 uchardet 对 GBK 误判的结果（因为字节分布看起来像西欧字符）
+    // 如果你在中文环境下，且出现大量乱码，可以考虑在这里做特殊处理，
+    // 但为了通用性，我们先信任 uchardet 或 fallback 到 convertToUTF8 的处理。
+
     std::string result = convertToUTF8(rawData, detectedEncoding.c_str());
     return sanitizeUTF8(result);
 }
@@ -504,19 +531,46 @@ static std::string resolveSafeTag(TagLib::Tag *tag, const std::string &type)
         tagStr = tag->artist();
     else if (type == "Album")
         tagStr = tag->album();
+
     if (tagStr.isEmpty())
         return "";
+
+    // [Fix] 1. 检查是否已经是合法的 Unicode
+    // TagLib 内部使用 UTF-16。如果包含 > 255 的字符，说明 TagLib 已经正确识别了双字节字符，
+    // 或者标签本身就是 UTF-16/UTF-8 存储的。直接信任它。
     bool hasWide = false;
     for (size_t i = 0; i < tagStr.length(); ++i)
+    {
         if (tagStr[i] > 255)
         {
             hasWide = true;
             break;
         }
+    }
+
     if (hasWide)
+    {
         return EncodingUtils::sanitizeUTF8(tagStr.to8Bit(true));
-    std::string raw = tagStr.to8Bit(false);
-    return EncodingUtils::detectAndConvert(raw);
+    }
+
+    // [Fix] 2. 如果所有字符都在 0-255 之间，可能是被错误解析为 Latin-1 的 GBK/Big5。
+    // 例如 GBK 的 "啊" (0xB0 0xA1) 被解析成了 U+00B0 U+00A1。
+    // 我们将其“还原”为原始字节流 (Latin-1)，然后重新检测编码。
+    std::string rawBytes = tagStr.to8Bit(false); // false = ISO-8859-1 (Latin-1)
+
+    // 检测这些字节是不是 UTF-8
+    // 如果是纯 ASCII，detectCharset 通常返回 ASCII 或 UTF-8
+    std::string detected = EncodingUtils::detectCharset(rawBytes);
+
+    // 如果检测出来是 GB18030, BIG5, SHIFT_JIS 等，或者无法检测 (空)，则尝试转换
+    if (!detected.empty() && (detected == "UTF-8" || detected == "ASCII"))
+    {
+        // 看起来确实是 UTF-8 或者 英文，直接返回
+        return EncodingUtils::sanitizeUTF8(rawBytes);
+    }
+
+    // 可能是乱码，尝试转换
+    return EncodingUtils::detectAndConvert(rawBytes);
 }
 } // namespace TagLibHelpers
 

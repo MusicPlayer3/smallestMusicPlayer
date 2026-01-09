@@ -67,7 +67,7 @@ private:
     std::unique_ptr<FileScanner> scanner = nullptr;          // 文件扫描器
 
     // --- 数据路径与节点 ---
-    std::filesystem::path rootPath;
+    fs::path rootPath;
     std::shared_ptr<PlaylistNode> rootNode = nullptr;
 
     // --- 线程安全与状态 ---
