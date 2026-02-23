@@ -165,19 +165,41 @@ void MediaController::handlePlayerPosition(int64_t currentAbsMicroseconds)
             int64_t expectedEndTime = startOffset + duration;
             if (currentAbsMicroseconds >= expectedEndTime)
             {
-                // 【修复】增加一个关键判断：
-                // 仅当下一首歌曲与当前歌曲在同一个物理文件时，
-                // 才认为这是一个 CUE 分轨切换，由本函数处理。
-                // 否则，这是一个正常的歌曲末尾，应交由 onFileComplete 处理。
                 PlaylistNode *nextNode = calculateNextNode(curr);
-                if (nextNode && nextNode->getPath() == curr->getPath())
+
+                // 1. 如果没有下一首（列表播放完毕）
+                if (nextNode == nullptr)
                 {
-                    // 确认是 CUE 分轨切换，执行 next
                     std::thread([this]()
-                                { this->next(); })
+                                {
+                                    this->stop(); // 调用 stop 会重置进度并暂停
+                                })
                         .detach();
                     return; // 处理完毕，直接返回
                 }
+                // 2. 如果下一首和当前歌曲在同一个物理文件 (CUE 分轨之间切换)
+                if (nextNode->getPath() == curr->getPath())
+                {
+                    std::thread([this]()
+                                { this->next(); })
+                        .detach();
+                    return;
+                }
+
+                // 如果下一首是不同的物理文件，但当前的 CUE 轨道已经到了逻辑结束时间
+                // 我们需要检查当前物理文件是否还有很长才结束，如果是，则必须手动切歌。
+                // （容差设为 1000000 微秒 = 1秒，防止破坏正常文件的无缝切歌）
+                int64_t physicalDuration = player->getDurationMicroseconds();
+                if (physicalDuration > 0 && (physicalDuration - expectedEndTime) > 1000000)
+                {
+                    std::thread([this]()
+                                { this->next(); })
+                        .detach();
+                    return;
+                }
+
+                // 否则，说明这是一首正常的整首歌或处于物理文件末尾的 CUE，
+                // 此时直接放行，交由底层的 handlePlayerFileComplete 去处理，以保持无缝播放(Gapless)。
             }
         }
     }
